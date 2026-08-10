@@ -56,7 +56,7 @@ function buildPrompt(
 ): string {
   const srcName = LANG_MAP[source] || source;
   const tgtName = LANG_MAP[target] || target;
-  return `Translate the following text from ${srcName} to ${tgtName}. Only output the translated text, no explanations, no notes: ${text}`;
+  return `Translate the following text from ${srcName} to ${tgtName}. Translate every word — do not skip or keep any words in the original language even if they are already in ${tgtName}. Only output the full translated text, no explanations: ${text}`;
 }
 
 /* ============ Ollama 调用 ============ */

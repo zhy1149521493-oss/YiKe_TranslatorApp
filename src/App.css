@@ -64,14 +64,36 @@ body,
   color: var(--ios-text);
 }
 
-.mode-badge {
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-select {
   font-size: 12px;
-  font-weight: 590;
-  color: var(--ios-blue);
-  background: rgba(0, 122, 255, 0.1);
-  padding: 4px 12px;
+  font-family: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--ios-separator);
+  border-radius: var(--radius-sm);
+  background: var(--ios-card);
+  color: var(--ios-text);
+  cursor: pointer;
+  outline: none;
+}
+
+.btn-float {
+  font-size: 12px;
+  padding: 6px 14px;
+  border: 1px solid var(--ios-separator);
   border-radius: var(--radius-pill);
-  letter-spacing: 0;
+  background: transparent;
+  color: var(--ios-text);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-float:hover {
+  background: rgba(0, 0, 0, 0.04);
 }
 
 /* --- 主体区域 --- */
@@ -80,38 +102,105 @@ body,
   padding: 28px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
   overflow: auto;
 }
 
-.placeholder-card {
-  background: var(--ios-card);
-  border-radius: var(--radius-lg);
-  padding: 48px 32px;
-  text-align: center;
-  box-shadow: var(--shadow-card);
-}
-
-.placeholder-card h2 {
-  font-size: 18px;
-  font-weight: 640;
-  margin-bottom: 8px;
-  color: var(--ios-text);
-}
-
-.placeholder-card p {
-  color: var(--ios-secondary);
-  font-size: 14px;
-  line-height: 1.5;
-}
-
-/* --- 按钮区 --- */
-.actions {
+/* 语言选择器 */
+.lang-bar {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 10px;
+}
+.lang-sel {
+  font-size: 14px;
+  font-family: inherit;
+  padding: 8px 14px;
+  border: 1px solid var(--ios-separator);
+  border-radius: var(--radius-sm);
+  background: var(--ios-card);
+  color: var(--ios-text);
+  cursor: pointer;
+  outline: none;
+  min-width: 165px;
+}
+.lang-arrow {
+  font-size: 16px;
+  color: var(--ios-secondary);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.lang-arrow:hover {
+  background: rgba(0, 0, 0, 0.05);
 }
 
+.conflict-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #8e6d3e;
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+.conflict-bar span {
+  flex: 1;
+}
+.btn-conflict {
+  font-size: 12px;
+  font-family: inherit;
+  background: var(--ios-blue);
+  color: #fff;
+  border: none;
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+.btn-conflict-dismiss {
+  font-size: 12px;
+  font-family: inherit;
+  background: transparent;
+  color: var(--ios-secondary);
+  border: 1px solid var(--ios-separator);
+  padding: 5px 14px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.realtime-hint {
+  font-size: 11px;
+  color: var(--ios-secondary);
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 翻译输入框 */
+.trans-input {
+  width: 100%;
+  font-size: 15px;
+  font-family: inherit;
+  line-height: 1.6;
+  padding: 16px;
+  border: 1px solid var(--ios-separator);
+  border-radius: var(--radius-md);
+  background: var(--ios-card);
+  color: var(--ios-text);
+  resize: vertical;
+  outline: none;
+  box-shadow: var(--shadow-card);
+}
+.trans-input::placeholder {
+  color: var(--ios-secondary);
+}
+
+/* 翻译按钮 */
 .btn-primary {
   background: var(--ios-blue);
   color: #fff;
@@ -122,20 +211,57 @@ body,
   border-radius: var(--radius-pill);
   cursor: pointer;
   transition: background 0.15s ease, transform 0.1s ease;
-  letter-spacing: -0.1px;
+  align-self: flex-start;
 }
-
 .btn-primary:hover {
   background: #0068db;
 }
-
 .btn-primary:active {
   transform: scale(0.97);
 }
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-translate {
+  min-width: 120px;
+}
 
-.hint {
-  font-size: 13px;
+/* 脉冲指示 */
+.pulse {
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* 翻译结果 */
+.trans-output {
+  background: var(--ios-card);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  box-shadow: var(--shadow-card);
+}
+.output-label {
+  font-size: 12px;
+  font-weight: 600;
   color: var(--ios-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+.output-text {
+  font-size: 15px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--ios-text);
 }
 
 /* ============ 悬浮窗 ============ */
