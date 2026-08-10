@@ -1,4 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+use tauri::Emitter;
 use tauri::Manager;
 use std::os::windows::process::CommandExt;
 use std::process::{Command as StdCommand, Child, Stdio};
@@ -66,6 +67,17 @@ fn ping() -> String {
     "pong".to_string()
 }
 
+/// 关闭悬浮窗
+#[tauri::command]
+fn close_floating_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("floating") {
+        let _ = w.close();
+        eprintln!("[floating] closed via command");
+        let _ = app.emit_to("main", "floating-closed", ());
+    }
+    Ok(())
+}
+
 /// 创建(或聚焦已存在的)翻译悬浮窗:透明、无边框、置顶、跳过任务栏
 /// 注意:窗口创建必须在后台线程执行,直接 invoke 里同步调 build 会死锁
 #[tauri::command]
@@ -126,7 +138,9 @@ fn open_floating_window(app: tauri::AppHandle) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet, ping, open_floating_window])
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![greet, ping, open_floating_window, close_floating_window])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");

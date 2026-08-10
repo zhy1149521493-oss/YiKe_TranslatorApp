@@ -96,6 +96,16 @@ body,
   background: rgba(0, 0, 0, 0.04);
 }
 
+.btn-mode {
+  font-size: 11px;
+  padding: 4px 10px;
+  border: 1px solid var(--ios-separator);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ios-text);
+  cursor: pointer;
+}
+
 /* --- 主体区域 --- */
 .app-body {
   flex: 1;

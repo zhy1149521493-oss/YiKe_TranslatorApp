@@ -140,7 +140,7 @@ function MainWindow() {
   const [numCtx, setNumCtx] = useState(1024);
   const [streamOn, setStreamOn] = useState(true);
   const [conflict, setConflict] = useState(false);
-  const [clipAuto, setClipAuto] = useState(true); // true=复制即开,false=仅悬浮窗打开时翻译
+  const [alwaysPop, setAlwaysPop] = useState(false); // 主动弹出模式
 
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -265,26 +265,25 @@ function MainWindow() {
     let busy = false;
     const timer = setInterval(async () => {
       if (busy) return;
+      if (!alwaysPop && !floatingRef.current) return; // 安静模式:悬浮窗关着不弹
       try {
+        if (alwaysPop && !floatingRef.current) {
+          try { await invoke("open_floating_window"); setFloatingOpen(true); } catch {}
+        }
         const text = await readText();
         if (!text || text === lastText || text.length < 2) return;
         lastText = text;
         const words = text.split(/\s+/).filter((w) => w.length > 1);
         if (words.length > 50) return;
         busy = true;
-        // 跟随主窗口语言设置 + 模型
         let src = sourceLang;
         let tgt = targetLang;
         if (src === "auto") {
           src = detectLang(text);
-          // 只有在目标也是 auto 时才自动决定,否则保留用户选择
           if (tgt === "auto" || tgt === src) {
             tgt = src === "zh" ? "en" : src === "en" ? "zh" : "en";
           }
         }
-        // 模式检查:手动模式下悬浮窗未开则跳过
-        if (!clipAuto && !floatingRef.current) return;
-        try { await invoke("open_floating_window"); setFloatingOpen(true); } catch { /* ok */ }
         const result = await fetchOllamaFull(model, src, tgt, text, 1024);
         await appWindow.emitTo("floating", "show-translation", { text, src, tgt, result });
       } catch {
@@ -294,7 +293,7 @@ function MainWindow() {
       }
     }, 600);
     return () => clearInterval(timer);
-  }, [sourceLang, targetLang, model, clipAuto]);
+  }, [sourceLang, targetLang, model, alwaysPop]);
 
   /* ---- UI ---- */
   return (
@@ -314,8 +313,12 @@ function MainWindow() {
             <option value="stream">流式输出</option>
             <option value="full">完整输出</option>
           </select>
-          <button className="btn-float" onClick={() => setClipAuto(!clipAuto)} title={clipAuto ? "复制即开(点击切换为手动)" : "手动模式(点击切换为自动)"}>
-            {clipAuto ? "📋 自动" : "📋 手动"}
+          <button
+            className="btn-mode"
+            onClick={() => setAlwaysPop(!alwaysPop)}
+            title={alwaysPop ? "点击切换为安静模式" : "点击切换为主动弹出模式"}
+          >
+            {alwaysPop ? "📢 主动" : "🔇 安静"}
           </button>
           <button className="btn-float" onClick={openFloating} title="打开翻译悬浮窗">
             {floatingOpen ? "📍 已开" : "🔲 悬浮窗"}
