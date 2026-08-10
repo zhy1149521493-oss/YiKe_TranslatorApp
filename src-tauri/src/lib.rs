@@ -69,54 +69,39 @@ fn ping() -> String {
 
 /// 截图 + OCR: dxgi 截全屏 → 裁剪到区域 → 保存 png → OCR → 返回文本
 #[tauri::command]
-fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<String, String> {
-    use image::GenericImageView;
-    use rapidocr_core::{
-        config::{InferenceOptions, PipelineConfig},
-        model::{model_set_by_name, ModelCache, ModelDownloadMode},
-        RapidOcr,
-    };
-
-    // 1. xcap 截全屏
-    let monitors = xcap::Monitor::all().map_err(|e| format!("获取显示器失败: {e}"))?;
-    let primary = monitors.into_iter().next().ok_or("未找到显示器")?;
-    let img = primary.capture_image().map_err(|e| format!("截屏失败: {e}"))?;
-
-    // 2. 裁剪 + 保存
-    let cropped = img.view(x as u32, y as u32, w as u32, h as u32).to_image();
-    let tmp_path = std::env::temp_dir()
-        .join(format!("transmate-screenshot-{}.png", std::process::id()));
-    cropped.save(&tmp_path).map_err(|e| format!("保存截图失败: {e}"))?;
-    let _ = cropped.save("E:\\TranslatorApp\\last_screenshot.png");
-    eprintln!("[screenshot] coords=({},{},{},{}), crop={}x{}, saved to {:?}",
-        x, y, w, h, cropped.width(), cropped.height(), tmp_path);
-
-    // 3. OCR
-    let ocr_text = {
-        let model_set = model_set_by_name("ppocrv6-small")
-            .ok_or_else(|| "模型集不存在: ppocrv6-small".to_string())?;
-        let cache = ModelCache::new("E:\\TranslatorApp\\ocr");
-        cache
-            .ensure_model_set_for_pipeline(
-                model_set,
-                PipelineConfig::without_cls(),
-                ModelDownloadMode::Missing,
-            )
-            .map_err(|e| format!("OCR 模型下载失败: {e}"))?;
-        let cfg = cache
-            .config_for(model_set)
-            .with_pipeline(PipelineConfig::without_cls())
-            .with_inference_options(InferenceOptions::default());
-        let mut ocr = RapidOcr::from_config(cfg).map_err(|e| format!("OCR 初始化失败: {e}"))?;
-        let output = ocr.run_path(&tmp_path).map_err(|e| format!("OCR 识别失败: {e}"))?;
-        output.lines.into_iter().map(|l| l.text).collect::<Vec<_>>().join("\n")
-    };
-
-    // let _ = std::fs::remove_file(&tmp_path);
-    eprintln!("[screenshot] OCR done: {}", &ocr_text[..ocr_text.len().min(100)]);
-
-    Ok(ocr_text)
+fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Emitter;
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let result: String = (|| -> Result<String, String> {
+            use image::GenericImageView;
+            use rapidocr_core::{
+                config::{InferenceOptions, PipelineConfig},
+                model::{model_set_by_name, ModelCache, ModelDownloadMode},
+                RapidOcr,
+            };
+            let monitors = xcap::Monitor::all().map_err(|e| format!("获取显示器: {e}"))?;
+            let primary = monitors.into_iter().next().ok_or("未找到显示器")?;
+            let img = primary.capture_image().map_err(|e| format!("截屏: {e}"))?;
+            let cropped = img.view(x as u32, y as u32, w as u32, h as u32).to_image();
+            let tmp_path = std::env::temp_dir().join(format!("transmate-ocr-{}.png", std::process::id()));
+            cropped.save(&tmp_path).map_err(|e| format!("保存: {e}"))?;
+            let _ = cropped.save(r"E:\TranslatorApp\last_screenshot.png");
+            let model_set = model_set_by_name("ppocrv6-small").ok_or_else(|| "模型集不存在".to_string())?;
+            let cache = ModelCache::new(r"E:\TranslatorApp\ocr");
+            cache.ensure_model_set_for_pipeline(model_set, PipelineConfig::without_cls(), ModelDownloadMode::Missing).map_err(|e| format!("模型: {e}"))?;
+            let cfg = cache.config_for(model_set).with_pipeline(PipelineConfig::without_cls()).with_inference_options(InferenceOptions::default());
+            let mut ocr = RapidOcr::from_config(cfg).map_err(|e| format!("OCR初始化: {e}"))?;
+            let output = ocr.run_path(&tmp_path).map_err(|e| format!("OCR: {e}"))?;
+            let texts: Vec<String> = output.lines.into_iter().map(|l| l.text).collect();
+            Ok(texts.join("
+"))
+        })().unwrap_or_else(|e| format!("ERROR: {e}"));
+        let _ = app2.emit_to("main", "ocr-done", result);
+    });
+    Ok("processing".into())
 }
+
 
 
 /// 关闭悬浮窗

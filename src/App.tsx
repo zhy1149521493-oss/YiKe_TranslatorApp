@@ -140,7 +140,7 @@ function MainWindow() {
   const [numCtx, setNumCtx] = useState(1024);
   const [streamOn, setStreamOn] = useState(true);
   const [conflict, setConflict] = useState(false);
-  const [clipAuto, setClipAuto] = useState(true); // true=复制即开,false=仅悬浮窗打开时翻译
+  const [clipAuto, setClipAuto] = useState(false); // true=复制即开,false=仅悬浮窗打开时翻译
 
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -274,33 +274,38 @@ function MainWindow() {
     try { await invoke("open_screenshot_overlay"); } catch (e) { console.error(e); }
   };
 
-  /* ---- 截图结果监听:主窗口接收坐标 → OCR → 翻译 → 发悬浮窗 ---- */
+  /* ---- 截图结果监听:主窗口接收坐标 → OCR(后台) → 翻译 ---- */
   useEffect(() => {
     const u = appWindow.listen<{ x: number; y: number; w: number; h: number }>(
       "screenshot-done",
+      (e) => {
+        setOutput("⏳ 正在 OCR 识别…");
+        invoke("screenshot_ocr", { x: Math.round(e.payload.x), y: Math.round(e.payload.y), w: Math.round(e.payload.w), h: Math.round(e.payload.h) }).catch(() => {});
+      }
+    );
+    const o = appWindow.listen<string>(
+      "ocr-done",
       async (e) => {
+        const ocrText = e.payload;
+        if (!ocrText || ocrText.startsWith("ERROR:")) {
+          setOutput("⚠️ " + (ocrText || "未识别到文字"));
+          return;
+        }
+        if (!ocrText.trim()) { setOutput("⚠️ 未识别到文字"); return; }
+        let src = sourceLang;
+        let tgt = targetLang;
+        if (src === "auto") { src = detectLang(ocrText); }
+        if (src === tgt) tgt = src === "zh" ? "en" : "zh";
+        setOutput("⏳ 正在翻译…");
         try {
-          const { x, y, w, h } = e.payload;
-          const ocrText = await invoke<string>("screenshot_ocr", { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
-          if (!ocrText.trim()) {
-            try { await appWindow.emitTo("floating", "show-translation", { text: "", src: "", tgt: "", result: "⚠️ 未识别到文字" }); } catch {}
-            return;
-          }
-          let src = sourceLang;
-          let tgt = targetLang;
-          if (src === "auto") { src = detectLang(ocrText); }
-          if (src === tgt) tgt = src === "zh" ? "en" : "zh";
           const result = await fetchOllamaFull(model, src, tgt, ocrText, numCtx);
           setOutput(`[OCR]\n${ocrText}\n\n[翻译]\n${result}`);
-          try { await invoke("open_floating_window"); setFloatingOpen(true); } catch {}
-          await appWindow.emitTo("floating", "show-translation", { text: ocrText, src, tgt, result });
         } catch (e: any) {
-          setOutput(`❌ 截图翻译失败: ${e}`);
-          try { await appWindow.emitTo("floating", "show-translation", { text: "", src: "", tgt: "", result: `❌ 截图翻译失败: ${e}` }); } catch {}
+          setOutput(`❌ 翻译失败: ${e}`);
         }
       }
     );
-    return () => { u.then((f) => f()); };
+    return () => { u.then((f) => f()); o.then((f) => f()); };
   }, [model, sourceLang, targetLang, numCtx]);
 
   /* ---- 剪贴板监听:复制即译 ---- */
@@ -493,12 +498,16 @@ function ScreenshotOverlay() {
     const c = canvasRef.current;
     if (!c) return;
     const ctx = c.getContext("2d")!;
-    c.width = window.innerWidth;
-    c.height = window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = window.innerWidth * dpr;
+    c.height = window.innerHeight * dpr;
+    /* 用 setTransform 做 DPI 适配:画布物理像素,坐标用 CSS 像素 */
+    const W = window.innerWidth, H = window.innerHeight;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     /* 初始遮罩 */
     ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(0, 0, c.width, c.height);
+    ctx.fillRect(0, 0, W, H);
 
     const cancel = () => appWindow.close();
 
@@ -512,10 +521,11 @@ function ScreenshotOverlay() {
       if (!drawing.current) return;
       rect.current.ex = e.clientX;
       rect.current.ey = e.clientY;
-      /* 每帧先清空再重绘,避免叠加变黑 */
-      ctx.clearRect(0, 0, c.width, c.height);
+      /* 重置变换后用 CSS 像素绘制 */
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.fillRect(0, 0, W, H);
       const rx = Math.min(rect.current.sx, rect.current.ex);
       const ry = Math.min(rect.current.sy, rect.current.ey);
       const rw = Math.abs(rect.current.ex - rect.current.sx);
@@ -529,7 +539,6 @@ function ScreenshotOverlay() {
       if (!drawing.current) return;
       drawing.current = false;
       const { sx, sy, ex, ey } = rect.current;
-      const dpr = window.devicePixelRatio || 1;
       const x = Math.min(sx, ex) * dpr;
       const y = Math.min(sy, ey) * dpr;
       const w = Math.abs(ex - sx) * dpr;
