@@ -1,5 +1,58 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 use tauri::Manager;
+use std::os::windows::process::CommandExt;
+use std::process::{Command as StdCommand, Child, Stdio};
+use std::sync::Mutex;
+
+/// 管理 Ollama serve 子进程的生命周期:应用启动时 spawn,退出时杀进程树
+struct OllamaManager {
+    child: Mutex<Option<Child>>,
+}
+
+impl OllamaManager {
+    fn new() -> Self {
+        Self { child: Mutex::new(None) }
+    }
+
+    fn start(&self, ollama_exe: &str, models_dir: &str) -> Result<(), String> {
+        // ollama.exe 必须在它所在的目录运行(依赖 ./lib/ollama/*.dll)
+        let ollama_dir = std::path::Path::new(ollama_exe)
+            .parent()
+            .unwrap_or(std::path::Path::new("."));
+        let child = StdCommand::new(ollama_exe)
+            .arg("serve")
+            .current_dir(ollama_dir)
+            .env("OLLAMA_MODELS", models_dir)
+            .env("OLLAMA_HOST", "127.0.0.1:11434")
+            .env("OLLAMA_NOHISTORY", "1")
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| format!("启动 Ollama 失败: {e}"))?;
+        eprintln!("[ollama] serve started (pid={})", child.id());
+        *self.child.lock().unwrap() = Some(child);
+        Ok(())
+    }
+}
+
+impl Drop for OllamaManager {
+    fn drop(&mut self) {
+        if let Some(ref mut child) = *self.child.lock().unwrap() {
+            let pid = child.id();
+            eprintln!("[ollama] stopping serve (pid={pid})...");
+            let _ = child.kill();
+            let _ = StdCommand::new("taskkill")
+                .args(["/pid", &pid.to_string(), "/t", "/f"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x08000000)
+                .spawn();
+            let _ = child.wait();
+            eprintln!("[ollama] serve stopped");
+        }
+    }
+}
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -74,6 +127,37 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![greet, ping, open_floating_window])
+        .setup(|app| {
+            // 清理可能残留的旧 ollama 进程,避免端口冲突
+            eprintln!("[ollama] cleaning up old processes...");
+            let _ = StdCommand::new("taskkill")
+                .args(["/f", "/t", "/im", "ollama.exe"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x08000000)
+                .output(); // 同步等待完成
+            let _ = StdCommand::new("taskkill")
+                .args(["/f", "/t", "/im", "llama-server.exe"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .creation_flags(0x08000000)
+                .output();
+            std::thread::sleep(std::time::Duration::from_secs(2));
+
+            eprintln!("[ollama] starting serve...");
+            let mgr = OllamaManager::new();
+            if let Err(e) = mgr.start(
+                "E:\\TranslatorApp\\ollama\\ollama.exe",
+                "E:\\TranslatorApp\\models",
+            ) {
+                eprintln!("[ollama] start failed: {e}");
+                // 不阻塞应用,翻译功能暂时不可用
+            } else {
+                eprintln!("[ollama] serve started OK");
+            }
+            app.manage(mgr);
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
