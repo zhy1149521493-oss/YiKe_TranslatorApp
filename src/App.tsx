@@ -259,6 +259,50 @@ function MainWindow() {
     return () => { unreg?.(); };
   }, []);
 
+  /* ---- 截图快捷键 ---- */
+  useEffect(() => {
+    let unreg: (() => void) | null = null;
+    register("CommandOrControl+Shift+S", async (e) => {
+      if (e.state !== "Pressed") return;
+      try { await invoke("open_screenshot_overlay"); } catch {}
+    }).then((fn) => { unreg = fn; });
+    return () => { unreg?.(); };
+  }, []);
+
+  /* ---- 截图 ---- */
+  const startScreenshot = async () => {
+    try { await invoke("open_screenshot_overlay"); } catch (e) { console.error(e); }
+  };
+
+  /* ---- 截图结果监听:主窗口接收坐标 → OCR → 翻译 → 发悬浮窗 ---- */
+  useEffect(() => {
+    const u = appWindow.listen<{ x: number; y: number; w: number; h: number }>(
+      "screenshot-done",
+      async (e) => {
+        try {
+          const { x, y, w, h } = e.payload;
+          const ocrText = await invoke<string>("screenshot_ocr", { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h) });
+          if (!ocrText.trim()) {
+            try { await appWindow.emitTo("floating", "show-translation", { text: "", src: "", tgt: "", result: "⚠️ 未识别到文字" }); } catch {}
+            return;
+          }
+          let src = sourceLang;
+          let tgt = targetLang;
+          if (src === "auto") { src = detectLang(ocrText); }
+          if (src === tgt) tgt = src === "zh" ? "en" : "zh";
+          const result = await fetchOllamaFull(model, src, tgt, ocrText, numCtx);
+          setOutput(`[OCR]\n${ocrText}\n\n[翻译]\n${result}`);
+          try { await invoke("open_floating_window"); setFloatingOpen(true); } catch {}
+          await appWindow.emitTo("floating", "show-translation", { text: ocrText, src, tgt, result });
+        } catch (e: any) {
+          setOutput(`❌ 截图翻译失败: ${e}`);
+          try { await appWindow.emitTo("floating", "show-translation", { text: "", src: "", tgt: "", result: `❌ 截图翻译失败: ${e}` }); } catch {}
+        }
+      }
+    );
+    return () => { u.then((f) => f()); };
+  }, [model, sourceLang, targetLang, numCtx]);
+
   /* ---- 剪贴板监听:复制即译 ---- */
   useEffect(() => {
     let lastText = "";
@@ -316,6 +360,9 @@ function MainWindow() {
           </select>
           <button className="btn-float" onClick={() => setClipAuto(!clipAuto)} title={clipAuto ? "复制即开(点击切换为手动)" : "手动模式(点击切换为自动)"}>
             {clipAuto ? "📋 自动" : "📋 手动"}
+          </button>
+          <button className="btn-float" onClick={startScreenshot} title="截图翻译">
+            📷
           </button>
           <button className="btn-float" onClick={openFloating} title="打开翻译悬浮窗">
             {floatingOpen ? "📍 已开" : "🔲 悬浮窗"}
@@ -392,6 +439,10 @@ function FloatingWindow() {
         <div className="floating-bar" onMouseDown={() => appWindow.startDragging()}>
           <span className="floating-title">翻译</span>
           <div className="floating-actions">
+            <button className="floating-btn" title="截图翻译" onMouseDown={(e) => e.stopPropagation()}
+              onClick={async () => { try { await invoke("open_screenshot_overlay"); } catch {} }}>
+              📷
+            </button>
             <button
               className="floating-btn"
               title="设置"
@@ -432,9 +483,89 @@ function FloatingWindow() {
   );
 }
 
+/* ============ 截图覆盖层 ============ */
+function ScreenshotOverlay() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rect = useRef({ sx: 0, sy: 0, ex: 0, ey: 0 });
+  const drawing = useRef(false);
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext("2d")!;
+    c.width = window.innerWidth;
+    c.height = window.innerHeight;
+
+    /* 初始遮罩 */
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    ctx.fillRect(0, 0, c.width, c.height);
+
+    const cancel = () => appWindow.close();
+
+    const onDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      rect.current = { sx: e.clientX, sy: e.clientY, ex: e.clientX, ey: e.clientY };
+      drawing.current = true;
+    };
+    const onMove = (e: MouseEvent) => {
+      if (!drawing.current) return;
+      rect.current.ex = e.clientX;
+      rect.current.ey = e.clientY;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, c.width, c.height);
+      const rx = Math.min(rect.current.sx, rect.current.ex);
+      const ry = Math.min(rect.current.sy, rect.current.ey);
+      const rw = Math.abs(rect.current.ex - rect.current.sx);
+      const rh = Math.abs(rect.current.ey - rect.current.sy);
+      ctx.clearRect(rx, ry, rw, rh);
+      ctx.strokeStyle = "#007aff";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(rx, ry, rw, rh);
+    };
+    const onUp = async () => {
+      if (!drawing.current) return;
+      drawing.current = false;
+      const { sx, sy, ex, ey } = rect.current;
+      const x = Math.min(sx, ex);
+      const y = Math.min(sy, ey);
+      const w = Math.abs(ex - sx);
+      const h = Math.abs(ey - sy);
+      if (w < 10 || h < 10) { appWindow.close(); return; }
+      await appWindow.emitTo("main", "screenshot-done", { x, y, w, h });
+      appWindow.close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") cancel();
+    };
+    const onCtx = (e: MouseEvent) => {
+      e.preventDefault();
+      cancel();
+    };
+
+    c.addEventListener("mousedown", onDown);
+    c.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("keydown", onKey);
+    c.addEventListener("contextmenu", onCtx);
+    return () => {
+      c.removeEventListener("mousedown", onDown);
+      c.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("keydown", onKey);
+      c.removeEventListener("contextmenu", onCtx);
+    };
+  }, []);
+
+  return <canvas ref={canvasRef} style={{ width: "100vw", height: "100vh", display: "block", cursor: "crosshair" }} />;
+}
+
+/* ============ 应用路由 ============ */
 export default function App() {
   const [label, setLabel] = useState<string>("main");
   useEffect(() => { setLabel(appWindow.label); }, []);
 
-  return label === "floating" ? <FloatingWindow /> : <MainWindow />;
+  if (label === "floating") return <FloatingWindow />;
+  if (label === "screenshot-overlay") return <ScreenshotOverlay />;
+  return <MainWindow />;
 }
+

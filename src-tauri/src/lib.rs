@@ -67,6 +67,65 @@ fn ping() -> String {
     "pong".to_string()
 }
 
+/// 截图 + OCR: dxgi 截全屏 → 裁剪到区域 → 保存 png → OCR → 返回文本
+#[tauri::command]
+fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<String, String> {
+    use dxgi_capture_rs::DXGIManager;
+    use image::GenericImageView;
+    use rapidocr_core::{
+        config::{InferenceOptions, PipelineConfig},
+        model::{model_set_by_name, ModelCache, ModelDownloadMode},
+        RapidOcr,
+    };
+
+    // 1. 截全屏
+    let mut manager = DXGIManager::new(1000).map_err(|e| format!("初始化截屏失败: {e:?}"))?;
+    let (pixels, (sw, sh)) = manager.capture_frame().map_err(|e| format!("截屏失败: {e:?}"))?;
+
+    // 2. BGRA → RGB
+    let mut rgb = Vec::with_capacity(pixels.len() * 3);
+    for p in &pixels {
+        rgb.push(p.r);
+        rgb.push(p.g);
+        rgb.push(p.b);
+    }
+    let img = image::RgbImage::from_raw(sw as u32, sh as u32, rgb)
+        .ok_or("截屏图片转换失败")?;
+
+    // 3. 裁剪 + 保存临时文件
+    let cropped = img.view(x as u32, y as u32, w as u32, h as u32).to_image();
+    let tmp_path = std::env::temp_dir()
+        .join(format!("transmate-screenshot-{}.png", std::process::id()));
+    cropped.save(&tmp_path).map_err(|e| format!("保存截图失败: {e}"))?;
+    eprintln!("[screenshot] saved to {:?}", tmp_path);
+
+    // 4. OCR
+    let ocr_text = {
+        let model_set = model_set_by_name("ppocrv6-small")
+            .ok_or_else(|| "模型集不存在: ppocrv6-small".to_string())?;
+        let cache = ModelCache::new("E:\\TranslatorApp\\ocr");
+        cache
+            .ensure_model_set_for_pipeline(
+                model_set,
+                PipelineConfig::without_cls(),
+                ModelDownloadMode::Missing,
+            )
+            .map_err(|e| format!("OCR 模型下载失败: {e}"))?;
+        let cfg = cache
+            .config_for(model_set)
+            .with_pipeline(PipelineConfig::without_cls())
+            .with_inference_options(InferenceOptions::default());
+        let mut ocr = RapidOcr::from_config(cfg).map_err(|e| format!("OCR 初始化失败: {e}"))?;
+        let output = ocr.run_path(&tmp_path).map_err(|e| format!("OCR 识别失败: {e}"))?;
+        output.lines.into_iter().map(|l| l.text).collect::<Vec<_>>().join("\n")
+    };
+
+    let _ = std::fs::remove_file(&tmp_path);
+    eprintln!("[screenshot] OCR done: {}", &ocr_text[..ocr_text.len().min(100)]);
+
+    Ok(ocr_text)
+}
+
 /// 关闭悬浮窗
 #[tauri::command]
 fn close_floating_window(app: tauri::AppHandle) -> Result<(), String> {
@@ -78,7 +137,43 @@ fn close_floating_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 创建(或聚焦已存在的)翻译悬浮窗:透明、无边框、置顶、跳过任务栏
+/// 打开截图覆盖层窗口(全屏 Canvas,用于框选区域)
+/// 必须用后台线程创建,避免同步 build 死锁
+#[tauri::command]
+fn open_screenshot_overlay(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    // 先关掉旧的
+    if let Some(w) = app.get_webview_window("screenshot-overlay") {
+        let _ = w.close();
+    }
+    let (w, h) = if let Ok(Some(m)) = app.primary_monitor() {
+        let size = m.size();
+        (size.width as f64, size.height as f64)
+    } else {
+        (1920.0, 1080.0)
+    };
+
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let _ = WebviewWindowBuilder::new(
+            &app2,
+            "screenshot-overlay",
+            WebviewUrl::App("index.html".into()),
+        )
+        .title("截图")
+        .inner_size(w, h)
+        .position(0.0, 0.0)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .shadow(false)
+        .build();
+    });
+
+    Ok(())
+}
 /// 注意:窗口创建必须在后台线程执行,直接 invoke 里同步调 build 会死锁
 #[tauri::command]
 fn open_floating_window(app: tauri::AppHandle) -> Result<(), String> {
@@ -140,7 +235,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, open_floating_window, close_floating_window])
+        .invoke_handler(tauri::generate_handler![greet, ping, screenshot_ocr, open_screenshot_overlay, open_floating_window, close_floating_window])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");
