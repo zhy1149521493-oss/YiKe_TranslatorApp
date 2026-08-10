@@ -291,6 +291,10 @@ body,
   justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid var(--ios-separator);
+  cursor: grab;
+}
+.floating-bar:active {
+  cursor: grabbing;
 }
 
 .floating-title {
@@ -298,6 +302,29 @@ body,
   font-weight: 640;
   color: var(--ios-text);
   letter-spacing: -0.2px;
+}
+
+.floating-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.floating-btn {
+  background: rgba(60, 60, 67, 0.1);
+  border: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 11px;
+  color: var(--ios-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.floating-btn:hover {
+  background: rgba(60, 60, 67, 0.2);
 }
 
 .floating-close {
@@ -318,6 +345,29 @@ body,
 .floating-close:hover {
   background: rgba(60, 60, 67, 0.2);
   color: var(--ios-text);
+}
+
+.floating-settings {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--ios-separator);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ios-secondary);
+}
+.floating-settings label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.floating-settings input[type="range"] {
+  width: 80px;
+  accent-color: var(--ios-blue);
+}
+.floating-settings input[type="checkbox"] {
+  accent-color: var(--ios-blue);
 }
 
 .floating-body {

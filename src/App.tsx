@@ -368,6 +368,8 @@ function MainWindow() {
 /* ============ 悬浮窗 ============ */
 function FloatingWindow() {
   const [trans, setTrans] = useState<{ text: string; src: string; tgt: string; result: string } | null>(null);
+  const [opacity, setOpacity] = useState(0.88);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
@@ -386,11 +388,31 @@ function FloatingWindow() {
 
   return (
     <div className="floating-root">
-      <div className="floating-card">
-        <div className="floating-bar">
+      <div className="floating-card" style={{ opacity }}>
+        <div className="floating-bar" onMouseDown={() => appWindow.startDragging()}>
           <span className="floating-title">翻译</span>
-          <button className="floating-close" title="关闭" onClick={closeFloating}>✕</button>
+          <div className="floating-actions">
+            <button
+              className="floating-btn"
+              title="设置"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => setShowSettings(!showSettings)}
+            >
+              ⚙
+            </button>
+            <button className="floating-close" title="关闭" onMouseDown={(e) => e.stopPropagation()} onClick={closeFloating}>✕</button>
+          </div>
         </div>
+
+        {showSettings && (
+          <div className="floating-settings">
+            <label>
+              透明度
+              <input type="range" min="30" max="100" value={Math.round(opacity * 100)} onChange={(e) => setOpacity(Number(e.target.value) / 100)} />
+            </label>
+          </div>
+        )}
+
         <div className="floating-body">
           {trans ? (
             <div className="floating-trans">
