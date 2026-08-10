@@ -4,6 +4,7 @@ use tauri::Manager;
 use std::os::windows::process::CommandExt;
 use std::process::{Command as StdCommand, Child, Stdio};
 use std::sync::Mutex;
+use rapidocr_core::RapidOcr;
 
 /// 管理 Ollama serve 子进程的生命周期:应用启动时 spawn,退出时杀进程树
 struct OllamaManager {
@@ -67,19 +68,37 @@ fn ping() -> String {
     "pong".to_string()
 }
 
-/// 截图 + OCR: dxgi 截全屏 → 裁剪到区域 → 保存 png → OCR → 返回文本
+/// 全局缓存的 RapidOcr 实例:模型只加载一次,避免每次截图重复初始化(截图慢的主因)
+static OCR_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<RapidOcr>>> = std::sync::OnceLock::new();
+
+fn ocr_instance() -> Result<std::sync::MutexGuard<'static, Option<RapidOcr>>, String> {
+    use rapidocr_core::{
+        config::{InferenceOptions, PipelineConfig},
+        model::{model_set_by_name, ModelCache, ModelDownloadMode},
+    };
+    let lock = OCR_CACHE.get_or_init(|| std::sync::Mutex::new(None));
+    let mut guard = lock.lock().map_err(|_| "OCR 锁获取失败".to_string())?;
+    if guard.is_none() {
+        let model_set = model_set_by_name("ppocrv6-small").ok_or_else(|| "模型集不存在".to_string())?;
+        let cache = ModelCache::new(r"E:\TranslatorApp\ocr");
+        cache.ensure_model_set_for_pipeline(model_set, PipelineConfig::without_cls(), ModelDownloadMode::Missing).map_err(|e| format!("模型: {e}"))?;
+        let cfg = cache.config_for(model_set).with_pipeline(PipelineConfig::without_cls()).with_inference_options(InferenceOptions::default());
+        let ocr = RapidOcr::from_config(cfg).map_err(|e| format!("OCR初始化: {e}"))?;
+        eprintln!("[screenshot] OCR 引擎初始化完成(首次)");
+        *guard = Some(ocr);
+    }
+    Ok(guard)
+}
+
+/// 截图 + OCR: xcap 截全屏 → 裁剪到区域 → 保存 png → OCR → 返回文本
 #[tauri::command]
 fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Result<String, String> {
     use tauri::Emitter;
     let app2 = app.clone();
     std::thread::spawn(move || {
+        eprintln!("[screenshot] ocr start coords=({x},{y},{w},{h})");
         let result: String = (|| -> Result<String, String> {
             use image::GenericImageView;
-            use rapidocr_core::{
-                config::{InferenceOptions, PipelineConfig},
-                model::{model_set_by_name, ModelCache, ModelDownloadMode},
-                RapidOcr,
-            };
             let monitors = xcap::Monitor::all().map_err(|e| format!("获取显示器: {e}"))?;
             let primary = monitors.into_iter().next().ok_or("未找到显示器")?;
             let img = primary.capture_image().map_err(|e| format!("截屏: {e}"))?;
@@ -87,17 +106,17 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Resu
             let tmp_path = std::env::temp_dir().join(format!("transmate-ocr-{}.png", std::process::id()));
             cropped.save(&tmp_path).map_err(|e| format!("保存: {e}"))?;
             let _ = cropped.save(r"E:\TranslatorApp\last_screenshot.png");
-            let model_set = model_set_by_name("ppocrv6-small").ok_or_else(|| "模型集不存在".to_string())?;
-            let cache = ModelCache::new(r"E:\TranslatorApp\ocr");
-            cache.ensure_model_set_for_pipeline(model_set, PipelineConfig::without_cls(), ModelDownloadMode::Missing).map_err(|e| format!("模型: {e}"))?;
-            let cfg = cache.config_for(model_set).with_pipeline(PipelineConfig::without_cls()).with_inference_options(InferenceOptions::default());
-            let mut ocr = RapidOcr::from_config(cfg).map_err(|e| format!("OCR初始化: {e}"))?;
+            eprintln!("[screenshot] cropped {}x{} saved to {:?}", cropped.width(), cropped.height(), tmp_path);
+            let mut guard = ocr_instance()?;
+            let ocr = guard.as_mut().ok_or("OCR 引擎不可用")?;
             let output = ocr.run_path(&tmp_path).map_err(|e| format!("OCR: {e}"))?;
             let texts: Vec<String> = output.lines.into_iter().map(|l| l.text).collect();
-            Ok(texts.join("
-"))
+            Ok(texts.join("\n"))
         })().unwrap_or_else(|e| format!("ERROR: {e}"));
-        let _ = app2.emit_to("main", "ocr-done", result);
+        let preview: String = result.chars().take(120).collect();
+        eprintln!("[screenshot] ocr result: {}", preview);
+        let emit_ok = app2.emit_to("main", "ocr-done", result);
+        eprintln!("[screenshot] emit ocr-done: {:?}", emit_ok.map(|_| "ok"));
     });
     Ok("processing".into())
 }
@@ -117,9 +136,12 @@ fn close_floating_window(app: tauri::AppHandle) -> Result<(), String> {
 
 /// 打开截图覆盖层窗口(全屏 Canvas,用于框选区域)
 /// 必须用后台线程创建,避免同步 build 死锁
+/// from: 发起入口("main"=桌面端 / "floating"=悬浮窗),决定截图结果显示在哪
 #[tauri::command]
-fn open_screenshot_overlay(app: tauri::AppHandle) -> Result<(), String> {
+fn open_screenshot_overlay(from: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
+    let from = from.unwrap_or_else(|| "main".to_string());
+    eprintln!("[screenshot] overlay opened from={from}");
     // 先关掉旧的
     if let Some(w) = app.get_webview_window("screenshot-overlay") {
         let _ = w.close();
@@ -136,7 +158,7 @@ fn open_screenshot_overlay(app: tauri::AppHandle) -> Result<(), String> {
         let _ = WebviewWindowBuilder::new(
             &app2,
             "screenshot-overlay",
-            WebviewUrl::App("index.html".into()),
+            WebviewUrl::App(format!("index.html?from={from}").into()),
         )
         .title("截图")
         .inner_size(w, h)

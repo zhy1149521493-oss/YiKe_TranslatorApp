@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { register } from "@tauri-apps/plugin-global-shortcut";
+import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import "./App.css";
 
@@ -144,6 +144,7 @@ function MainWindow() {
 
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
+  const screenshotSource = useRef<string>("main"); // 截图发起方: main=桌面端 / floating=悬浮窗
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef(input);
   inputRef.current = input;
@@ -245,7 +246,6 @@ function MainWindow() {
 
   /* ---- 划词快捷键:开关悬浮窗 ---- */
   useEffect(() => {
-    let unreg: (() => void) | null = null;
     register("CommandOrControl+Shift+D", async (e) => {
       if (e.state !== "Pressed") return;
       if (floatingRef.current) {
@@ -255,53 +255,72 @@ function MainWindow() {
         await invoke("open_floating_window");
         setFloatingOpen(true);
       }
-    }).then((fn) => { unreg = fn; });
-    return () => { unreg?.(); };
+    }).catch((err) => console.error("注册快捷键 Ctrl+Shift+D 失败:", err));
+    return () => { unregister("CommandOrControl+Shift+D"); };
   }, []);
 
   /* ---- 截图快捷键 ---- */
   useEffect(() => {
-    let unreg: (() => void) | null = null;
     register("CommandOrControl+Shift+S", async (e) => {
       if (e.state !== "Pressed") return;
-      try { await invoke("open_screenshot_overlay"); } catch {}
-    }).then((fn) => { unreg = fn; });
-    return () => { unreg?.(); };
+      try { await invoke("open_screenshot_overlay", { from: "main" }); } catch {}
+    }).catch((err) => console.error("注册快捷键 Ctrl+Shift+S 失败:", err));
+    return () => { unregister("CommandOrControl+Shift+S"); };
   }, []);
 
   /* ---- 截图 ---- */
   const startScreenshot = async () => {
-    try { await invoke("open_screenshot_overlay"); } catch (e) { console.error(e); }
+    try { await invoke("open_screenshot_overlay", { from: "main" }); } catch (e) { console.error(e); }
   };
 
-  /* ---- 截图结果监听:主窗口接收坐标 → OCR(后台) → 翻译 ---- */
+  /* ---- 截图结果监听:主窗口接收坐标 → OCR(后台) → 按来源路由显示 ---- */
   useEffect(() => {
-    const u = appWindow.listen<{ x: number; y: number; w: number; h: number }>(
+    const u = appWindow.listen<{ x: number; y: number; w: number; h: number; source?: string }>(
       "screenshot-done",
       (e) => {
-        setOutput("⏳ 正在 OCR 识别…");
+        const source = e.payload.source || "main";
+        screenshotSource.current = source;
+        // 状态提示按来源路由:悬浮窗截图 → 悬浮窗显示;桌面端截图 → 主窗口显示
+        if (source === "floating") {
+          appWindow.emitTo("floating", "screenshot-status", "⏳ 正在 OCR 识别…").catch(() => {});
+        } else {
+          setOutput("⏳ 正在 OCR 识别…");
+        }
         invoke("screenshot_ocr", { x: Math.round(e.payload.x), y: Math.round(e.payload.y), w: Math.round(e.payload.w), h: Math.round(e.payload.h) }).catch(() => {});
       }
     );
     const o = appWindow.listen<string>(
       "ocr-done",
       async (e) => {
+        const source = screenshotSource.current;
         const ocrText = e.payload;
+        // 按来源显示状态/结果:floating → 悬浮窗事件;main → 主窗口输出区
+        const showStatus = (msg: string) => {
+          if (source === "floating") {
+            appWindow.emitTo("floating", "screenshot-status", msg).catch(() => {});
+          } else {
+            setOutput(msg);
+          }
+        };
         if (!ocrText || ocrText.startsWith("ERROR:")) {
-          setOutput("⚠️ " + (ocrText || "未识别到文字"));
+          showStatus("⚠️ " + (ocrText || "未识别到文字"));
           return;
         }
-        if (!ocrText.trim()) { setOutput("⚠️ 未识别到文字"); return; }
+        if (!ocrText.trim()) { showStatus("⚠️ 未识别到文字"); return; }
         let src = sourceLang;
         let tgt = targetLang;
         if (src === "auto") { src = detectLang(ocrText); }
         if (src === tgt) tgt = src === "zh" ? "en" : "zh";
-        setOutput("⏳ 正在翻译…");
+        showStatus("⏳ 正在翻译…");
         try {
           const result = await fetchOllamaFull(model, src, tgt, ocrText, numCtx);
-          setOutput(`[OCR]\n${ocrText}\n\n[翻译]\n${result}`);
+          if (source === "floating") {
+            await appWindow.emitTo("floating", "show-translation", { text: ocrText, src, tgt, result }).catch(() => {});
+          } else {
+            setOutput(`[OCR]\n${ocrText}\n\n[翻译]\n${result}`);
+          }
         } catch (e: any) {
-          setOutput(`❌ 翻译失败: ${e}`);
+          showStatus(`❌ 翻译失败: ${e}`);
         }
       }
     );
@@ -420,16 +439,21 @@ function MainWindow() {
 /* ============ 悬浮窗 ============ */
 function FloatingWindow() {
   const [trans, setTrans] = useState<{ text: string; src: string; tgt: string; result: string } | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [opacity, setOpacity] = useState(0.88);
   const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
       "show-translation",
-      (e) => setTrans(e.payload)
+      (e) => { setTrans(e.payload); setStatus(null); }
+    );
+    const s = appWindow.listen<string>(
+      "screenshot-status",
+      (e) => setStatus(e.payload)
     );
     const c = appWindow.listen("close-me", () => closeFloating());
-    return () => { u.then((f) => f()); c.then((f) => f()); };
+    return () => { u.then((f) => f()); s.then((f) => f()); c.then((f) => f()); };
   }, []);
 
   const closeFloating = async () => {
@@ -445,7 +469,7 @@ function FloatingWindow() {
           <span className="floating-title">翻译</span>
           <div className="floating-actions">
             <button className="floating-btn" title="截图翻译" onMouseDown={(e) => e.stopPropagation()}
-              onClick={async () => { try { await invoke("open_screenshot_overlay"); } catch {} }}>
+              onClick={async () => { try { await invoke("open_screenshot_overlay", { from: "floating" }); } catch {} }}>
               📷
             </button>
             <button
@@ -470,7 +494,9 @@ function FloatingWindow() {
         )}
 
         <div className="floating-body">
-          {trans ? (
+          {status ? (
+            <div className="floating-status">{status}</div>
+          ) : trans ? (
             <div className="floating-trans">
               <div className="floating-src">{trans.text}</div>
               <div className="floating-divider" />
@@ -544,7 +570,9 @@ function ScreenshotOverlay() {
       const w = Math.abs(ex - sx) * dpr;
       const h = Math.abs(ey - sy) * dpr;
       if (w < 10 || h < 10) { appWindow.close(); return; }
-      appWindow.emitTo("main", "screenshot-done", { x, y, w, h });
+      // 来源由 open_screenshot_overlay 创建窗口时写入 URL:index.html?from=floating|main
+      const source = new URLSearchParams(window.location.search).get("from") || "main";
+      appWindow.emitTo("main", "screenshot-done", { x, y, w, h, source });
       appWindow.close();
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); };
