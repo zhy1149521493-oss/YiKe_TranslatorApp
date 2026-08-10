@@ -1,51 +1,95 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import "./App.css";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+const appWindow = getCurrentWebviewWindow();
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+/* ============ 主窗口(软件模式) ============ */
+function MainWindow() {
+  const [floatingOpen, setFloatingOpen] = useState(false);
+
+  useEffect(() => {
+    const unlisten = appWindow.listen("floating-closed", () =>
+      setFloatingOpen(false)
+    );
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  const openFloating = async () => {
+    try {
+      await invoke("open_floating_window");
+      setFloatingOpen(true);
+    } catch (e) {
+      console.error(e);
+    }
+  };
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="app-main">
+      <header className="app-header">
+        <h1>本地翻译助手</h1>
+        <span className="mode-badge">软件模式</span>
+      </header>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+      <main className="app-body">
+        <div className="placeholder-card">
+          <h2>🚧 开发中</h2>
+          <p>翻译 / 对话界面将在这里呈现(第 0.3 步起逐步完善)</p>
+        </div>
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+        <div className="actions">
+          <button className="btn-primary" onClick={openFloating}>
+            打开悬浮窗
+          </button>
+          <span className="hint">
+            {floatingOpen
+              ? "悬浮窗已打开,注意屏幕右下角的小窗口"
+              : "点击后屏幕右下角会出现一个圆角小窗"}
+          </span>
+        </div>
+      </main>
+    </div>
   );
 }
 
-export default App;
+/* ============ 悬浮窗 ============ */
+function FloatingWindow() {
+  const closeFloating = async () => {
+    await appWindow.emit("floating-closed");
+    await appWindow.close();
+  };
+
+  return (
+    <div className="floating-root">
+      <div className="floating-card">
+        <div className="floating-bar">
+          <span className="floating-title">悬浮窗</span>
+          <button
+            className="floating-close"
+            title="关闭"
+            onClick={closeFloating}
+          >
+            ✕
+          </button>
+        </div>
+        <div className="floating-body">
+          <p>这里是划词翻译结果浮窗</p>
+          <p className="floating-sub">(功能开发中, 第 2 波上线)</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [label, setLabel] = useState<string>("main");
+
+  useEffect(() => {
+    setLabel(appWindow.label);
+  }, []);
+
+  return label === "floating" ? <FloatingWindow /> : <MainWindow />;
+}
