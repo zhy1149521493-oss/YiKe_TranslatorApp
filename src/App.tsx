@@ -247,6 +247,7 @@ function MainWindow() {
   /* ---- 划词快捷键:开关悬浮窗 ---- */
   useEffect(() => {
     register("CommandOrControl+Shift+D", async (e) => {
+      setOutput("🔔 Ctrl+Shift+D 触发 state=" + e.state);
       if (e.state !== "Pressed") return;
       if (floatingRef.current) {
         await invoke("close_floating_window");
@@ -255,16 +256,17 @@ function MainWindow() {
         await invoke("open_floating_window");
         setFloatingOpen(true);
       }
-    }).catch((err) => console.error("注册快捷键 Ctrl+Shift+D 失败:", err));
+    }).catch((err) => { console.error("注册快捷键 Ctrl+Shift+D 失败:", err); setOutput("⚠️ 快捷键注册失败(Ctrl+Shift+D): " + err); });
     return () => { unregister("CommandOrControl+Shift+D"); };
   }, []);
 
   /* ---- 截图快捷键 ---- */
   useEffect(() => {
     register("CommandOrControl+Shift+S", async (e) => {
+      setOutput("🔔 Ctrl+Shift+S 触发 state=" + e.state);
       if (e.state !== "Pressed") return;
       try { await invoke("open_screenshot_overlay", { from: "main" }); } catch {}
-    }).catch((err) => console.error("注册快捷键 Ctrl+Shift+S 失败:", err));
+    }).catch((err) => { console.error("注册快捷键 Ctrl+Shift+S 失败:", err); setOutput("⚠️ 快捷键注册失败(Ctrl+Shift+S): " + err); });
     return () => { unregister("CommandOrControl+Shift+S"); };
   }, []);
 
@@ -458,8 +460,8 @@ function FloatingWindow() {
 
   const closeFloating = async () => {
     setTrans(null);
-    await appWindow.emit("floating-closed");
-    await appWindow.close();
+    await appWindow.emitTo("main", "floating-closed");
+    await appWindow.hide();
   };
 
   return (
@@ -519,23 +521,33 @@ function ScreenshotOverlay() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rect = useRef({ sx: 0, sy: 0, ex: 0, ey: 0 });
   const drawing = useRef(false);
+  const sourceRef = useRef<string>("main");
 
   useEffect(() => {
     const c = canvasRef.current;
     if (!c) return;
     const ctx = c.getContext("2d")!;
     const dpr = window.devicePixelRatio || 1;
-    c.width = window.innerWidth * dpr;
-    c.height = window.innerHeight * dpr;
-    /* 用 setTransform 做 DPI 适配:画布物理像素,坐标用 CSS 像素 */
     const W = window.innerWidth, H = window.innerHeight;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    /* 初始遮罩 */
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.fillRect(0, 0, W, H);
+    /* 收到 overlay-start(窗口被显示)时初始化框选界面;from 由 Rust 事件传入 */
+    const start = (payload: string) => {
+      sourceRef.current = payload || "main";
+      c.width = window.innerWidth * dpr;
+      c.height = window.innerHeight * dpr;
+      /* 用 setTransform 做 DPI 适配:画布物理像素,坐标用 CSS 像素 */
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      /* 初始遮罩 */
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+      drawing.current = false;
+      rect.current = { sx: 0, sy: 0, ex: 0, ey: 0 };
+    };
+    const u = appWindow.listen<string>("overlay-start", (e) => start(e.payload));
 
-    const cancel = () => appWindow.close();
+    /* 隐藏而非关闭:窗口启动时已预建,保留复用 */
+    const hide = () => { appWindow.hide(); };
+    const cancel = () => hide();
 
     const onDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
@@ -569,11 +581,9 @@ function ScreenshotOverlay() {
       const y = Math.min(sy, ey) * dpr;
       const w = Math.abs(ex - sx) * dpr;
       const h = Math.abs(ey - sy) * dpr;
-      if (w < 10 || h < 10) { appWindow.close(); return; }
-      // 来源由 open_screenshot_overlay 创建窗口时写入 URL:index.html?from=floating|main
-      const source = new URLSearchParams(window.location.search).get("from") || "main";
-      appWindow.emitTo("main", "screenshot-done", { x, y, w, h, source });
-      appWindow.close();
+      if (w < 10 || h < 10) { hide(); return; }
+      appWindow.emitTo("main", "screenshot-done", { x, y, w, h, source: sourceRef.current });
+      hide();
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); };
     const onCtx = (e: MouseEvent) => { e.preventDefault(); cancel(); };
@@ -586,6 +596,7 @@ function ScreenshotOverlay() {
     window.addEventListener("keydown", onKey);
     c.addEventListener("contextmenu", onCtx);
     return () => {
+      u.then((f) => f());
       c.removeEventListener("mousedown", onDown);
       c.removeEventListener("mousemove", onMove);
       c.removeEventListener("mouseup", onUp);

@@ -26,6 +26,7 @@ impl OllamaManager {
             .current_dir(ollama_dir)
             .env("OLLAMA_MODELS", models_dir)
             .env("OLLAMA_HOST", "127.0.0.1:11434")
+            .env("OLLAMA_ORIGINS", "*") // 允许 tauri:// 页面(null Origin)访问,否则 release 版 fetch 被 403
             .env("OLLAMA_NOHISTORY", "1")
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
@@ -127,51 +128,55 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Resu
 #[tauri::command]
 fn close_floating_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window("floating") {
-        let _ = w.close();
-        eprintln!("[floating] closed via command");
+        // 隐藏而非销毁:窗口启动时已预建,避免运行时重建触发 Tauri <=2.11 缺陷
+        let _ = w.hide();
+        eprintln!("[floating] hidden via command");
         let _ = app.emit_to("main", "floating-closed", ());
     }
     Ok(())
 }
 
 /// 打开截图覆盖层窗口(全屏 Canvas,用于框选区域)
-/// 必须用后台线程创建,避免同步 build 死锁
+/// 窗口在 setup 时已预建隐藏,这里只需通知来源 + 显示,避免运行时建窗(Tauri <=2.11 缺陷)
 /// from: 发起入口("main"=桌面端 / "floating"=悬浮窗),决定截图结果显示在哪
 #[tauri::command]
 fn open_screenshot_overlay(from: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::{WebviewUrl, WebviewWindowBuilder};
+    use tauri::{Emitter, WebviewUrl, WebviewWindowBuilder};
     let from = from.unwrap_or_else(|| "main".to_string());
     eprintln!("[screenshot] overlay opened from={from}");
-    // 先关掉旧的
+    // 预建窗口存在 → 显示 + 通知来源
     if let Some(w) = app.get_webview_window("screenshot-overlay") {
-        let _ = w.close();
+        let _ = w.show();
+        let _ = w.set_focus();
+        let _ = app.emit_to("screenshot-overlay", "overlay-start", from.clone());
+        return Ok(());
     }
+    // 兜底:预建失败时后台线程创建
     let (w, h) = if let Ok(Some(m)) = app.primary_monitor() {
         let size = m.size();
         (size.width as f64, size.height as f64)
     } else {
         (1920.0, 1080.0)
     };
-
     let app2 = app.clone();
     std::thread::spawn(move || {
-        let _ = WebviewWindowBuilder::new(
-            &app2,
-            "screenshot-overlay",
-            WebviewUrl::App(format!("index.html?from={from}").into()),
-        )
-        .title("截图")
-        .inner_size(w, h)
-        .position(0.0, 0.0)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .resizable(false)
-        .shadow(false)
-        .build();
+        if let Ok(w) = WebviewWindowBuilder::new(&app2, "screenshot-overlay", WebviewUrl::App("index.html".into()))
+            .title("截图")
+            .inner_size(w, h)
+            .position(0.0, 0.0)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .shadow(false)
+            .build()
+        {
+            let _ = app2.emit_to("screenshot-overlay", "overlay-start", from.clone());
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
     });
-
     Ok(())
 }
 /// 注意:窗口创建必须在后台线程执行,直接 invoke 里同步调 build 会死锁
@@ -265,7 +270,54 @@ pub fn run() {
                 eprintln!("[ollama] serve started OK");
             }
             app.manage(mgr);
+
+            // 【预建隐藏窗口】floating + screenshot-overlay 在启动时建好(与主窗口同路径,可靠),
+            // 运行时只 show/hide —— 避免运行时建窗触发 Tauri <=2.11 的 asset 协议加载缺陷
+            {
+                use tauri::{WebviewUrl, WebviewWindowBuilder};
+                let handle = app.handle();
+                // 悬浮窗(右下角,透明置顶)
+                let _ = WebviewWindowBuilder::new(handle, "floating", WebviewUrl::App("index.html".into()))
+                    .title("翻译悬浮窗")
+                    .inner_size(380.0, 220.0)
+                    .min_inner_size(280.0, 160.0)
+                    .resizable(false)
+                    .decorations(false)
+                    .transparent(true)
+                    .always_on_top(true)
+                    .skip_taskbar(true)
+                    .shadow(false)
+                    .visible(false)
+                    .build();
+                // 截图覆盖层(全屏,透明置顶)
+                let (w, h) = if let Ok(Some(m)) = handle.primary_monitor() {
+                    let size = m.size();
+                    (size.width as f64, size.height as f64)
+                } else {
+                    (1920.0, 1080.0)
+                };
+                let _ = WebviewWindowBuilder::new(handle, "screenshot-overlay", WebviewUrl::App("index.html".into()))
+                    .title("截图")
+                    .inner_size(w, h)
+                    .position(0.0, 0.0)
+                    .decorations(false)
+                    .transparent(true)
+                    .always_on_top(true)
+                    .skip_taskbar(true)
+                    .resizable(false)
+                    .shadow(false)
+                    .visible(false)
+                    .build();
+                eprintln!("[setup] 预建隐藏窗口完成(floating / screenshot-overlay)");
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            match event {
+                tauri::WindowEvent::CloseRequested { .. } => eprintln!("[win] {} CloseRequested", window.label()),
+                tauri::WindowEvent::Destroyed => eprintln!("[win] {} Destroyed", window.label()),
+                _ => {}
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
