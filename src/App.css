@@ -1,13 +1,26 @@
+/* ============ iOS 设计 tokens ============ */
 :root {
-  --bg: #f5f5f7;
-  --card: #ffffff;
-  --text: #1d1d1f;
-  --text-secondary: #6e6e73;
-  --accent: #0071e3;
-  --radius: 14px;
+  --ios-bg: #f2f2f7;
+  --ios-card: #ffffff;
+  --ios-text: #1c1c1e;
+  --ios-secondary: #8e8e93;
+  --ios-blue: #007aff;
+  --ios-separator: rgba(60, 60, 67, 0.12);
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-pill: 9999px;
+
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  --shadow-float: 0 4px 24px rgba(0, 0, 0, 0.12),
+    0 1px 4px rgba(0, 0, 0, 0.06);
+
   font-family: -apple-system, "SF Pro Text", "PingFang SC",
     "Microsoft YaHei", "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--ios-text);
 }
 
 * {
@@ -21,6 +34,7 @@ body,
 #root {
   height: 100%;
   overflow: hidden;
+  background: transparent;
 }
 
 /* ============ 主窗口 ============ */
@@ -28,36 +42,42 @@ body,
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--ios-bg);
 }
 
+/* --- 顶栏 --- */
 .app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 20px 28px;
-  background: var(--card);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding: 18px 28px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-bottom: 1px solid var(--ios-separator);
 }
 
 .app-header h1 {
   font-size: 20px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
+  font-weight: 680;
+  letter-spacing: -0.3px;
+  color: var(--ios-text);
 }
 
 .mode-badge {
   font-size: 12px;
-  color: var(--accent);
-  background: rgba(0, 113, 227, 0.1);
+  font-weight: 590;
+  color: var(--ios-blue);
+  background: rgba(0, 122, 255, 0.1);
   padding: 4px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0;
 }
 
+/* --- 主体区域 --- */
 .app-body {
   flex: 1;
-  padding: 32px;
+  padding: 28px;
   display: flex;
   flex-direction: column;
   gap: 24px;
@@ -65,23 +85,27 @@ body,
 }
 
 .placeholder-card {
-  background: var(--card);
-  border-radius: var(--radius);
+  background: var(--ios-card);
+  border-radius: var(--radius-lg);
   padding: 48px 32px;
   text-align: center;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-card);
 }
 
 .placeholder-card h2 {
   font-size: 18px;
+  font-weight: 640;
   margin-bottom: 8px;
+  color: var(--ios-text);
 }
 
 .placeholder-card p {
-  color: var(--text-secondary);
+  color: var(--ios-secondary);
   font-size: 14px;
+  line-height: 1.5;
 }
 
+/* --- 按钮区 --- */
 .actions {
   display: flex;
   align-items: center;
@@ -89,39 +113,47 @@ body,
 }
 
 .btn-primary {
-  background: var(--accent);
+  background: var(--ios-blue);
   color: #fff;
   border: none;
-  font-size: 14px;
-  padding: 10px 24px;
-  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 590;
+  padding: 11px 26px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
-  transition: opacity 0.15s ease;
+  transition: background 0.15s ease, transform 0.1s ease;
+  letter-spacing: -0.1px;
 }
 
 .btn-primary:hover {
-  opacity: 0.85;
+  background: #0068db;
+}
+
+.btn-primary:active {
+  transform: scale(0.97);
 }
 
 .hint {
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--ios-secondary);
 }
 
 /* ============ 悬浮窗 ============ */
 .floating-root {
   height: 100%;
   background: transparent;
-  padding: 8px;
+  padding: 6px;
   user-select: none;
 }
 
 .floating-card {
   height: 100%;
-  background: rgba(255, 255, 255, 0.98);
-  border-radius: 16px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: var(--shadow-float);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -131,37 +163,40 @@ body,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 14px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ios-separator);
 }
 
 .floating-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
+  font-size: 13px;
+  font-weight: 640;
+  color: var(--ios-text);
+  letter-spacing: -0.2px;
 }
 
 .floating-close {
-  background: rgba(0, 0, 0, 0.05);
+  background: rgba(60, 60, 67, 0.1);
   border: none;
   width: 22px;
   height: 22px;
   border-radius: 50%;
   font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--ios-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: background 0.15s ease;
 }
 
 .floating-close:hover {
-  background: rgba(0, 0, 0, 0.12);
+  background: rgba(60, 60, 67, 0.2);
+  color: var(--ios-text);
 }
 
 .floating-body {
   flex: 1;
-  padding: 14px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -171,10 +206,11 @@ body,
 
 .floating-body p {
   font-size: 14px;
-  color: var(--text);
+  color: var(--ios-text);
+  line-height: 1.4;
 }
 
 .floating-sub {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--ios-secondary);
 }
