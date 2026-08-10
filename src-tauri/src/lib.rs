@@ -70,7 +70,6 @@ fn ping() -> String {
 /// 截图 + OCR: dxgi 截全屏 → 裁剪到区域 → 保存 png → OCR → 返回文本
 #[tauri::command]
 fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<String, String> {
-    use dxgi_capture_rs::DXGIManager;
     use image::GenericImageView;
     use rapidocr_core::{
         config::{InferenceOptions, PipelineConfig},
@@ -78,28 +77,21 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<String, String> {
         RapidOcr,
     };
 
-    // 1. 截全屏
-    let mut manager = DXGIManager::new(1000).map_err(|e| format!("初始化截屏失败: {e:?}"))?;
-    let (pixels, (sw, sh)) = manager.capture_frame().map_err(|e| format!("截屏失败: {e:?}"))?;
+    // 1. xcap 截全屏
+    let monitors = xcap::Monitor::all().map_err(|e| format!("获取显示器失败: {e}"))?;
+    let primary = monitors.into_iter().next().ok_or("未找到显示器")?;
+    let img = primary.capture_image().map_err(|e| format!("截屏失败: {e}"))?;
 
-    // 2. BGRA → RGB
-    let mut rgb = Vec::with_capacity(pixels.len() * 3);
-    for p in &pixels {
-        rgb.push(p.r);
-        rgb.push(p.g);
-        rgb.push(p.b);
-    }
-    let img = image::RgbImage::from_raw(sw as u32, sh as u32, rgb)
-        .ok_or("截屏图片转换失败")?;
-
-    // 3. 裁剪 + 保存临时文件
+    // 2. 裁剪 + 保存
     let cropped = img.view(x as u32, y as u32, w as u32, h as u32).to_image();
     let tmp_path = std::env::temp_dir()
         .join(format!("transmate-screenshot-{}.png", std::process::id()));
     cropped.save(&tmp_path).map_err(|e| format!("保存截图失败: {e}"))?;
-    eprintln!("[screenshot] saved to {:?}", tmp_path);
+    let _ = cropped.save("E:\\TranslatorApp\\last_screenshot.png");
+    eprintln!("[screenshot] coords=({},{},{},{}), crop={}x{}, saved to {:?}",
+        x, y, w, h, cropped.width(), cropped.height(), tmp_path);
 
-    // 4. OCR
+    // 3. OCR
     let ocr_text = {
         let model_set = model_set_by_name("ppocrv6-small")
             .ok_or_else(|| "模型集不存在: ppocrv6-small".to_string())?;
@@ -120,11 +112,12 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<String, String> {
         output.lines.into_iter().map(|l| l.text).collect::<Vec<_>>().join("\n")
     };
 
-    let _ = std::fs::remove_file(&tmp_path);
+    // let _ = std::fs::remove_file(&tmp_path);
     eprintln!("[screenshot] OCR done: {}", &ocr_text[..ocr_text.len().min(100)]);
 
     Ok(ocr_text)
 }
+
 
 /// 关闭悬浮窗
 #[tauri::command]

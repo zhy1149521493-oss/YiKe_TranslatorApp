@@ -508,9 +508,12 @@ function ScreenshotOverlay() {
       drawing.current = true;
     };
     const onMove = (e: MouseEvent) => {
+      if (!(e.buttons & 1)) { onUp(); return; }
       if (!drawing.current) return;
       rect.current.ex = e.clientX;
       rect.current.ey = e.clientY;
+      /* 每帧先清空再重绘,避免叠加变黑 */
+      ctx.clearRect(0, 0, c.width, c.height);
       ctx.fillStyle = "rgba(0,0,0,0.35)";
       ctx.fillRect(0, 0, c.width, c.height);
       const rx = Math.min(rect.current.sx, rect.current.ex);
@@ -522,34 +525,33 @@ function ScreenshotOverlay() {
       ctx.lineWidth = 2;
       ctx.strokeRect(rx, ry, rw, rh);
     };
-    const onUp = async () => {
+    const onUp = () => {
       if (!drawing.current) return;
       drawing.current = false;
       const { sx, sy, ex, ey } = rect.current;
-      const x = Math.min(sx, ex);
-      const y = Math.min(sy, ey);
-      const w = Math.abs(ex - sx);
-      const h = Math.abs(ey - sy);
+      const dpr = window.devicePixelRatio || 1;
+      const x = Math.min(sx, ex) * dpr;
+      const y = Math.min(sy, ey) * dpr;
+      const w = Math.abs(ex - sx) * dpr;
+      const h = Math.abs(ey - sy) * dpr;
       if (w < 10 || h < 10) { appWindow.close(); return; }
-      await appWindow.emitTo("main", "screenshot-done", { x, y, w, h });
+      appWindow.emitTo("main", "screenshot-done", { x, y, w, h });
       appWindow.close();
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") cancel();
-    };
-    const onCtx = (e: MouseEvent) => {
-      e.preventDefault();
-      cancel();
-    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); };
+    const onCtx = (e: MouseEvent) => { e.preventDefault(); cancel(); };
 
+    /* mouseup 同时绑 canvas + window,防事件丢失 */
     c.addEventListener("mousedown", onDown);
     c.addEventListener("mousemove", onMove);
+    c.addEventListener("mouseup", onUp);
     window.addEventListener("mouseup", onUp);
     window.addEventListener("keydown", onKey);
     c.addEventListener("contextmenu", onCtx);
     return () => {
       c.removeEventListener("mousedown", onDown);
       c.removeEventListener("mousemove", onMove);
+      c.removeEventListener("mouseup", onUp);
       window.removeEventListener("mouseup", onUp);
       window.removeEventListener("keydown", onKey);
       c.removeEventListener("contextmenu", onCtx);
