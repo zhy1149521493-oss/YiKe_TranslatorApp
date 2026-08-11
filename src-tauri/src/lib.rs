@@ -5,6 +5,7 @@ use std::os::windows::process::CommandExt;
 use std::process::{Command as StdCommand, Child, Stdio};
 use std::sync::Mutex;
 use rapidocr_core::RapidOcr;
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// 管理 Ollama serve 子进程的生命周期:应用启动时 spawn,退出时杀进程树
 struct OllamaManager {
@@ -309,6 +310,27 @@ pub fn run() {
                     .visible(false)
                     .build();
                 eprintln!("[setup] 预建隐藏窗口完成(floating / screenshot-overlay)");
+            }
+
+            // 【全局快捷键:Rust 侧注册】
+            // 不能在前端 register:release 版预建了 main/floating/overlay 三个窗口,
+            // 都加载 index.html 都会执行 register。Windows RegisterHotKey 对同一组合键
+            // 重复注册返回 ERROR_HOTKEY_ALREADY_REGISTERED,插件 store 按 hotkey id 只保留
+            // 一个 handler —— 先注册成功的窗口独占事件(可能是隐藏的 floating/overlay),
+            // 主窗口收不到(dev 版只有主窗口注册,所以正常)。
+            // 这里只注册一次,事件统一 emit 到主窗口,由前端监听处理。
+            {
+                let _ = app.global_shortcut().on_shortcut("CommandOrControl+Shift+D", |app, _s, e| {
+                    if e.state == ShortcutState::Pressed {
+                        let _ = app.emit_to("main", "global-shortcut", "toggle-floating");
+                    }
+                });
+                let _ = app.global_shortcut().on_shortcut("CommandOrControl+Shift+S", |app, _s, e| {
+                    if e.state == ShortcutState::Pressed {
+                        let _ = app.emit_to("main", "global-shortcut", "screenshot");
+                    }
+                });
+                eprintln!("[shortcut] Rust 侧注册 Ctrl+Shift+D/S 完成");
             }
             Ok(())
         })

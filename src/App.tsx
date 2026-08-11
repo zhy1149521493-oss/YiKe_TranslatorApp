@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { register, unregister } from "@tauri-apps/plugin-global-shortcut";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import "./App.css";
 
@@ -244,30 +243,22 @@ function MainWindow() {
     };
   }, [input, runTranslation]);
 
-  /* ---- 划词快捷键:开关悬浮窗 ---- */
+  /* ---- 全局快捷键事件(Rust 侧注册,统一投递到主窗口) ---- */
   useEffect(() => {
-    register("CommandOrControl+Shift+D", async (e) => {
-      setOutput("🔔 Ctrl+Shift+D 触发 state=" + e.state);
-      if (e.state !== "Pressed") return;
-      if (floatingRef.current) {
-        await invoke("close_floating_window");
-        setFloatingOpen(false);
-      } else {
-        await invoke("open_floating_window");
-        setFloatingOpen(true);
+    const u = appWindow.listen<string>("global-shortcut", async (e) => {
+      if (e.payload === "toggle-floating") {
+        if (floatingRef.current) {
+          await invoke("close_floating_window");
+          setFloatingOpen(false);
+        } else {
+          await invoke("open_floating_window");
+          setFloatingOpen(true);
+        }
+      } else if (e.payload === "screenshot") {
+        try { await invoke("open_screenshot_overlay", { from: "main" }); } catch {}
       }
-    }).catch((err) => { console.error("注册快捷键 Ctrl+Shift+D 失败:", err); setOutput("⚠️ 快捷键注册失败(Ctrl+Shift+D): " + err); });
-    return () => { unregister("CommandOrControl+Shift+D"); };
-  }, []);
-
-  /* ---- 截图快捷键 ---- */
-  useEffect(() => {
-    register("CommandOrControl+Shift+S", async (e) => {
-      setOutput("🔔 Ctrl+Shift+S 触发 state=" + e.state);
-      if (e.state !== "Pressed") return;
-      try { await invoke("open_screenshot_overlay", { from: "main" }); } catch {}
-    }).catch((err) => { console.error("注册快捷键 Ctrl+Shift+S 失败:", err); setOutput("⚠️ 快捷键注册失败(Ctrl+Shift+S): " + err); });
-    return () => { unregister("CommandOrControl+Shift+S"); };
+    });
+    return () => { u.then((f) => f()); };
   }, []);
 
   /* ---- 截图 ---- */
