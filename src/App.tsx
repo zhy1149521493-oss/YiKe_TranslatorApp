@@ -291,6 +291,32 @@ function MainWindow() {
   const toggleSubtitleRef = useRef(toggleSubtitle);
   useEffect(() => { toggleSubtitleRef.current = toggleSubtitle; }, [toggleSubtitle]);
 
+  /* 悬浮窗显式开始(幂等):开启字幕 + 弹悬浮窗 + 状态同步 */
+  const startSubtitle = useCallback(() => {
+    setSubtitleOn((on) => {
+      if (on) return on;   // 已运行,幂等
+      ensureSubRegion();
+      invoke("open_floating_window").catch(() => {});
+      setFloatingOpen(true);
+      appWindow.emitTo("floating", "subtitle-state", "on").catch(() => {});
+      return true;
+    });
+  }, []);
+
+  /* 悬浮窗显式停止(幂等) */
+  const stopSubtitle = useCallback(() => {
+    setSubtitleOn((on) => {
+      if (!on) return on;
+      appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
+      return false;
+    });
+  }, []);
+
+  const startSubtitleRef = useRef(startSubtitle);
+  useEffect(() => { startSubtitleRef.current = startSubtitle; }, [startSubtitle]);
+  const stopSubtitleRef = useRef(stopSubtitle);
+  useEffect(() => { stopSubtitleRef.current = stopSubtitle; }, [stopSubtitle]);
+
   /* Windows 系统 OCR PoC 测试:截全屏 → 系统 OCR → 显示结果 */
   const testWinOcr = async () => {
     setSubStatus("⏳ 系统 OCR 测试中…");
@@ -422,8 +448,9 @@ function MainWindow() {
       ocrInFlightRef.current = false;   // 允许下一帧
       subtitleOcrHandlerRef.current(e.payload);
     });
-    const t = appWindow.listen("subtitle-toggle", () => { toggleSubtitleRef.current(); }); // 悬浮窗 🎬 按钮
-    return () => { u.then((f) => f()); t.then((f) => f()); };
+    const t = appWindow.listen("subtitle-start", () => { startSubtitleRef.current(); }); // 悬浮窗 🎬 开始
+    const p = appWindow.listen("subtitle-stop", () => { stopSubtitleRef.current(); });   // 悬浮窗 🎬 停止
+    return () => { u.then((f) => f()); t.then((f) => f()); p.then((f) => f()); };
   }, []);
 
   /* ---- 截图 ---- */
@@ -726,8 +753,13 @@ function FloatingWindow() {
           <div className="floating-actions">
             <button className={`floating-btn${subRunning ? " active" : ""}`} title={subRunning ? "停止视频字幕" : "开始视频字幕"} onMouseDown={(e) => e.stopPropagation()}
               onClick={() => {
-                if (subRunning) { setMode("trans"); } else { setMode("subtitle"); }
-                appWindow.emitTo("main", "subtitle-toggle").catch(() => {}); // 通知主窗口开始/停止
+                if (subRunning) {
+                  setMode("trans");
+                  appWindow.emitTo("main", "subtitle-stop").catch(() => {});   // 显式停止,不误关
+                } else {
+                  setMode("subtitle");
+                  appWindow.emitTo("main", "subtitle-start").catch(() => {});  // 显式开始
+                }
               }}>
               🎬
             </button>
