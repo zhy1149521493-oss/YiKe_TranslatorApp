@@ -99,21 +99,10 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Resu
     let app2 = app.clone();
     std::thread::spawn(move || {
         eprintln!("[screenshot] ocr start coords=({x},{y},{w},{h})");
-        let result: String = (|| -> Result<String, String> {
-            use image::GenericImageView;
-            let monitors = xcap::Monitor::all().map_err(|e| format!("获取显示器: {e}"))?;
-            let primary = monitors.into_iter().next().ok_or("未找到显示器")?;
-            let img = primary.capture_image().map_err(|e| format!("截屏: {e}"))?;
-            let cropped = img.view(x as u32, y as u32, w as u32, h as u32).to_image();
-            let tmp_path = std::env::temp_dir().join(format!("transmate-ocr-{}.png", std::process::id()));
-            cropped.save(&tmp_path).map_err(|e| format!("保存: {e}"))?;
+        let result: String = (|| {
+            let cropped = capture_region(x, y, w, h)?;
             let _ = cropped.save(r"E:\TranslatorApp\last_screenshot.png");
-            eprintln!("[screenshot] cropped {}x{} saved to {:?}", cropped.width(), cropped.height(), tmp_path);
-            let mut guard = ocr_instance()?;
-            let ocr = guard.as_mut().ok_or("OCR 引擎不可用")?;
-            let output = ocr.run_path(&tmp_path).map_err(|e| format!("OCR: {e}"))?;
-            let texts: Vec<String> = output.lines.into_iter().map(|l| l.text).collect();
-            Ok(texts.join("\n"))
+            ocr_image(&cropped)
         })().unwrap_or_else(|e| format!("ERROR: {e}"));
         let preview: String = result.chars().take(120).collect();
         eprintln!("[screenshot] ocr result: {}", preview);
@@ -121,6 +110,45 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Resu
         eprintln!("[screenshot] emit ocr-done: {:?}", emit_ok.map(|_| "ok"));
     });
     Ok("processing".into())
+}
+
+/// 视频实时字幕:连续截帧 + OCR(复用截图翻译的 OCR 引擎)。
+/// 与 screenshot_ocr 隔离:事件发 "subtitle-ocr",不写诊断图,避免每秒多次磁盘写入。
+#[tauri::command]
+fn subtitle_frame(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Result<String, String> {
+    use tauri::Emitter;
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let result: String = (|| {
+            let cropped = capture_region(x, y, w, h)?;
+            ocr_image(&cropped)
+        })().unwrap_or_else(|e| format!("ERROR: {e}"));
+        let preview: String = result.chars().take(120).collect();
+        eprintln!("[subtitle] frame ocr: {}", preview);
+        let _ = app2.emit_to("main", "subtitle-ocr", result);
+    });
+    Ok("processing".into())
+}
+
+/// 截取屏幕指定区域(物理像素),返回裁剪后的图像
+fn capture_region(x: i32, y: i32, w: i32, h: i32) -> Result<image::RgbaImage, String> {
+    use image::GenericImageView;
+    let monitors = xcap::Monitor::all().map_err(|e| format!("获取显示器: {e}"))?;
+    let primary = monitors.into_iter().next().ok_or("未找到显示器")?;
+    let img = primary.capture_image().map_err(|e| format!("截屏: {e}"))?;
+    let cropped = img.view(x as u32, y as u32, w as u32, h as u32).to_image();
+    Ok(cropped)
+}
+
+/// 对裁剪图像做 OCR(共享全局缓存引擎)
+fn ocr_image(cropped: &image::RgbaImage) -> Result<String, String> {
+    let tmp_path = std::env::temp_dir().join(format!("transmate-ocr-{}.png", std::process::id()));
+    cropped.save(&tmp_path).map_err(|e| format!("保存: {e}"))?;
+    let mut guard = ocr_instance()?;
+    let ocr = guard.as_mut().ok_or("OCR 引擎不可用")?;
+    let output = ocr.run_path(&tmp_path).map_err(|e| format!("OCR: {e}"))?;
+    let texts: Vec<String> = output.lines.into_iter().map(|l| l.text).collect();
+    Ok(texts.join("\n"))
 }
 
 
@@ -241,7 +269,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, screenshot_ocr, open_screenshot_overlay, open_floating_window, close_floating_window])
+        .invoke_handler(tauri::generate_handler![greet, ping, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");
@@ -330,7 +358,12 @@ pub fn run() {
                         let _ = app.emit_to("main", "global-shortcut", "screenshot");
                     }
                 });
-                eprintln!("[shortcut] Rust 侧注册 Ctrl+Shift+D/S 完成");
+                let _ = app.global_shortcut().on_shortcut("CommandOrControl+Shift+U", |app, _s, e| {
+                    if e.state == ShortcutState::Pressed {
+                        let _ = app.emit_to("main", "global-shortcut", "toggle-subtitle");
+                    }
+                });
+                eprintln!("[shortcut] Rust 侧注册 Ctrl+Shift+D/S/U 完成");
             }
             Ok(())
         })

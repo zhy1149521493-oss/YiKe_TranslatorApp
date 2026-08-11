@@ -50,12 +50,21 @@ function detectLang(text: string): string {
   return "en";
 }
 
+/* 字符级 Jaccard 相似度:用于视频字幕去重(同一句被连续截到多次时跳过) */
+function similarity(a: string, b: string): number {
+  if (!a || !b) return 0;
+  const sa = new Set(a.replace(/\s+/g, ""));
+  const sb = new Set(b.replace(/\s+/g, ""));
+  let inter = 0;
+  for (const ch of sa) if (sb.has(ch)) inter++;
+  return inter / Math.max(sa.size, sb.size);
+}
+
 function buildPrompt(
   source: string,
   target: string,
   text: string
-): string {
-  const srcName = LANG_MAP[source] || source;
+): string {  const srcName = LANG_MAP[source] || source;
   const tgtName = LANG_MAP[target] || target;
   return `Translate the following text from ${srcName} to ${tgtName}. Only output the translated text, no explanations, no notes: ${text}`;
 }
@@ -150,6 +159,95 @@ function MainWindow() {
 
   const floatingRef = useRef(false);
   useEffect(() => { floatingRef.current = floatingOpen; }, [floatingOpen]);
+
+  /* ===== 视频实时字幕(第 6 波 3.4/3.5) ===== */
+  const [subtitleOn, setSubtitleOn] = useState(false);          // 字幕开关
+  const [subFps, setSubFps] = useState(2);                      // 截帧频率 1-5 次/秒
+  const [subMode, setSubMode] = useState<"trans-first" | "ocr-first">("trans-first"); // 翻译优先/原文优先
+  const [subStatus, setSubStatus] = useState("");               // 字幕状态提示
+  const [subRegion, setSubRegion] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [subCurrent, setSubCurrent] = useState<{ text: string; result: string } | null>(null); // 当前字幕(主窗口显示)
+
+  const subRegionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const subTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const ocrInFlightRef = useRef(false);                         // 上一帧 OCR 未返回则跳过
+  const subTranslatingRef = useRef(false);                      // 翻译串行:翻译中跳过新帧
+  const lastSubOcrRef = useRef("");                             // 去重:上次 OCR 文本
+  const lastSubTranslatedRef = useRef("");                      // 去重:上次已翻译文本
+  const subModeRef = useRef(subMode);
+  useEffect(() => { subModeRef.current = subMode; }, [subMode]);
+
+  /* 默认字幕区域:画面底部 1/4(物理像素) */
+  const ensureSubRegion = () => {
+    if (subRegionRef.current) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = Math.round(window.screen.width * dpr);
+    const H = Math.round(window.screen.height * dpr);
+    const region = { x: 0, y: Math.round(H * 0.75), w: W, h: Math.round(H * 0.25) };
+    subRegionRef.current = region;
+    setSubRegion(region);
+  };
+
+  /* 字幕引擎:定时截帧 → subtitle_frame(Rust OCR)→ subtitle-ocr 事件回调 */
+  useEffect(() => {
+    if (!subtitleOn) return;
+    ensureSubRegion();
+    setSubStatus("🟢 字幕运行中,区域: " + (subRegionRef.current ? `(${subRegionRef.current.x},${subRegionRef.current.y} ${subRegionRef.current.w}x${subRegionRef.current.h})` : "未设置"));
+    subTimerRef.current = setInterval(() => {
+      const r = subRegionRef.current;
+      if (!r || ocrInFlightRef.current) return;
+      ocrInFlightRef.current = true;
+      invoke("subtitle_frame", { x: r.x, y: r.y, w: r.w, h: r.h }).catch(() => { ocrInFlightRef.current = false; });
+    }, 1000 / subFps);
+    return () => { if (subTimerRef.current) clearInterval(subTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subtitleOn, subFps]);
+
+  /* 字幕 OCR 结果:去重 → 串行翻译 → 推送到悬浮窗字幕页 */
+  const handleSubtitleOcr = useCallback(async (text: string) => {
+    if (!text.trim() || text.startsWith("ERROR:")) return;
+    if (similarity(text, lastSubOcrRef.current) >= 0.9) return;   // 同一句连续帧,跳过
+    lastSubOcrRef.current = text;
+    if (text === lastSubTranslatedRef.current) return;            // 已翻译过,跳过
+    if (subTranslatingRef.current) return;                        // 翻译串行:进行中跳过
+    subTranslatingRef.current = true;
+    try {
+      let src = sourceLang;
+      let tgt = targetLang;
+      if (src === "auto") src = detectLang(text);
+      if (src === tgt) tgt = src === "zh" ? "en" : "zh";
+      // 原文优先:先显示原文,译文好了替换
+      if (subModeRef.current === "ocr-first") {
+        const first = { text, result: "" };
+        appWindow.emitTo("floating", "subtitle-text", first).catch(() => {});
+        setSubCurrent(first);
+      }
+      const result = await fetchOllamaFull(model, src, tgt, text, numCtx);
+      lastSubTranslatedRef.current = text;
+      const payload = { text, result };
+      await appWindow.emitTo("floating", "subtitle-text", payload).catch(() => {});
+      setSubCurrent(payload);
+      setSubStatus("");
+    } catch (e: any) {
+      setSubStatus(`❌ 翻译失败: ${e}`);
+    } finally {
+      subTranslatingRef.current = false;
+    }
+  }, [model, sourceLang, targetLang, numCtx]);
+
+  const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);
+  useEffect(() => { subtitleOcrHandlerRef.current = handleSubtitleOcr; }, [handleSubtitleOcr]);
+
+  /* 切换字幕开关(Ctrl+Shift+U 与按钮共用) */
+  const toggleSubtitle = useCallback(() => {
+    setSubtitleOn((on) => {
+      if (!on) ensureSubRegion();
+      return !on;
+    });
+  }, []);
+
+  const toggleSubtitleRef = useRef(toggleSubtitle);
+  useEffect(() => { toggleSubtitleRef.current = toggleSubtitle; }, [toggleSubtitle]);
 
   /* ---- 悬浮窗 ---- */
   useEffect(() => {
@@ -256,7 +354,18 @@ function MainWindow() {
         }
       } else if (e.payload === "screenshot") {
         try { await invoke("open_screenshot_overlay", { from: "main" }); } catch {}
+      } else if (e.payload === "toggle-subtitle") {
+        toggleSubtitleRef.current();
       }
+    });
+    return () => { u.then((f) => f()); };
+  }, []);
+
+  /* ---- 字幕 OCR 结果事件 ---- */
+  useEffect(() => {
+    const u = appWindow.listen<string>("subtitle-ocr", (e) => {
+      ocrInFlightRef.current = false;   // 允许下一帧
+      subtitleOcrHandlerRef.current(e.payload);
     });
     return () => { u.then((f) => f()); };
   }, []);
@@ -273,6 +382,17 @@ function MainWindow() {
       (e) => {
         const source = e.payload.source || "main";
         screenshotSource.current = source;
+        // 字幕区域选择:框选结果存为字幕区域,不触发截图翻译
+        if (source === "subtitle") {
+          const region = {
+            x: Math.round(e.payload.x), y: Math.round(e.payload.y),
+            w: Math.round(e.payload.w), h: Math.round(e.payload.h),
+          };
+          subRegionRef.current = region;
+          setSubRegion(region);
+          setSubStatus(`🎯 字幕区域已更新 (${region.x},${region.y} ${region.w}x${region.h})`);
+          return;
+        }
         // 状态提示按来源路由:悬浮窗截图 → 悬浮窗显示;桌面端截图 → 主窗口显示
         if (source === "floating") {
           appWindow.emitTo("floating", "screenshot-status", "⏳ 正在 OCR 识别…").catch(() => {});
@@ -381,6 +501,9 @@ function MainWindow() {
           <button className="btn-float" onClick={startScreenshot} title="截图翻译">
             📷
           </button>
+          <button className={`btn-float${subtitleOn ? " active" : ""}`} onClick={toggleSubtitle} title="视频实时字幕 (Ctrl+Shift+U)">
+            {subtitleOn ? "🎬 字幕开" : "🎬 字幕"}
+          </button>
           <button className="btn-float" onClick={openFloating} title="打开翻译悬浮窗">
             {floatingOpen ? "📍 已开" : "🔲 悬浮窗"}
           </button>
@@ -388,6 +511,43 @@ function MainWindow() {
       </header>
 
       <main className="app-body">
+        {/* 视频实时字幕控制面板 */}
+        <div className={`subtitle-panel${subtitleOn ? " on" : ""}`}>
+          <div className="subtitle-panel-row">
+            <span className="subtitle-label">🎬 视频字幕</span>
+            <span className={`subtitle-status${subtitleOn ? " live" : ""}`}>
+              {subtitleOn ? "● 运行中" : "○ 已停止"} {subStatus && <em className="subtitle-msg">· {subStatus}</em>}
+            </span>
+            <button className="btn-float" onClick={toggleSubtitle} title="开关视频字幕 (Ctrl+Shift+U)">
+              {subtitleOn ? "停止" : "开始"}
+            </button>
+            <button className="btn-float" onClick={() => invoke("open_screenshot_overlay", { from: "subtitle" }).catch(() => {})} title="框选字幕识别区域(默认屏幕底部 1/4)">
+              🎯 调整区域
+            </button>
+          </div>
+          <div className="subtitle-panel-row">
+            <label className="subtitle-fps">
+              截帧频率
+              <input type="range" min="1" max="5" value={subFps} onChange={(e) => setSubFps(Number(e.target.value))} />
+              <b>{subFps} 次/秒</b>
+            </label>
+            <label className="subtitle-mode">
+              显示策略
+              <select value={subMode} onChange={(e) => setSubMode(e.target.value as "trans-first" | "ocr-first")} title="翻译优先=只显示译文;原文优先=先显示原文,译文好了替换">
+                <option value="trans-first">翻译优先</option>
+                <option value="ocr-first">原文优先</option>
+              </select>
+            </label>
+            {subRegion && <span className="subtitle-region">区域: ({subRegion.x},{subRegion.y} {subRegion.w}×{subRegion.h})</span>}
+          </div>
+          {subCurrent && (
+            <div className="subtitle-current">
+              <div className="subtitle-current-src">{subCurrent.text}</div>
+              {subCurrent.result && <div className="subtitle-current-result">{subCurrent.result}</div>}
+            </div>
+          )}
+        </div>
+
         {/* 语言选择: 源 → 目标 */}
         <div className="lang-bar">
           <select className="lang-sel" value={sourceLang} onChange={(e) => setSourceLang(e.target.value)}>
@@ -435,18 +595,30 @@ function FloatingWindow() {
   const [status, setStatus] = useState<string | null>(null);
   const [opacity, setOpacity] = useState(0.88);
   const [showSettings, setShowSettings] = useState(false);
+  const [mode, setMode] = useState<"trans" | "subtitle">("trans");   // 翻译页 / 字幕页
+  const [subtitle, setSubtitle] = useState<{ text: string; result: string } | null>(null); // 视频字幕
+  const [subStatus, setSubStatus] = useState<string | null>(null);   // 字幕状态提示
 
   useEffect(() => {
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
       "show-translation",
-      (e) => { setTrans(e.payload); setStatus(null); }
+      (e) => { setTrans(e.payload); setStatus(null); setMode("trans"); }
     );
     const s = appWindow.listen<string>(
       "screenshot-status",
       (e) => setStatus(e.payload)
     );
     const c = appWindow.listen("close-me", () => closeFloating());
-    return () => { u.then((f) => f()); s.then((f) => f()); c.then((f) => f()); };
+    // 视频字幕事件:收到字幕自动切到字幕页显示
+    const st = appWindow.listen<{ text: string; result: string }>(
+      "subtitle-text",
+      (e) => { setSubtitle(e.payload); setMode("subtitle"); setStatus(null); }
+    );
+    const ss = appWindow.listen<string>(
+      "subtitle-status",
+      (e) => setSubStatus(e.payload)
+    );
+    return () => { u.then((f) => f()); s.then((f) => f()); c.then((f) => f()); st.then((f) => f()); ss.then((f) => f()); };
   }, []);
 
   const closeFloating = async () => {
@@ -459,8 +631,12 @@ function FloatingWindow() {
     <div className="floating-root">
       <div className="floating-card" style={{ opacity }}>
         <div className="floating-bar" onMouseDown={() => appWindow.startDragging()}>
-          <span className="floating-title">翻译</span>
+          <span className="floating-title">{mode === "subtitle" ? "字幕" : "翻译"}</span>
           <div className="floating-actions">
+            <button className={`floating-btn${mode === "subtitle" ? " active" : ""}`} title="视频字幕页" onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => setMode(mode === "subtitle" ? "trans" : "subtitle")}>
+              🎬
+            </button>
             <button className="floating-btn" title="截图翻译" onMouseDown={(e) => e.stopPropagation()}
               onClick={async () => { try { await invoke("open_screenshot_overlay", { from: "floating" }); } catch {} }}>
               📷
@@ -487,7 +663,21 @@ function FloatingWindow() {
         )}
 
         <div className="floating-body">
-          {status ? (
+          {mode === "subtitle" ? (
+            subStatus ? (
+              <div className="floating-status">{subStatus}</div>
+            ) : subtitle ? (
+              <div className="floating-trans floating-subtitle">
+                <div className="floating-src">{subtitle.text}</div>
+                {subtitle.result && (<><div className="floating-divider" /><div className="floating-result">{subtitle.result}</div></>)}
+              </div>
+            ) : (
+              <div className="floating-hint">
+                <p>视频字幕</p>
+                <span>在主窗口点击 🎬 开始字幕识别</span>
+              </div>
+            )
+          ) : status ? (
             <div className="floating-status">{status}</div>
           ) : trans ? (
             <div className="floating-trans">

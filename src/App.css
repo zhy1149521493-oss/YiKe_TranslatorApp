@@ -431,3 +431,98 @@ body,
   text-align: center;
   padding: 12px;
 }
+
+/* ============ 视频实时字幕(第 6 波) ============ */
+.btn-float.active {
+  background: var(--ios-blue, #007aff);
+  color: #fff;
+}
+.floating-btn.active {
+  background: rgba(0, 122, 255, 0.25);
+  color: var(--ios-blue, #007aff);
+}
+
+.subtitle-panel {
+  background: var(--ios-card, rgba(255, 255, 255, 0.82));
+  border-radius: 14px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+  transition: border-color 0.2s;
+}
+.subtitle-panel.on {
+  border-color: rgba(0, 122, 255, 0.4);
+}
+.subtitle-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 4px 0;
+}
+.subtitle-label {
+  font-weight: 600;
+  font-size: 14px;
+}
+.subtitle-status {
+  font-size: 13px;
+  color: var(--ios-secondary, #8e8e93);
+}
+.subtitle-status.live {
+  color: #34c759;
+}
+.subtitle-msg {
+  font-style: normal;
+  color: var(--ios-secondary, #8e8e93);
+}
+.subtitle-fps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ios-secondary, #8e8e93);
+}
+.subtitle-fps input {
+  width: 90px;
+}
+.subtitle-mode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ios-secondary, #8e8e93);
+}
+.subtitle-mode select {
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+.subtitle-region {
+  font-size: 12px;
+  color: var(--ios-secondary, #8e8e93);
+}
+.subtitle-current {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+.subtitle-current-src {
+  font-size: 13px;
+  color: var(--ios-secondary, #8e8e93);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.subtitle-current-result {
+  margin-top: 4px;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 悬浮窗字幕页 */
+.floating-subtitle .floating-result {
+  font-size: 16px;
+}
