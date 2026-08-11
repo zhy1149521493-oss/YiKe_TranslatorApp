@@ -261,7 +261,7 @@ function MainWindow() {
       const t = subPendingRef.current;
       if (!t) return;
       submitSubtitle(t);
-    }, 500);
+    }, 300);
   }, [submitSubtitle]);
 
   const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);

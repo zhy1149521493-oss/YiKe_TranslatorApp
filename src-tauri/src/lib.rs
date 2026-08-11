@@ -101,11 +101,9 @@ fn ocr_image_b64(b64: String) -> Result<String, String> {
     let r = (|| -> Result<String, String> {
         let bytes = STANDARD.decode(b64.trim()).map_err(|e| format!("解码: {e}"))?;
         let img = image::load_from_memory(&bytes).map_err(|e| format!("图片: {e}"))?;
-        let tmp = std::env::temp_dir().join(format!("transmate-ocr-b64-{}.png", std::process::id()));
-        img.save(&tmp).map_err(|e| format!("保存: {e}"))?;
         let mut guard = ocr_instance()?;
         let ocr = guard.as_mut().ok_or("OCR 引擎不可用")?;
-        let output = ocr.run_path(&tmp).map_err(|e| format!("OCR: {e}"))?;
+        let output = ocr.run_image(&img.to_rgb8()).map_err(|e| format!("OCR: {e}"))?; // 内存推理,免临时文件
         let texts: Vec<String> = output.lines.into_iter().map(|l| l.text).collect();
         Ok(texts.join("\n"))
     })();
@@ -174,13 +172,12 @@ fn capture_region(x: i32, y: i32, w: i32, h: i32) -> Result<image::RgbaImage, St
     Ok(cropped)
 }
 
-/// 对裁剪图像做 OCR(共享全局缓存引擎)
+/// 对裁剪图像做 OCR(共享全局缓存引擎;内存推理,免临时文件 I/O)
 fn ocr_image(cropped: &image::RgbaImage) -> Result<String, String> {
-    let tmp_path = std::env::temp_dir().join(format!("transmate-ocr-{}.png", std::process::id()));
-    cropped.save(&tmp_path).map_err(|e| format!("保存: {e}"))?;
     let mut guard = ocr_instance()?;
     let ocr = guard.as_mut().ok_or("OCR 引擎不可用")?;
-    let output = ocr.run_path(&tmp_path).map_err(|e| format!("OCR: {e}"))?;
+    let output = ocr.run_image(&image::DynamicImage::ImageRgba8(cropped.clone()).to_rgb8())
+        .map_err(|e| format!("OCR: {e}"))?;
     let texts: Vec<String> = output.lines.into_iter().map(|l| l.text).collect();
     Ok(texts.join("\n"))
 }
