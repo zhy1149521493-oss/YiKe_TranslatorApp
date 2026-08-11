@@ -164,6 +164,7 @@ function MainWindow() {
   const [subtitleOn, setSubtitleOn] = useState(false);          // 字幕开关
   const [subFps, setSubFps] = useState(2);                      // 截帧频率 1-5 次/秒
   const [subMode, setSubMode] = useState<"trans-first" | "ocr-first">("trans-first"); // 翻译优先/原文优先
+  const [subEngine, setSubEngine] = useState<"win" | "rapid">("win"); // 字幕 OCR 引擎:win=系统OCR(快)/rapid=RapidOCR
   const [subStatus, setSubStatus] = useState("");               // 字幕状态提示
   const [subRegion, setSubRegion] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [subCurrent, setSubCurrent] = useState<{ text: string; result: string } | null>(null); // 当前字幕(主窗口显示)
@@ -200,11 +201,11 @@ function MainWindow() {
       const r = subRegionRef.current;
       if (!r || ocrInFlightRef.current) return;
       ocrInFlightRef.current = true;
-      invoke("subtitle_frame", { x: r.x, y: r.y, w: r.w, h: r.h }).catch(() => { ocrInFlightRef.current = false; });
+      invoke("subtitle_frame", { x: r.x, y: r.y, w: r.w, h: r.h, engine: subEngine }).catch(() => { ocrInFlightRef.current = false; });
     }, 1000 / subFps);
     return () => { if (subTimerRef.current) clearInterval(subTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subtitleOn, subFps]);
+  }, [subtitleOn, subFps, subEngine]);
 
   /* 提交翻译(句子已稳定):流式输出译文,最多滞后一句 */
   const submitSubtitle = useCallback(async (text: string) => {
@@ -277,6 +278,19 @@ function MainWindow() {
 
   const toggleSubtitleRef = useRef(toggleSubtitle);
   useEffect(() => { toggleSubtitleRef.current = toggleSubtitle; }, [toggleSubtitle]);
+
+  /* Windows 系统 OCR PoC 测试:截全屏 → 系统 OCR → 显示结果 */
+  const testWinOcr = async () => {
+    setSubStatus("⏳ 系统 OCR 测试中…");
+    try {
+      const b64 = await invoke<string>("capture_fullscreen");
+      const text = await invoke<string>("win_ocr_b64", { b64 });
+      setSubStatus(`🧪 系统 OCR 成功: ${text.slice(0, 120) || "(无文字)"}`);
+    } catch (e: any) {
+      const msg = typeof e === "string" ? e : JSON.stringify(e);
+      setSubStatus(`🧪 系统 OCR 失败: ${msg}`);
+    }
+  };
 
   /* ---- 悬浮窗 ---- */
   useEffect(() => {
@@ -568,6 +582,9 @@ function MainWindow() {
             <button className="btn-float" onClick={() => invoke("open_screenshot_overlay", { from: "subtitle" }).catch(() => {})} title="框选字幕识别区域(默认屏幕底部 1/4)">
               🎯 调整区域
             </button>
+            <button className="btn-float" onClick={testWinOcr} title="测试 Windows 系统 OCR(独立引擎,不影响 RapidOCR)">
+              🧪 系统OCR测试
+            </button>
           </div>
           <div className="subtitle-panel-row">
             <label className="subtitle-fps">
@@ -580,6 +597,13 @@ function MainWindow() {
               <select value={subMode} onChange={(e) => setSubMode(e.target.value as "trans-first" | "ocr-first")} title="翻译优先=只显示译文;原文优先=先显示原文,译文好了替换">
                 <option value="trans-first">翻译优先</option>
                 <option value="ocr-first">原文优先</option>
+              </select>
+            </label>
+            <label className="subtitle-mode">
+              OCR引擎
+              <select value={subEngine} onChange={(e) => setSubEngine(e.target.value as "win" | "rapid")} title="win=Windows系统OCR(快,需系统语言包);rapid=RapidOCR(离线模型)">
+                <option value="win">系统OCR(快)</option>
+                <option value="rapid">RapidOCR</option>
               </select>
             </label>
             {subRegion && <span className="subtitle-region">区域: ({subRegion.x},{subRegion.y} {subRegion.w}×{subRegion.h})</span>}

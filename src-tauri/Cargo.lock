@@ -5320,6 +5320,7 @@ name = "tauri-app"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "futures-executor",
  "image",
  "rapidocr-core",
  "serde",
@@ -5329,6 +5330,7 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
+ "windows 0.62.2",
  "xcap",
 ]
 

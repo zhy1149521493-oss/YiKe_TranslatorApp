@@ -110,6 +110,67 @@ fn ocr_image_b64(b64: String) -> Result<String, String> {
     r
 }
 
+/// Windows 系统 OCR(Windows.Media.Ocr):
+/// unpackaged Tauri 应用可调用(已 PoC 验证);速度远超 RapidOCR,中文需系统语言包。
+/// 独立引擎,不影响截图翻译的 RapidOCR。
+/// 用 futures block_on + IntoFuture 阻塞等待(可在非 async 线程使用,调用方需先 CoInitializeEx)。
+fn win_ocr_bytes(bytes: &[u8]) -> Result<String, String> {
+    use std::future::IntoFuture;
+    use futures_executor::block_on;
+    use windows::{
+        Graphics::Imaging::BitmapDecoder,
+        Media::Ocr::OcrEngine,
+        Storage::Streams::{DataWriter, InMemoryRandomAccessStream},
+    };
+
+    // 用户配置语言创建引擎(中文系统自带中文语言包)
+    let engine = OcrEngine::TryCreateFromUserProfileLanguages()
+        .map_err(|e| format!("创建 OCR 引擎失败(可能需 package identity): {e}"))?;
+
+    // 内存流 → 解码器 → SoftwareBitmap
+    let stream = InMemoryRandomAccessStream::new().map_err(|e| format!("建流: {e}"))?;
+    {
+        let writer = DataWriter::CreateDataWriter(&stream).map_err(|e| format!("写器: {e}"))?;
+        writer.WriteBytes(bytes).map_err(|e| format!("写字节: {e}"))?;
+        block_on(writer.StoreAsync().map_err(|e| format!("store: {e}"))?.into_future())
+            .map_err(|e| format!("store await: {e}"))?;
+        writer.DetachStream().map_err(|e| format!("detach: {e}"))?;
+    }
+    let decoder = block_on(BitmapDecoder::CreateAsync(&stream).map_err(|e| format!("解码器: {e}"))?.into_future())
+        .map_err(|e| format!("解码 await: {e}"))?;
+    let bitmap = block_on(decoder.GetSoftwareBitmapAsync().map_err(|e| format!("位图: {e}"))?.into_future())
+        .map_err(|e| format!("位图 await: {e}"))?;
+
+    // 识别
+    let result = block_on(engine.RecognizeAsync(&bitmap).map_err(|e| format!("识别: {e}"))?.into_future())
+        .map_err(|e| format!("识别 await: {e}"))?;
+
+    let mut texts: Vec<String> = Vec::new();
+    let lines = result.Lines().map_err(|e| format!("lines: {e}"))?;
+    for line in lines.into_iter() {
+        let t = line.Text().map_err(|e| format!("text: {e}"))?;
+        texts.push(t.to_string_lossy().to_string());
+    }
+    Ok(texts.join("\n"))
+}
+
+/// 系统 OCR:从 base64 PNG 识别(PoC 测试入口 + 兼容)
+#[tauri::command]
+async fn win_ocr_b64(b64: String) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let bytes = STANDARD.decode(b64.trim()).map_err(|e| format!("解码: {e}"))?;
+    win_ocr_bytes(&bytes)
+}
+
+/// 系统 OCR:从内存图像识别(字幕帧用,编码 PNG → win_ocr_bytes)
+fn win_ocr_from_image(img: &image::RgbaImage) -> Result<String, String> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(img.clone())
+        .write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| format!("编码: {e}"))?;
+    win_ocr_bytes(buf.get_ref())
+}
+
 /// 截全屏并编码为 base64 PNG:供截图 overlay 作为背景预览。
 /// 不透明窗口 + 静态截图背景方案:框选层显示位图,不依赖透明窗口透出真实屏幕
 /// (透明窗口叠加硬件视频会显示黑屏),框选时能看到画面内容。
@@ -144,19 +205,24 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Resu
     Ok("processing".into())
 }
 
-/// 视频实时字幕:连续截帧 + OCR(复用截图翻译的 OCR 引擎)。
-/// 与 screenshot_ocr 隔离:事件发 "subtitle-ocr",不写诊断图,避免每秒多次磁盘写入。
+/// 视频实时字幕:连续截帧 + OCR。
+/// engine: "win"=Windows 系统 OCR(快),默认/其他=RapidOCR。与截图翻译隔离(事件 subtitle-ocr)。
 #[tauri::command]
-fn subtitle_frame(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Result<String, String> {
+fn subtitle_frame(x: i32, y: i32, w: i32, h: i32, engine: Option<String>, app: tauri::AppHandle) -> Result<String, String> {
     use tauri::Emitter;
+    let use_win = engine.as_deref() == Some("win");
     let app2 = app.clone();
     std::thread::spawn(move || {
+        // 系统 OCR 走 WinRT,线程需初始化 COM(MTA)
+        if use_win {
+            unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED); }
+        }
         let result: String = (|| {
             let cropped = capture_region(x, y, w, h)?;
-            ocr_image(&cropped)
+            if use_win { win_ocr_from_image(&cropped) } else { ocr_image(&cropped) }
         })().unwrap_or_else(|e| format!("ERROR: {e}"));
         let preview: String = result.chars().take(120).collect();
-        eprintln!("[subtitle] frame ocr: {}", preview);
+        eprintln!("[subtitle] frame ocr({}): {}", if use_win { "win" } else { "rapid" }, preview);
         let _ = app2.emit_to("main", "subtitle-ocr", result);
     });
     Ok("processing".into())
@@ -301,7 +367,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window])
+        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");

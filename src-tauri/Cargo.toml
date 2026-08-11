@@ -28,4 +28,13 @@ image = { version = "0.25.10", features = ["png"] }
 rapidocr-core = "0.2.2"
 xcap = "0.9.8"
 base64 = "0.22"
+# Windows 系统 OCR(Windows.Media.Ocr)PoC:验证 unpackaged 应用能否调用
+windows = { version = "0.62", features = [
+    "Media_Ocr",
+    "Graphics_Imaging",
+    "Storage_Streams",
+    "Foundation",
+    "Win32_System_Com",
+] }
+futures-executor = "0.3"
 
