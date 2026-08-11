@@ -171,11 +171,11 @@ function MainWindow() {
 
   /* ===== 音频实时字幕(第 7 波:系统内部音频 → ASR → 翻译) ===== */
   const [audioSubOn, setAudioSubOn] = useState(false);          // 音频字幕开关
-  const [audioLang, setAudioLang] = useState("auto");           // ASR 识别语言:auto/zh/en/ja/ko
   const [audioStatus, setAudioStatus] = useState("");           // 音频字幕状态
   const [audioPartial, setAudioPartial] = useState("");         // 增量识别文本(边说边出)
   const audioTranslatingRef = useRef(false);                    // 翻译串行:翻译中跳过
-  const audioPendingRef = useRef("");                           // 待翻译的最新定稿句
+  const audioPendingRef = useRef("");                           // 待翻译的最新增量文本(最新优先)
+  const audioFinalRef = useRef("");                             // 当前定稿句(端点定稿后锁定)
   const lastAudioTranslatedRef = useRef("");                    // 去重:上次已翻译文本
 
   const subRegionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -280,8 +280,9 @@ function MainWindow() {
   const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);
   useEffect(() => { subtitleOcrHandlerRef.current = handleSubtitleOcr; }, [handleSubtitleOcr]);
 
-  /* 音频字幕定稿句翻译:复用字幕显示链路(subtitle-text 事件 → 悬浮窗字幕页),串行防并发 */
+  /* 音频字幕翻译:原文逐字滚动 + 每次增量重翻整句(流式输出,串行+最新优先) */
   const submitAudioSubtitle = useCallback(async (text: string) => {
+    if (!text.trim()) return;
     if (audioTranslatingRef.current) { audioPendingRef.current = text; return; }
     audioTranslatingRef.current = true;
     try {
@@ -291,27 +292,23 @@ function MainWindow() {
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
       lastAudioTranslatedRef.current = text;
       // 原文优先:先显示原文,译文流式替换
-      if (subModeRef.current === "ocr-first") {
-        const first = { text, result: "" };
-        appWindow.emitTo("floating", "subtitle-text", first).catch(() => {});
-        setSubCurrent(first);
-      }
+      const first = { text, src, tgt, result: "" };
+      appWindow.emitTo("audio-floating", "audio-show-translation", first).catch(() => {});
       let result = "";
       await fetchOllamaStream(model, src, tgt, text, numCtx, (tok) => {
         result += tok;
-        const p = { text, result };
-        appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
-        setSubCurrent(p);
+        const p = { text, src, tgt, result };
+        appWindow.emitTo("audio-floating", "audio-show-translation", p).catch(() => {});
       });
       if (!result.trim()) result = "(空响应)";
-      const p = { text, result };
-      await appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
-      setSubCurrent(p);
+      const p = { text, src, tgt, result };
+      await appWindow.emitTo("audio-floating", "audio-show-translation", p).catch(() => {});
       setAudioStatus("");
     } catch (e: any) {
       setAudioStatus(`❌ 翻译失败: ${e}`);
     } finally {
       audioTranslatingRef.current = false;
+      // 翻译期间来了新字:立刻翻译最新的(最新优先,跳过中间态)
       if (audioPendingRef.current) {
         const t = audioPendingRef.current;
         audioPendingRef.current = "";
@@ -320,17 +317,21 @@ function MainWindow() {
     }
   }, [model, sourceLang, targetLang, numCtx]);
 
-  /* 音频字幕开关 */
+  /* 音频字幕开关(与视频字幕互斥:开音频自动关视频) */
   const toggleAudioSubtitle = useCallback(async () => {
     const next = !audioSubOn;
     if (next) {
+      // 互斥:先关视频字幕
+      setSubtitleOn(false);
+      appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
       setAudioStatus("⏳ 正在加载 ASR 模型…");
       try {
-        await invoke("audio_subtitle_start", { lang: audioLang });
+        // 语言跟随主面板:非 auto 才指定 ASR 模型语言(auto 用 8 语模型自动识别)
+        const asrLang = sourceLang === "auto" ? "auto" : sourceLang;
+        await invoke("audio_subtitle_start", { lang: asrLang });
         setAudioSubOn(true);
-        // 弹悬浮窗并切到字幕页
-        await appWindow.emitTo("floating", "subtitle-state", "on").catch(() => {});
-        await invoke("open_floating_window").catch(() => {});
+        // 打开独立语音窗
+        await invoke("open_audio_floating_window").catch(() => {});
       } catch (e: any) {
         setAudioStatus(`❌ 启动失败: ${e}`);
         setAudioSubOn(false);
@@ -339,24 +340,33 @@ function MainWindow() {
       try { await invoke("audio_subtitle_stop"); } catch {}
       setAudioSubOn(false);
       setAudioPartial("");
+      audioFinalRef.current = "";
       setAudioStatus("已停止");
-      await appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
+      await invoke("close_audio_floating_window").catch(() => {});
     }
-  }, [audioSubOn, audioLang]);
+  }, [audioSubOn, sourceLang]);
 
-  /* 监听音频字幕事件:audio-status(状态)/audio-partial(增量文本)/audio-final(定稿句→翻译) */
+  /* 监听音频字幕事件:audio-status(状态)/audio-partial(增量→逐字重翻)/audio-final(定稿) */
   useEffect(() => {
     const s = appWindow.listen<string>("audio-status", (e) => {
       const msg = e.payload;
       setAudioStatus(msg);
+      appWindow.emitTo("audio-floating", "audio-floating-status", msg).catch(() => {});
       if (msg.startsWith("error")) setAudioSubOn(false);
     });
     const p = appWindow.listen<{ text: string }>("audio-partial", (e) => {
-      setAudioPartial(e.payload.text);
+      const text = e.payload.text.trim();
+      setAudioPartial(text);
+      if (!text) return;
+      // 逐字翻译:与当前定稿句不同才触发重翻(同一句内的增量变化都要翻)
+      if (text !== audioFinalRef.current) {
+        submitAudioSubtitle(text);
+      }
     });
     const f = appWindow.listen<{ text: string }>("audio-final", (e) => {
       const text = e.payload.text.trim();
-      if (!text || text === lastAudioTranslatedRef.current) return;
+      if (!text) return;
+      audioFinalRef.current = text;
       setAudioPartial("");
       submitAudioSubtitle(text);
     });
@@ -367,11 +377,16 @@ function MainWindow() {
   useEffect(() => { toggleAudioSubtitleRef.current = toggleAudioSubtitle; }, [toggleAudioSubtitle]);
 
   /* 切换字幕开关(Ctrl+Shift+U、主界面按钮、悬浮窗按钮共用);
-     开启时自动弹出悬浮窗并同步状态,悬浮窗切到字幕页 */
+     开启时自动弹出悬浮窗并同步状态,悬浮窗切到字幕页;与音频字幕互斥 */
   const toggleSubtitle = useCallback(() => {
     setSubtitleOn((on) => {
       const next = !on;
       if (next) {
+        // 互斥:开视频字幕自动关音频字幕
+        setAudioSubOn(false);
+        invoke("audio_subtitle_stop").catch(() => {});
+        setAudioPartial("");
+        invoke("close_audio_floating_window").catch(() => {});
         ensureSubRegion();
         invoke("open_floating_window").catch(() => {});
         setFloatingOpen(true);
@@ -386,10 +401,15 @@ function MainWindow() {
   const toggleSubtitleRef = useRef(toggleSubtitle);
   useEffect(() => { toggleSubtitleRef.current = toggleSubtitle; }, [toggleSubtitle]);
 
-  /* 悬浮窗显式开始(幂等):开启字幕 + 弹悬浮窗 + 状态同步 */
+  /* 悬浮窗显式开始(幂等):开启字幕 + 弹悬浮窗 + 状态同步;与音频字幕互斥 */
   const startSubtitle = useCallback(() => {
     setSubtitleOn((on) => {
       if (on) return on;   // 已运行,幂等
+      // 互斥:开视频字幕自动关音频字幕
+      setAudioSubOn(false);
+      invoke("audio_subtitle_stop").catch(() => {});
+      setAudioPartial("");
+      invoke("close_audio_floating_window").catch(() => {});
       ensureSubRegion();
       invoke("open_floating_window").catch(() => {});
       setFloatingOpen(true);
@@ -713,19 +733,10 @@ function MainWindow() {
             <span className={`subtitle-status${audioSubOn ? " live" : ""}`}>
               {audioSubOn ? "● 运行中" : "○ 已停止"} {audioStatus && <em className="subtitle-msg">· {audioStatus}</em>}
             </span>
-            <button className="btn-float" onClick={toggleAudioSubtitle} title="开关系统内部音频实时识别(识别→翻译→悬浮窗显示)">
+            <button className="btn-float" onClick={toggleAudioSubtitle} title="开关系统内部音频实时识别(识别→翻译→独立语音窗显示;与视频字幕互斥)">
               {audioSubOn ? "停止" : "开始"}
             </button>
-            <label className="subtitle-mode">
-              <span>识别语言</span>
-              <select value={audioLang} onChange={(e) => setAudioLang(e.target.value)} title="音频识别语言:自动/中文/英语/日语/韩语(切换需重启)">
-                <option value="auto">自动(中英日)</option>
-                <option value="zh">中文</option>
-                <option value="en">英语</option>
-                <option value="ja">日语</option>
-                <option value="ko">韩语</option>
-              </select>
-            </label>
+            <span className="subtitle-region">识别语言:跟随主面板({LANGS.find((l) => l.code === sourceLang)?.label ?? sourceLang})</span>
           </div>
           {audioSubOn && audioPartial && (
             <div className="subtitle-current">
@@ -952,6 +963,79 @@ function FloatingWindow() {
   );
 }
 
+/* ============ 音频字幕独立语音窗(第7波) ============ */
+/* 与视频字幕窗分开:单独窗口,透明/置顶/可拖动,专显示音频识别原文+译文 */
+function AudioFloatingWindow() {
+  const [trans, setTrans] = useState<{ text: string; src: string; tgt: string; result: string } | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [opacity, setOpacity] = useState(0.88);
+  const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
+      "audio-show-translation",
+      (e) => { setTrans(e.payload); setStatus(null); }
+    );
+    const s = appWindow.listen<string>(
+      "audio-floating-status",
+      (e) => setStatus(e.payload)
+    );
+    const c = appWindow.listen("audio-close-me", () => {
+      setTrans(null);
+      invoke("close_audio_floating_window").catch(() => {});
+    });
+    return () => { u.then((f) => f()); s.then((f) => f()); c.then((f) => f()); };
+  }, []);
+
+  return (
+    <div className="floating-root">
+      <div className="floating-card" style={{ opacity }}>
+        <div className="floating-bar" onMouseDown={() => appWindow.startDragging()}>
+          <span className="floating-title">🎙️ 语音</span>
+          <div className="floating-actions">
+            <button
+              className="floating-btn"
+              title="设置"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => setShowSettings(!showSettings)}
+            >
+              ⚙
+            </button>
+            <button className="floating-close" title="关闭" onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => { setTrans(null); invoke("close_audio_floating_window").catch(() => {}); }}>✕</button>
+          </div>
+        </div>
+
+        {showSettings && (
+          <div className="floating-settings">
+            <label>
+              透明度
+              <input type="range" min="30" max="100" value={Math.round(opacity * 100)} onChange={(e) => setOpacity(Number(e.target.value) / 100)} />
+            </label>
+          </div>
+        )}
+
+        <div className="floating-body">
+          {status ? (
+            <div className="floating-status">{status}</div>
+          ) : trans ? (
+            <div className="floating-trans">
+              <div className="floating-src">{trans.text}</div>
+              <div className="floating-divider" />
+              <div className="floating-result">{trans.result}</div>
+            </div>
+          ) : (
+            <div className="floating-hint">
+              <p>🎙️ 音频识别</p>
+              <span>在主窗口点击 🎙️ 开始音频字幕</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ============ 截图覆盖层 ============ */
 function ScreenshotOverlay() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -1112,6 +1196,7 @@ export default function App() {
   useEffect(() => { setLabel(appWindow.label); }, []);
 
   if (label === "floating") return <FloatingWindow />;
+  if (label === "audio-floating") return <AudioFloatingWindow />;
   if (label === "screenshot-overlay") return <ScreenshotOverlay />;
   return <MainWindow />;
 }

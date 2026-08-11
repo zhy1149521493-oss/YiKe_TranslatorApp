@@ -141,31 +141,15 @@ impl AudioEngineInner {
 
 /// 启动音频实时识别
 /// - lang: "zh" | "en" | "ja" | "ko" | "auto"
+/// 模型加载在后台线程执行(避免同步 command 阻塞 UI / C 库崩溃拖垮主进程);
+/// 加载结果通过 audio-status 事件上报("loading"→"ready"/"error:xxx")
 pub fn start(lang: &str, app: AppHandle) -> Result<(), String> {
     // 已运行则先停掉
     stop();
 
-    let model_dir = model_dir_for_lang(lang).ok_or_else(|| {
-        format!("语言 {lang} 暂不支持音频识别(目前支持 中/英/日/韩)")
-    })?;
-    let (encoder, decoder, joiner, tokens) = scan_model_files(&model_dir)?;
-
-    // 构造识别器
-    let mut cfg = OnlineRecognizerConfig::default();
-    cfg.model_config.transducer.encoder = Some(encoder);
-    cfg.model_config.transducer.decoder = Some(decoder);
-    cfg.model_config.transducer.joiner = Some(joiner);
-    cfg.model_config.tokens = Some(tokens);
-    cfg.model_config.num_threads = 4;
-    cfg.model_config.provider = Some("cpu".to_string());
-    cfg.decoding_method = Some("greedy_search".to_string());
-    cfg.enable_endpoint = true;
-    cfg.rule1_min_trailing_silence = 2.4;
-    cfg.rule2_min_trailing_silence = 1.2;
-    cfg.rule3_min_utterance_length = 0.0;
-
-    let recognizer = OnlineRecognizer::create(&cfg)
-        .ok_or_else(|| "初始化流式识别器失败(模型加载失败)".to_string())?;
+    let lang = lang.to_string();
+    let model_dir = model_dir_for_lang(&lang)
+        .ok_or_else(|| format!("语言 {lang} 暂不支持音频识别(目前支持 中/英/日/韩)"))?;
 
     let inner = Arc::new(AudioEngineInner::new());
     inner.running.store(true, Ordering::SeqCst);
@@ -173,7 +157,42 @@ pub fn start(lang: &str, app: AppHandle) -> Result<(), String> {
     let run_app = app.clone();
     let inner2 = inner.clone();
     let handle = std::thread::spawn(move || {
+        eprintln!("[audio] thread start, emitting loading...");
         let _ = run_app.emit_to("main", "audio-status", "loading");
+        eprintln!("[audio] emitting loading done");
+        // 后台线程:扫描模型 + 加载识别器
+        let loaded = (|| -> Result<OnlineRecognizer, String> {
+            eprintln!("[audio] scanning model files...");
+            let (encoder, decoder, joiner, tokens) = scan_model_files(&model_dir)?;
+            eprintln!("[audio] model files OK");
+            let mut cfg = OnlineRecognizerConfig::default();
+            cfg.model_config.transducer.encoder = Some(encoder);
+            cfg.model_config.transducer.decoder = Some(decoder);
+            cfg.model_config.transducer.joiner = Some(joiner);
+            cfg.model_config.tokens = Some(tokens);
+            cfg.model_config.num_threads = 4;
+            cfg.model_config.provider = Some("cpu".to_string());
+            cfg.decoding_method = Some("greedy_search".to_string());
+            cfg.enable_endpoint = true;
+            cfg.rule1_min_trailing_silence = 2.4;
+            cfg.rule2_min_trailing_silence = 1.2;
+            cfg.rule3_min_utterance_length = 0.0;
+            eprintln!("[audio] creating OnlineRecognizer (loading model)...");
+            let r = OnlineRecognizer::create(&cfg);
+            eprintln!("[audio] OnlineRecognizer::create returned");
+            r.ok_or_else(|| "初始化流式识别器失败(模型加载失败)".to_string())
+        })();
+
+        let recognizer = match loaded {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[audio] model load error: {e}");
+                inner2.running.store(false, Ordering::SeqCst);
+                let _ = run_app.emit_to("main", "audio-status", format!("error:{e}"));
+                return;
+            }
+        };
+        let _ = run_app.emit_to("main", "audio-status", "ready");
         // 捕获循环(内部含 ASR 喂数据)
         let result = capture_loop(&inner2, &recognizer, &run_app);
         inner2.running.store(false, Ordering::SeqCst);
@@ -238,9 +257,11 @@ fn capture_loop(
     app: &AppHandle,
 ) -> Result<(), String> {
     unsafe {
+        eprintln!("[audio] capture_loop: CoInitializeEx...");
         CoInitializeEx(None, COINIT_MULTITHREADED)
             .ok()
             .map_err(|e| format!("CoInitializeEx 失败: {e}"))?;
+        eprintln!("[audio] capture_loop: CoInitializeEx done");
 
         // 创建设备枚举器
         let enumerator: IMMDeviceEnumerator = CoCreateInstance(
@@ -249,16 +270,19 @@ fn capture_loop(
             CLSCTX_ALL,
         )
         .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) 失败: {e}"))?;
+        eprintln!("[audio] capture_loop: enumerator OK");
 
         // 默认渲染端点(系统正在播放的设备)
         let device = enumerator
             .GetDefaultAudioEndpoint(eRender, eConsole)
             .map_err(|e| format!("GetDefaultAudioEndpoint 失败: {e}"))?;
+        eprintln!("[audio] capture_loop: device OK");
 
         // 激活 IAudioClient
         let audio_client: IAudioClient = device
             .Activate(CLSCTX_ALL, None)
             .map_err(|e| format!("Activate(IAudioClient) 失败: {e}"))?;
+        eprintln!("[audio] capture_loop: audio_client OK");
 
         // 混合格式(通常 48kHz)
         let mix_format = audio_client

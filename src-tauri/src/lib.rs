@@ -278,6 +278,27 @@ fn close_floating_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// 打开音频字幕独立语音窗(与视频字幕窗分开;窗口 setup 时已预建,这里只 show)
+#[tauri::command]
+fn open_audio_floating_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("audio-floating") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        eprintln!("[audio-floating] shown");
+    }
+    Ok(())
+}
+
+/// 关闭(隐藏)音频字幕独立语音窗
+#[tauri::command]
+fn close_audio_floating_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(w) = app.get_webview_window("audio-floating") {
+        let _ = w.hide();
+        eprintln!("[audio-floating] hidden");
+    }
+    Ok(())
+}
+
 /// 打开截图覆盖层窗口(全屏 Canvas,用于框选区域)
 /// 窗口在 setup 时已预建隐藏;这里只通知来源,不 show —— 由前端截图完成后自己 show
 /// (窗口已改不透明:若先 show 再截图,会把自己的黑窗口截进去;前端先隐藏→截屏→绘制→显示)
@@ -383,7 +404,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running])
+        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");
@@ -422,6 +443,19 @@ pub fn run() {
                 // 悬浮窗(右下角,透明置顶)
                 let _ = WebviewWindowBuilder::new(handle, "floating", WebviewUrl::App("index.html".into()))
                     .title("翻译悬浮窗")
+                    .inner_size(380.0, 220.0)
+                    .min_inner_size(280.0, 160.0)
+                    .resizable(false)
+                    .decorations(false)
+                    .transparent(true)
+                    .always_on_top(true)
+                    .skip_taskbar(true)
+                    .shadow(false)
+                    .visible(false)
+                    .build();
+                // 音频字幕独立语音窗(右下角,透明置顶;与视频字幕窗分开)
+                let _ = WebviewWindowBuilder::new(handle, "audio-floating", WebviewUrl::App("index.html".into()))
+                    .title("语音窗")
                     .inner_size(380.0, 220.0)
                     .min_inner_size(280.0, 160.0)
                     .resizable(false)
