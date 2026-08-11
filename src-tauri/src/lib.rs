@@ -92,6 +92,26 @@ fn ocr_instance() -> Result<std::sync::MutexGuard<'static, Option<RapidOcr>>, St
     Ok(guard)
 }
 
+/// 从 base64 PNG 裁剪图做 OCR:截图翻译的最终结果不再二次截屏,
+/// 而是由 overlay 从启动时缓存的全屏图裁剪选区 → 这里直接 OCR。
+/// 消除"框选完成瞬间二次截屏混入 overlay 残影"的问题。
+#[tauri::command]
+fn ocr_image_b64(b64: String) -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let r = (|| -> Result<String, String> {
+        let bytes = STANDARD.decode(b64.trim()).map_err(|e| format!("解码: {e}"))?;
+        let img = image::load_from_memory(&bytes).map_err(|e| format!("图片: {e}"))?;
+        let tmp = std::env::temp_dir().join(format!("transmate-ocr-b64-{}.png", std::process::id()));
+        img.save(&tmp).map_err(|e| format!("保存: {e}"))?;
+        let mut guard = ocr_instance()?;
+        let ocr = guard.as_mut().ok_or("OCR 引擎不可用")?;
+        let output = ocr.run_path(&tmp).map_err(|e| format!("OCR: {e}"))?;
+        let texts: Vec<String> = output.lines.into_iter().map(|l| l.text).collect();
+        Ok(texts.join("\n"))
+    })();
+    r
+}
+
 /// 截全屏并编码为 base64 PNG:供截图 overlay 作为背景预览。
 /// 不透明窗口 + 静态截图背景方案:框选层显示位图,不依赖透明窗口透出真实屏幕
 /// (透明窗口叠加硬件视频会显示黑屏),框选时能看到画面内容。
@@ -196,8 +216,10 @@ fn open_screenshot_overlay(from: Option<String>, app: tauri::AppHandle) -> Resul
     }
     // 兜底:预建失败时后台线程创建
     let (w, h) = if let Ok(Some(m)) = app.primary_monitor() {
-        let size = m.size();
-        (size.width as f64, size.height as f64)
+        let size = m.size();       // xcap 返回物理像素
+        let sf = m.scale_factor(); // DPI 缩放
+        // inner_size(f64) 是逻辑尺寸:物理/缩放 → 窗口物理 = 逻辑×dpr = 物理,与截图严格一致
+        (size.width as f64 / sf, size.height as f64 / sf)
     } else {
         (1920.0, 1080.0)
     };
@@ -282,7 +304,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window])
+        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");
@@ -333,8 +355,10 @@ pub fn run() {
                     .build();
                 // 截图覆盖层(全屏,不透明置顶;前端截图背景铺满,不透出底层)
                 let (w, h) = if let Ok(Some(m)) = handle.primary_monitor() {
-                    let size = m.size();
-                    (size.width as f64, size.height as f64)
+                    let size = m.size();       // xcap 返回物理像素
+                    let sf = m.scale_factor(); // DPI 缩放
+                    // inner_size(f64) 是逻辑尺寸:物理/缩放 → 窗口物理 = 逻辑×dpr = 物理,与截图严格一致
+                    (size.width as f64 / sf, size.height as f64 / sf)
                 } else {
                     (1920.0, 1080.0)
                 };

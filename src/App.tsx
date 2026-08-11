@@ -406,7 +406,7 @@ function MainWindow() {
 
   /* ---- 截图结果监听:主窗口接收坐标 → OCR(后台) → 按来源路由显示 ---- */
   useEffect(() => {
-    const u = appWindow.listen<{ x: number; y: number; w: number; h: number; source?: string }>(
+    const u = appWindow.listen<{ x: number; y: number; w: number; h: number; source?: string; b64?: string }>(
       "screenshot-done",
       (e) => {
         const source = e.payload.source || "main";
@@ -428,43 +428,58 @@ function MainWindow() {
         } else {
           setOutput("⏳ 正在 OCR 识别…");
         }
-        invoke("screenshot_ocr", { x: Math.round(e.payload.x), y: Math.round(e.payload.y), w: Math.round(e.payload.w), h: Math.round(e.payload.h) }).catch(() => {});
+        // 优先用 overlay 从缓存背景图裁剪的选区(b64,不二次截屏,避免残影);否则回退截屏
+        if (e.payload.b64) {
+          invoke<string>("ocr_image_b64", { b64: e.payload.b64 })
+            .then((text) => { handleOcrResult(source, text); })   // 直接接返回值(同步 command)
+            .catch((err: any) => {
+              const msg = typeof err === "string" ? err : JSON.stringify(err);
+              console.error("ocr_image_b64 失败:", err);
+              if (source === "floating") {
+                appWindow.emitTo("floating", "screenshot-status", `❌ OCR 失败: ${msg}`).catch(() => {});
+              } else {
+                setOutput(`❌ OCR 失败: ${msg}`);
+              }
+            });
+        } else {
+          invoke("screenshot_ocr", { x: Math.round(e.payload.x), y: Math.round(e.payload.y), w: Math.round(e.payload.w), h: Math.round(e.payload.h) }).catch(() => {});
+        }
       }
     );
+    /* OCR 结果统一处理:识别文本 → 语言检测 → 翻译 → 按来源路由显示 */
+    const handleOcrResult = async (source: string, ocrText: string) => {
+      // 按来源显示状态/结果:floating → 悬浮窗事件;main → 主窗口输出区
+      const showStatus = (msg: string) => {
+        if (source === "floating") {
+          appWindow.emitTo("floating", "screenshot-status", msg).catch(() => {});
+        } else {
+          setOutput(msg);
+        }
+      };
+      if (!ocrText || ocrText.startsWith("ERROR:")) {
+        showStatus("⚠️ " + (ocrText || "未识别到文字"));
+        return;
+      }
+      if (!ocrText.trim()) { showStatus("⚠️ 未识别到文字"); return; }
+      let src = sourceLang;
+      let tgt = targetLang;
+      if (src === "auto") { src = detectLang(ocrText); }
+      if (src === tgt) tgt = src === "zh" ? "en" : "zh";
+      showStatus("⏳ 正在翻译…");
+      try {
+        const result = await fetchOllamaFull(model, src, tgt, ocrText, numCtx);
+        if (source === "floating") {
+          await appWindow.emitTo("floating", "show-translation", { text: ocrText, src, tgt, result }).catch(() => {});
+        } else {
+          setOutput(`[OCR]\n${ocrText}\n\n[翻译]\n${result}`);
+        }
+      } catch (e: any) {
+        showStatus(`❌ 翻译失败: ${e}`);
+      }
+    };
     const o = appWindow.listen<string>(
       "ocr-done",
-      async (e) => {
-        const source = screenshotSource.current;
-        const ocrText = e.payload;
-        // 按来源显示状态/结果:floating → 悬浮窗事件;main → 主窗口输出区
-        const showStatus = (msg: string) => {
-          if (source === "floating") {
-            appWindow.emitTo("floating", "screenshot-status", msg).catch(() => {});
-          } else {
-            setOutput(msg);
-          }
-        };
-        if (!ocrText || ocrText.startsWith("ERROR:")) {
-          showStatus("⚠️ " + (ocrText || "未识别到文字"));
-          return;
-        }
-        if (!ocrText.trim()) { showStatus("⚠️ 未识别到文字"); return; }
-        let src = sourceLang;
-        let tgt = targetLang;
-        if (src === "auto") { src = detectLang(ocrText); }
-        if (src === tgt) tgt = src === "zh" ? "en" : "zh";
-        showStatus("⏳ 正在翻译…");
-        try {
-          const result = await fetchOllamaFull(model, src, tgt, ocrText, numCtx);
-          if (source === "floating") {
-            await appWindow.emitTo("floating", "show-translation", { text: ocrText, src, tgt, result }).catch(() => {});
-          } else {
-            setOutput(`[OCR]\n${ocrText}\n\n[翻译]\n${result}`);
-          }
-        } catch (e: any) {
-          showStatus(`❌ 翻译失败: ${e}`);
-        }
-      }
+      (e) => { handleOcrResult(screenshotSource.current, e.payload); }
     );
     return () => { u.then((f) => f()); o.then((f) => f()); };
   }, [model, sourceLang, targetLang, numCtx]);
@@ -732,8 +747,10 @@ function ScreenshotOverlay() {
   const rect = useRef({ sx: 0, sy: 0, ex: 0, ey: 0 });   // 鼠标坐标(CSS 像素)
   const drawing = useRef(false);
   const sourceRef = useRef<string>("main");
-  const bgImageRef = useRef<HTMLImageElement | null>(null); // 静态截图背景(方案2.2:不透明窗口显示位图)
-  const loadTokenRef = useRef(0);                          // 防旧请求异步返回覆盖新图(重影)
+  const loadTokenRef = useRef(0);                          // 防旧请求异步返回覆盖新图
+  const bgImageRef = useRef<HTMLImageElement | null>(null); // 缓存背景图 img(裁剪选区用,不二次截屏)
+  const bgPhysRef = useRef({ w: 1, h: 1 });                // 背景图物理尺寸(坐标换算用)
+  const [bgUrl, setBgUrl] = useState<string>("");          // 背景图 data URL(div 背景,CSS 拉伸铺满)
 
   /* 窗口已改不透明:body 兜底纯黑,防 canvas 边缘露白/透光 */
   useEffect(() => {
@@ -746,76 +763,51 @@ function ScreenshotOverlay() {
     const c = canvasRef.current;
     if (!c) return;
     const ctx = c.getContext("2d")!;
-    let dprReal = window.devicePixelRatio || 1;            // 实测 DPR:窗口物理宽 / CSS 宽
-    let cssW = window.innerWidth, cssH = window.innerHeight;
+    const W = window.innerWidth, H = window.innerHeight;
 
-    /* canvas 物理像素 = 截图物理像素;CSS 显示尺寸 = 物理 / dprReal
-       → canvas 每个像素精确对应屏幕 1 物理像素,不放大不缩小 */
-    const fitCanvas = (pw: number, ph: number) => {
-      cssW = pw / dprReal;
-      cssH = ph / dprReal;
-      c.width = pw;
-      c.height = ph;
-      c.style.width = cssW + "px";
-      c.style.height = cssH + "px";
-    };
-
-    /* CSS 坐标 → 物理坐标 */
-    const toPhys = (v: number) => Math.round(v * (c.width / (cssW || window.innerWidth)));
-
-    /* 重绘:背景图 → 半透明遮罩 → 选区重画背景图(选区显示画面而非透明)+描边 */
+    /* 重绘:全屏半透明遮罩 → 选区 clearRect 挖空(露出 CSS 背景图,不透明不重影) */
     const drawScene = () => {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, c.width, c.height);
-      const bg = bgImageRef.current;
-      if (bg) ctx.drawImage(bg, 0, 0, c.width, c.height);
+      ctx.clearRect(0, 0, W, H);
       ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.fillRect(0, 0, W, H);
       if (drawing.current) {
-        const sx = toPhys(rect.current.sx), sy = toPhys(rect.current.sy);
-        const ex = toPhys(rect.current.ex), ey = toPhys(rect.current.ey);
-        const rx = Math.min(sx, ex), ry = Math.min(sy, ey);
-        const rw = Math.abs(ex - sx), rh = Math.abs(ey - sy);
-        /* 选区:clip 后重画背景图(显示静态画面,不透明) */
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(rx, ry, rw, rh);
-        ctx.clip();
-        if (bg) ctx.drawImage(bg, 0, 0, c.width, c.height);
-        ctx.restore();
+        const rx = Math.min(rect.current.sx, rect.current.ex);
+        const ry = Math.min(rect.current.sy, rect.current.ey);
+        const rw = Math.abs(rect.current.ex - rect.current.sx);
+        const rh = Math.abs(rect.current.ey - rect.current.sy);
+        ctx.clearRect(rx, ry, rw, rh);   // 挖空选区 → 透出下方 CSS 背景图
         ctx.strokeStyle = "#007aff";
         ctx.lineWidth = 2;
         ctx.strokeRect(rx, ry, rw, rh);
       }
     };
 
-    /* 收到 overlay-start(窗口被显示)时初始化框选界面;from 由 Rust 事件传入 */
+    /* CSS 坐标 → 物理坐标(背景图物理尺寸 / 窗口 CSS 尺寸,实测比) */
+    const toPhys = (v: number) => Math.round(v * (bgPhysRef.current.w / W));
+
+    /* 收到 overlay-start 时初始化;from 由 Rust 事件传入 */
     const start = async (payload: string) => {
       sourceRef.current = payload || "main";
-      bgImageRef.current = null;
+      setBgUrl("");                       // 清空旧背景,避免第二次显示第一次画面
       const token = ++loadTokenRef.current;
       drawing.current = false;
       rect.current = { sx: 0, sy: 0, ex: 0, ey: 0 };
-      /* 实测 DPR:窗口物理尺寸 / CSS 尺寸(不依赖 devicePixelRatio 属性,WebView2 下该属性可能不准) */
-      try {
-        const size = await appWindow.innerSize();
-        if (window.innerWidth > 0) dprReal = size.width / window.innerWidth;
-      } catch { /* 保留默认 */ }
-      /* 窗口已改不透明:截图前必须先隐藏,否则会截到自己的黑窗口 */
+      c.width = W;
+      c.height = H;
+      /* 窗口已改不透明:截图前必须先隐藏,否则会截到自己的窗口 */
       try { await appWindow.hide(); } catch {}
       await new Promise((r) => setTimeout(r, 60)); // 给 DWM 一帧刷新时间
-      fitCanvas(Math.round(window.innerWidth * dprReal), Math.round(window.innerHeight * dprReal));
-      drawScene(); // 背景加载前 canvas 为纯黑(不透光)
-      /* 静态截图当背景:显示位图而非依赖透明窗口透出真实屏幕(视频区域会黑) */
+      drawScene();                        // 遮罩先画(窗口未显示,无妨)
+      /* 静态截图当背景:div CSS 拉伸铺满窗口,与窗口严丝合缝,不依赖任何 DPR 计算 */
       invoke<string>("capture_fullscreen")
         .then((b64) => {
+          if (loadTokenRef.current !== token) return;
           const img = new Image();
           img.onload = () => {
-            if (loadTokenRef.current !== token) return;   // 过期请求,丢弃
-            bgImageRef.current = img;
-            fitCanvas(img.naturalWidth, img.naturalHeight);
-            drawScene();
-            /* 绘制完成后显示窗口(避免先显示空窗/黑窗) */
+            bgImageRef.current = img;                       // 缓存 img,框选后从它裁剪(不二次截屏)
+            bgPhysRef.current = { w: img.naturalWidth, h: img.naturalHeight };
+            setBgUrl("data:image/png;base64," + b64); // div 背景异步解码,解码完成自动显示
             appWindow.show().catch(() => {});
             appWindow.setFocus().catch(() => {});
           };
@@ -851,7 +843,21 @@ function ScreenshotOverlay() {
       const w = toPhys(Math.abs(ex - sx));
       const h = toPhys(Math.abs(ey - sy));
       if (w < 10 || h < 10) { hide(); return; }
-      appWindow.emitTo("main", "screenshot-done", { x, y, w, h, source: sourceRef.current });
+      /* 从启动时缓存的背景图裁剪选区(不二次截屏,避免框选完成瞬间混入 overlay 残影) */
+      let b64 = "";
+      const bg = bgImageRef.current;
+      if (bg) {
+        const off = document.createElement("canvas");
+        off.width = w;
+        off.height = h;
+        const octx = off.getContext("2d");
+        if (octx) {
+          octx.imageSmoothingEnabled = false;
+          octx.drawImage(bg, x, y, w, h, 0, 0, w, h);
+          b64 = off.toDataURL("image/png").split(",")[1] || "";
+        }
+      }
+      appWindow.emitTo("main", "screenshot-done", { x, y, w, h, source: sourceRef.current, b64 });
       hide();
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); };
@@ -875,7 +881,18 @@ function ScreenshotOverlay() {
     };
   }, []);
 
-  return <canvas ref={canvasRef} style={{ width: "100vw", height: "100vh", display: "block", cursor: "crosshair", background: "#000" }} />;
+  return (
+    <div style={{
+      position: "fixed", inset: 0,
+      backgroundColor: "#000",
+      backgroundImage: bgUrl ? `url(${bgUrl})` : "none",
+      backgroundSize: "100% 100%",
+      backgroundRepeat: "no-repeat",
+      backgroundPosition: "center",
+    }}>
+      <canvas ref={canvasRef} style={{ width: "100vw", height: "100vh", display: "block", cursor: "crosshair" }} />
+    </div>
+  );
 }
 
 /* ============ 应用路由 ============ */
