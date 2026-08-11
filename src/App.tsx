@@ -735,6 +735,13 @@ function ScreenshotOverlay() {
   const bgImageRef = useRef<HTMLImageElement | null>(null); // 静态截图背景(方案2.2:不透明窗口显示位图)
   const loadTokenRef = useRef(0);                          // 防旧请求异步返回覆盖新图(重影)
 
+  /* 窗口已改不透明:body 兜底纯黑,防 canvas 边缘露白/透光 */
+  useEffect(() => {
+    const prev = document.body.style.background;
+    document.body.style.background = "#000";
+    return () => { document.body.style.background = prev; };
+  }, []);
+
   useEffect(() => {
     const c = canvasRef.current;
     if (!c) return;
@@ -794,8 +801,11 @@ function ScreenshotOverlay() {
         const size = await appWindow.innerSize();
         if (window.innerWidth > 0) dprReal = size.width / window.innerWidth;
       } catch { /* 保留默认 */ }
+      /* 窗口已改不透明:截图前必须先隐藏,否则会截到自己的黑窗口 */
+      try { await appWindow.hide(); } catch {}
+      await new Promise((r) => setTimeout(r, 60)); // 给 DWM 一帧刷新时间
       fitCanvas(Math.round(window.innerWidth * dprReal), Math.round(window.innerHeight * dprReal));
-      drawScene();
+      drawScene(); // 背景加载前 canvas 为纯黑(不透光)
       /* 静态截图当背景:显示位图而非依赖透明窗口透出真实屏幕(视频区域会黑) */
       invoke<string>("capture_fullscreen")
         .then((b64) => {
@@ -805,10 +815,13 @@ function ScreenshotOverlay() {
             bgImageRef.current = img;
             fitCanvas(img.naturalWidth, img.naturalHeight);
             drawScene();
+            /* 绘制完成后显示窗口(避免先显示空窗/黑窗) */
+            appWindow.show().catch(() => {});
+            appWindow.setFocus().catch(() => {});
           };
           img.src = "data:image/png;base64," + b64;
         })
-        .catch(() => { /* 加载失败则保持空背景 */ });
+        .catch(() => { appWindow.show().catch(() => {}); });
     };
     const u = appWindow.listen<string>("overlay-start", (e) => start(e.payload));
 
@@ -862,7 +875,7 @@ function ScreenshotOverlay() {
     };
   }, []);
 
-  return <canvas ref={canvasRef} style={{ width: "100vw", height: "100vh", display: "block", cursor: "crosshair" }} />;
+  return <canvas ref={canvasRef} style={{ width: "100vw", height: "100vh", display: "block", cursor: "crosshair", background: "#000" }} />;
 }
 
 /* ============ 应用路由 ============ */

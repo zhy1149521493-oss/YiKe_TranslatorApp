@@ -180,17 +180,17 @@ fn close_floating_window(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 /// 打开截图覆盖层窗口(全屏 Canvas,用于框选区域)
-/// 窗口在 setup 时已预建隐藏,这里只需通知来源 + 显示,避免运行时建窗(Tauri <=2.11 缺陷)
+/// 窗口在 setup 时已预建隐藏;这里只通知来源,不 show —— 由前端截图完成后自己 show
+/// (窗口已改不透明:若先 show 再截图,会把自己的黑窗口截进去;前端先隐藏→截屏→绘制→显示)
 /// from: 发起入口("main"=桌面端 / "floating"=悬浮窗),决定截图结果显示在哪
 #[tauri::command]
 fn open_screenshot_overlay(from: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
     use tauri::{Emitter, WebviewUrl, WebviewWindowBuilder};
     let from = from.unwrap_or_else(|| "main".to_string());
     eprintln!("[screenshot] overlay opened from={from}");
-    // 预建窗口存在 → 显示 + 通知来源
+    // 预建窗口存在 → 只通知来源(不 show,前端截完图再显示)
     if let Some(w) = app.get_webview_window("screenshot-overlay") {
-        let _ = w.show();
-        let _ = w.set_focus();
+        let _ = w.hide(); // 确保处于隐藏状态,截图不包含自身
         let _ = app.emit_to("screenshot-overlay", "overlay-start", from.clone());
         return Ok(());
     }
@@ -208,7 +208,6 @@ fn open_screenshot_overlay(from: Option<String>, app: tauri::AppHandle) -> Resul
             .inner_size(w, h)
             .position(0.0, 0.0)
             .decorations(false)
-            .transparent(true)
             .always_on_top(true)
             .skip_taskbar(true)
             .resizable(false)
@@ -332,7 +331,7 @@ pub fn run() {
                     .shadow(false)
                     .visible(false)
                     .build();
-                // 截图覆盖层(全屏,透明置顶)
+                // 截图覆盖层(全屏,不透明置顶;前端截图背景铺满,不透出底层)
                 let (w, h) = if let Ok(Some(m)) = handle.primary_monitor() {
                     let size = m.size();
                     (size.width as f64, size.height as f64)
@@ -344,7 +343,6 @@ pub fn run() {
                     .inner_size(w, h)
                     .position(0.0, 0.0)
                     .decorations(false)
-                    .transparent(true)
                     .always_on_top(true)
                     .skip_taskbar(true)
                     .resizable(false)
