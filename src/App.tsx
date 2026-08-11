@@ -703,6 +703,7 @@ function ScreenshotOverlay() {
   const rect = useRef({ sx: 0, sy: 0, ex: 0, ey: 0 });
   const drawing = useRef(false);
   const sourceRef = useRef<string>("main");
+  const bgImageRef = useRef<HTMLImageElement | null>(null); // 静态截图背景(视频区域显示为黑时的预览替代)
 
   useEffect(() => {
     const c = canvasRef.current;
@@ -711,18 +712,43 @@ function ScreenshotOverlay() {
     const dpr = window.devicePixelRatio || 1;
     const W = window.innerWidth, H = window.innerHeight;
 
+    /* 重绘:背景图(若有)→ 半透明遮罩 → 选区挖空+描边 */
+    const drawScene = () => {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      const bg = bgImageRef.current;
+      if (bg) ctx.drawImage(bg, 0, 0, W, H);
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, W, H);
+      if (drawing.current) {
+        const rx = Math.min(rect.current.sx, rect.current.ex);
+        const ry = Math.min(rect.current.sy, rect.current.ey);
+        const rw = Math.abs(rect.current.ex - rect.current.sx);
+        const rh = Math.abs(rect.current.ey - rect.current.sy);
+        ctx.clearRect(rx, ry, rw, rh);
+        ctx.strokeStyle = "#007aff";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(rx, ry, rw, rh);
+      }
+    };
+
     /* 收到 overlay-start(窗口被显示)时初始化框选界面;from 由 Rust 事件传入 */
     const start = (payload: string) => {
       sourceRef.current = payload || "main";
       c.width = window.innerWidth * dpr;
       c.height = window.innerHeight * dpr;
-      /* 用 setTransform 做 DPI 适配:画布物理像素,坐标用 CSS 像素 */
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      /* 初始遮罩 */
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
       drawing.current = false;
       rect.current = { sx: 0, sy: 0, ex: 0, ey: 0 };
+      drawScene();
+      /* 加载静态截图当背景:透明窗口叠加在浏览器视频上时视频显示为黑(Win32 合成限制),
+         用实时截图当预览,框选时就能看到画面内容(视频显示为静态帧) */
+      invoke<string>("capture_fullscreen")
+        .then((b64) => {
+          const img = new Image();
+          img.onload = () => { bgImageRef.current = img; drawScene(); };
+          img.src = "data:image/png;base64," + b64;
+        })
+        .catch(() => { /* 加载失败则保持透明背景 */ });
     };
     const u = appWindow.listen<string>("overlay-start", (e) => start(e.payload));
 
@@ -734,25 +760,14 @@ function ScreenshotOverlay() {
       if (e.button !== 0) return;
       rect.current = { sx: e.clientX, sy: e.clientY, ex: e.clientX, ey: e.clientY };
       drawing.current = true;
+      drawScene();
     };
     const onMove = (e: MouseEvent) => {
       if (!(e.buttons & 1)) { onUp(); return; }
       if (!drawing.current) return;
       rect.current.ex = e.clientX;
       rect.current.ey = e.clientY;
-      /* 重置变换后用 CSS 像素绘制 */
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, W, H);
-      const rx = Math.min(rect.current.sx, rect.current.ex);
-      const ry = Math.min(rect.current.sy, rect.current.ey);
-      const rw = Math.abs(rect.current.ex - rect.current.sx);
-      const rh = Math.abs(rect.current.ey - rect.current.sy);
-      ctx.clearRect(rx, ry, rw, rh);
-      ctx.strokeStyle = "#007aff";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(rx, ry, rw, rh);
+      drawScene();
     };
     const onUp = () => {
       if (!drawing.current) return;
