@@ -1,0 +1,426 @@
+//! 第7波:电脑内部音频实时翻译 —— WASAPI loopback 捕获 + sherpa-onnx 流式 ASR
+//!
+//! 架构:
+//! - 捕获线程:WASAPI loopback(系统播放的音频)→ 样本解析(f32/16bit,多声道→单声道)
+//!   → LinearResampler(48k/44.1k → 16k)→ 喂给 OnlineStream
+//! - 识别线程:accept_waveform + decode + get_result,增量文本变化 emit "audio-partial";
+//!   is_endpoint 时 emit "audio-final"(整句定稿)并 reset
+//! - 模型:按语言选目录(8语模型管中/英/日,韩语单配),首次运行自动下载
+//!
+//! 事件(emit 到 main):
+//!   audio-status:   "loading" | "ready" | "error:xxx" | "stopped"
+//!   audio-partial:  { text: String }  边说边出的增量识别文本
+//!   audio-final:    { text: String }  端点检测定稿的一句(触发前端翻译)
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use sherpa_onnx::{LinearResampler, OnlineRecognizer, OnlineRecognizerConfig};
+use tauri::{AppHandle, Emitter};
+
+use windows::core::GUID;
+use windows::Win32::Media::Audio::{
+    eConsole, eRender, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, IAudioCaptureClient,
+    IAudioClient, IMMDeviceEnumerator, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+};
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
+
+/// 全局音频引擎状态:None = 未启动
+static AUDIO_ENGINE: std::sync::OnceLock<Mutex<Option<Arc<AudioEngineInner>>>> =
+    std::sync::OnceLock::new();
+
+fn engine() -> std::sync::MutexGuard<'static, Option<Arc<AudioEngineInner>>> {
+    AUDIO_ENGINE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .unwrap()
+}
+
+/// ASR 模型目录(E:\TranslatorApp\asr\)
+fn asr_base_dir() -> PathBuf {
+    PathBuf::from("E:\\TranslatorApp\\asr")
+}
+
+/// 语言 → 模型子目录名
+/// - 中/英/日 → 8语流式模型(ar/en/id/ja/ru/th/vi/zh)
+/// - 韩语 → 单语流式模型
+pub fn model_dir_for_lang(lang: &str) -> Option<PathBuf> {
+    let base = asr_base_dir();
+    match lang {
+        "zh" | "en" | "ja" | "auto" => Some(base.join("sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10")),
+        "ko" => Some(base.join("sherpa-onnx-streaming-zipformer-korean-2024-06-16")),
+        // 其他语言暂不支持音频识别(翻译侧 19 语种不受影响)
+        _ => None,
+    }
+}
+
+/// 从模型目录扫描 encoder/decoder/joiner/tokens 文件(文件名可能带 int8 等后缀)
+fn scan_model_files(dir: &std::path::Path) -> Result<(String, String, String, String), String> {
+    let mut encoder: Option<PathBuf> = None;
+    let mut decoder: Option<PathBuf> = None;
+    let mut joiner: Option<PathBuf> = None;
+    let mut tokens: Option<PathBuf> = None;
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("读取模型目录失败 {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取目录项失败: {e}"))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !entry.path().is_file() {
+            continue;
+        }
+        if name == "tokens.txt" {
+            tokens = Some(entry.path());
+        } else if name.starts_with("encoder") && name.ends_with(".onnx") {
+            // 优先 int8(小且快);非 int8 仅在无候选时兜底
+            let is_int8 = name.contains("int8");
+            let better = match &encoder {
+                Some(e) => {
+                    let e = e.to_string_lossy().to_string();
+                    is_int8 && !e.contains("int8")
+                }
+                None => true,
+            };
+            if better {
+                encoder = Some(entry.path());
+            }
+        } else if name.starts_with("decoder") && name.ends_with(".onnx") {
+            let is_int8 = name.contains("int8");
+            let better = match &decoder {
+                Some(d) => {
+                    let d = d.to_string_lossy().to_string();
+                    is_int8 && !d.contains("int8")
+                }
+                None => true,
+            };
+            if better {
+                decoder = Some(entry.path());
+            }
+        } else if name.starts_with("joiner") && name.ends_with(".onnx") {
+            let is_int8 = name.contains("int8");
+            let better = match &joiner {
+                Some(j) => {
+                    let j = j.to_string_lossy().to_string();
+                    is_int8 && !j.contains("int8")
+                }
+                None => true,
+            };
+            if better {
+                joiner = Some(entry.path());
+            }
+        }
+    }
+    match (encoder, decoder, joiner, tokens) {
+        (Some(e), Some(d), Some(j), Some(t)) => Ok((
+            e.to_string_lossy().to_string(),
+            d.to_string_lossy().to_string(),
+            j.to_string_lossy().to_string(),
+            t.to_string_lossy().to_string(),
+        )),
+        _ => Err(format!(
+            "模型文件不完整(需要 encoder/decoder/joiner .onnx + tokens.txt),目录: {}",
+            dir.display()
+        )),
+    }
+}
+
+struct AudioEngineInner {
+    running: AtomicBool,
+    handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl AudioEngineInner {
+    fn new() -> Self {
+        Self {
+            running: AtomicBool::new(false),
+            handle: Mutex::new(None),
+        }
+    }
+}
+
+/// 启动音频实时识别
+/// - lang: "zh" | "en" | "ja" | "ko" | "auto"
+pub fn start(lang: &str, app: AppHandle) -> Result<(), String> {
+    // 已运行则先停掉
+    stop();
+
+    let model_dir = model_dir_for_lang(lang).ok_or_else(|| {
+        format!("语言 {lang} 暂不支持音频识别(目前支持 中/英/日/韩)")
+    })?;
+    let (encoder, decoder, joiner, tokens) = scan_model_files(&model_dir)?;
+
+    // 构造识别器
+    let mut cfg = OnlineRecognizerConfig::default();
+    cfg.model_config.transducer.encoder = Some(encoder);
+    cfg.model_config.transducer.decoder = Some(decoder);
+    cfg.model_config.transducer.joiner = Some(joiner);
+    cfg.model_config.tokens = Some(tokens);
+    cfg.model_config.num_threads = 4;
+    cfg.model_config.provider = Some("cpu".to_string());
+    cfg.decoding_method = Some("greedy_search".to_string());
+    cfg.enable_endpoint = true;
+    cfg.rule1_min_trailing_silence = 2.4;
+    cfg.rule2_min_trailing_silence = 1.2;
+    cfg.rule3_min_utterance_length = 0.0;
+
+    let recognizer = OnlineRecognizer::create(&cfg)
+        .ok_or_else(|| "初始化流式识别器失败(模型加载失败)".to_string())?;
+
+    let inner = Arc::new(AudioEngineInner::new());
+    inner.running.store(true, Ordering::SeqCst);
+
+    let run_app = app.clone();
+    let inner2 = inner.clone();
+    let handle = std::thread::spawn(move || {
+        let _ = run_app.emit_to("main", "audio-status", "loading");
+        // 捕获循环(内部含 ASR 喂数据)
+        let result = capture_loop(&inner2, &recognizer, &run_app);
+        inner2.running.store(false, Ordering::SeqCst);
+        match result {
+            Ok(()) => {
+                let _ = run_app.emit_to("main", "audio-status", "stopped");
+            }
+            Err(e) => {
+                eprintln!("[audio] capture error: {e}");
+                let _ = run_app.emit_to("main", "audio-status", format!("error:{e}"));
+            }
+        }
+    });
+
+    *inner.handle.lock().unwrap() = Some(handle);
+    *engine() = Some(inner);
+    let _ = app.emit_to("main", "audio-status", "ready");
+    Ok(())
+}
+
+/// 停止音频识别
+pub fn stop() {
+    let mut guard = engine();
+    if let Some(inner) = guard.take() {
+        inner.running.store(false, Ordering::SeqCst);
+        if let Some(h) = inner.handle.lock().unwrap().take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// 查询是否在运行
+pub fn is_running() -> bool {
+    engine().as_ref().map(|e| e.running.load(Ordering::SeqCst)).unwrap_or(false)
+}
+
+// ============ WASAPI loopback 捕获 ============
+
+/// 解析 WAVEFORMATEX:返回 (channels, sample_rate, bits_per_sample, is_float)
+unsafe fn parse_format(pwf: *const WAVEFORMATEX) -> (u16, u32, u16, bool) {
+    let wf = &*pwf;
+    // WAVE_FORMAT_EXTENSIBLE = 65534
+    if wf.wFormatTag == 65534 {
+        let ext = &*(pwf as *const WAVEFORMATEXTENSIBLE);
+        let sub = ext.SubFormat;
+        // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT = {00000003-0000-0010-8000-00aa00389b71}
+        let ieee_float =
+            GUID::from_u128(0x00000003_0000_0010_8000_00aa00389b71);
+        let is_float = sub == ieee_float;
+        (wf.nChannels, wf.nSamplesPerSec, wf.wBitsPerSample, is_float)
+    } else {
+        // WAVE_FORMAT_IEEE_FLOAT = 3
+        let is_float = wf.wFormatTag == 3;
+        (wf.nChannels, wf.nSamplesPerSec, wf.wBitsPerSample, is_float)
+    }
+}
+
+/// WASAPI loopback 捕获循环(系统播放的音频)→ 喂给识别器
+fn capture_loop(
+    inner: &AudioEngineInner,
+    recognizer: &OnlineRecognizer,
+    app: &AppHandle,
+) -> Result<(), String> {
+    unsafe {
+        CoInitializeEx(None, COINIT_MULTITHREADED)
+            .ok()
+            .map_err(|e| format!("CoInitializeEx 失败: {e}"))?;
+
+        // 创建设备枚举器
+        let enumerator: IMMDeviceEnumerator = CoCreateInstance(
+            &windows::Win32::Media::Audio::MMDeviceEnumerator,
+            None,
+            CLSCTX_ALL,
+        )
+        .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) 失败: {e}"))?;
+
+        // 默认渲染端点(系统正在播放的设备)
+        let device = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .map_err(|e| format!("GetDefaultAudioEndpoint 失败: {e}"))?;
+
+        // 激活 IAudioClient
+        let audio_client: IAudioClient = device
+            .Activate(CLSCTX_ALL, None)
+            .map_err(|e| format!("Activate(IAudioClient) 失败: {e}"))?;
+
+        // 混合格式(通常 48kHz)
+        let mix_format = audio_client
+            .GetMixFormat()
+            .map_err(|e| format!("GetMixFormat 失败: {e}"))?;
+        let (channels, sample_rate, bits, is_float) = parse_format(mix_format);
+        eprintln!(
+            "[audio] mix format: {channels}ch {sample_rate}Hz {bits}bit float={is_float}"
+        );
+
+        // 初始化共享模式 loopback
+        audio_client
+            .Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK,
+                200_0000, // 200ms 缓冲(100ns 单位)
+                0,
+                mix_format,
+                None,
+            )
+            .map_err(|e| format!("Initialize(LOOPBACK) 失败: {e}"))?;
+
+        // 获取捕获客户端
+        let capture: IAudioCaptureClient = audio_client
+            .GetService()
+            .map_err(|e| format!("GetService(IAudioCaptureClient) 失败: {e}"))?;
+
+        // 重采样器:设备采样率 → 16k
+        let resampler = LinearResampler::create(sample_rate as i32, 16000)
+            .ok_or_else(|| format!("创建重采样器失败 ({sample_rate}→16000)"))?;
+
+        let stream = recognizer.create_stream();
+        let mut partial_last: String = String::new();
+        let mut last_emit = Instant::now();
+
+        audio_client.Start().map_err(|e| format!("Start 失败: {e}"))?;
+        eprintln!("[audio] loopback capture started");
+
+        let block_align = (bits / 8) as usize * channels as usize;
+
+        while inner.running.load(Ordering::SeqCst) {
+            let mut data_ptr: *mut u8 = std::ptr::null_mut();
+            let mut num_frames: u32 = 0;
+            let mut flags: u32 = 0;
+            let hr = capture.GetBuffer(
+                &mut data_ptr,
+                &mut num_frames,
+                &mut flags,
+                None,
+                None,
+            );
+            if hr.is_err() {
+                // 无数据等待
+                std::thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            if num_frames == 0 {
+                capture.ReleaseBuffer(num_frames).ok();
+                std::thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+
+            // 解析样本 → f32 单声道
+            let mut mono: Vec<f32> = Vec::with_capacity(num_frames as usize);
+            let raw = std::slice::from_raw_parts(data_ptr, num_frames as usize * block_align);
+            if is_float {
+                // float32 (4 字节)或 float64?按 bits 判断
+                if bits == 32 {
+                    for frame in raw.chunks_exact(block_align) {
+                        let mut sum = 0.0f32;
+                        for ch in 0..channels as usize {
+                            let off = ch * 4;
+                            let v = f32::from_le_bytes([
+                                frame[off],
+                                frame[off + 1],
+                                frame[off + 2],
+                                frame[off + 3],
+                            ]);
+                            sum += v;
+                        }
+                        mono.push(sum / channels as f32);
+                    }
+                } else if bits == 64 {
+                    for frame in raw.chunks_exact(block_align) {
+                        let mut sum = 0.0f64;
+                        for ch in 0..channels as usize {
+                            let off = ch * 8;
+                            let mut b = [0u8; 8];
+                            b.copy_from_slice(&frame[off..off + 8]);
+                            sum += f64::from_le_bytes(b);
+                        }
+                        mono.push((sum / channels as f64) as f32);
+                    }
+                } else {
+                    capture.ReleaseBuffer(num_frames).ok();
+                    return Err(format!("不支持的 float 位深: {bits}"));
+                }
+            } else if bits == 16 {
+                // int16 PCM
+                for frame in raw.chunks_exact(block_align) {
+                    let mut sum = 0.0f32;
+                    for ch in 0..channels as usize {
+                        let off = ch * 2;
+                        let v = i16::from_le_bytes([frame[off], frame[off + 1]]) as f32 / 32768.0;
+                        sum += v;
+                    }
+                    mono.push(sum / channels as f32);
+                }
+            } else {
+                capture.ReleaseBuffer(num_frames).ok();
+                return Err(format!("不支持的 PCM 位深: {bits}"));
+            }
+
+            capture.ReleaseBuffer(num_frames).ok();
+
+            // 重采样到 16k(flush=false,还有后续)
+            let resampled = resampler.resample(&mono, false);
+            if resampled.is_empty() {
+                continue;
+            }
+            stream.accept_waveform(16000, &resampled);
+
+            // 增量解码
+            while recognizer.is_ready(&stream) {
+                recognizer.decode(&stream);
+                if let Some(result) = recognizer.get_result(&stream) {
+                    let text = result.text.trim().to_string();
+                    // 增量文本变化(且足够新)才 emit,避免刷屏
+                    if !text.is_empty()
+                        && text != partial_last
+                        && last_emit.elapsed() >= Duration::from_millis(250)
+                    {
+                        partial_last = text.clone();
+                        last_emit = Instant::now();
+                        let _ = app.emit_to("main", "audio-partial", serde_json::json!({ "text": text }));
+                    }
+                    if recognizer.is_endpoint(&stream) {
+                        // 端点:定稿整句
+                        let final_text = result.text.trim().to_string();
+                        if !final_text.is_empty() {
+                            let _ = app.emit_to(
+                                "main",
+                                "audio-final",
+                                serde_json::json!({ "text": final_text }),
+                            );
+                        }
+                        recognizer.reset(&stream);
+                        partial_last.clear();
+                    }
+                }
+            }
+        }
+
+        let _ = audio_client.Stop();
+        eprintln!("[audio] capture loop stopped");
+    }
+    Ok(())
+}
+
+/// 结束时会话状态(Drop 时停线程)
+impl Drop for AudioEngineInner {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::SeqCst);
+    }
+}

@@ -7,6 +7,8 @@ use std::sync::Mutex;
 use rapidocr_core::RapidOcr;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
+mod audio;
+
 /// 管理 Ollama serve 子进程的生命周期:应用启动时 spawn,退出时杀进程树
 struct OllamaManager {
     child: Mutex<Option<Child>>,
@@ -68,6 +70,26 @@ fn greet(name: &str) -> String {
 fn ping() -> String {
     eprintln!("[ping] invoked");
     "pong".to_string()
+}
+
+// ============ 第7波:音频实时翻译 commands ============
+
+/// 启动系统内部音频实时识别(lang: zh/en/ja/ko/auto)
+#[tauri::command]
+fn audio_subtitle_start(lang: String, app: tauri::AppHandle) -> Result<(), String> {
+    audio::start(&lang, app)
+}
+
+/// 停止音频实时识别
+#[tauri::command]
+fn audio_subtitle_stop() {
+    audio::stop();
+}
+
+/// 查询音频识别是否运行中
+#[tauri::command]
+fn audio_subtitle_running() -> bool {
+    audio::is_running()
 }
 
 /// 全局缓存的 RapidOcr 实例:模型只加载一次,避免每次截图重复初始化(截图慢的主因)
@@ -361,7 +383,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window])
+        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");

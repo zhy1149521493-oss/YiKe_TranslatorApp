@@ -169,6 +169,15 @@ function MainWindow() {
   const [subRegion, setSubRegion] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [subCurrent, setSubCurrent] = useState<{ text: string; result: string } | null>(null); // 当前字幕(主窗口显示)
 
+  /* ===== 音频实时字幕(第 7 波:系统内部音频 → ASR → 翻译) ===== */
+  const [audioSubOn, setAudioSubOn] = useState(false);          // 音频字幕开关
+  const [audioLang, setAudioLang] = useState("auto");           // ASR 识别语言:auto/zh/en/ja/ko
+  const [audioStatus, setAudioStatus] = useState("");           // 音频字幕状态
+  const [audioPartial, setAudioPartial] = useState("");         // 增量识别文本(边说边出)
+  const audioTranslatingRef = useRef(false);                    // 翻译串行:翻译中跳过
+  const audioPendingRef = useRef("");                           // 待翻译的最新定稿句
+  const lastAudioTranslatedRef = useRef("");                    // 去重:上次已翻译文本
+
   const subRegionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const subTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ocrInFlightRef = useRef(false);                         // 上一帧 OCR 未返回则跳过
@@ -270,6 +279,92 @@ function MainWindow() {
 
   const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);
   useEffect(() => { subtitleOcrHandlerRef.current = handleSubtitleOcr; }, [handleSubtitleOcr]);
+
+  /* 音频字幕定稿句翻译:复用字幕显示链路(subtitle-text 事件 → 悬浮窗字幕页),串行防并发 */
+  const submitAudioSubtitle = useCallback(async (text: string) => {
+    if (audioTranslatingRef.current) { audioPendingRef.current = text; return; }
+    audioTranslatingRef.current = true;
+    try {
+      let src = sourceLang;
+      let tgt = targetLang;
+      if (src === "auto") src = detectLang(text);
+      if (src === tgt) tgt = src === "zh" ? "en" : "zh";
+      lastAudioTranslatedRef.current = text;
+      // 原文优先:先显示原文,译文流式替换
+      if (subModeRef.current === "ocr-first") {
+        const first = { text, result: "" };
+        appWindow.emitTo("floating", "subtitle-text", first).catch(() => {});
+        setSubCurrent(first);
+      }
+      let result = "";
+      await fetchOllamaStream(model, src, tgt, text, numCtx, (tok) => {
+        result += tok;
+        const p = { text, result };
+        appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
+        setSubCurrent(p);
+      });
+      if (!result.trim()) result = "(空响应)";
+      const p = { text, result };
+      await appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
+      setSubCurrent(p);
+      setAudioStatus("");
+    } catch (e: any) {
+      setAudioStatus(`❌ 翻译失败: ${e}`);
+    } finally {
+      audioTranslatingRef.current = false;
+      if (audioPendingRef.current) {
+        const t = audioPendingRef.current;
+        audioPendingRef.current = "";
+        submitAudioSubtitle(t);
+      }
+    }
+  }, [model, sourceLang, targetLang, numCtx]);
+
+  /* 音频字幕开关 */
+  const toggleAudioSubtitle = useCallback(async () => {
+    const next = !audioSubOn;
+    if (next) {
+      setAudioStatus("⏳ 正在加载 ASR 模型…");
+      try {
+        await invoke("audio_subtitle_start", { lang: audioLang });
+        setAudioSubOn(true);
+        // 弹悬浮窗并切到字幕页
+        await appWindow.emitTo("floating", "subtitle-state", "on").catch(() => {});
+        await invoke("open_floating_window").catch(() => {});
+      } catch (e: any) {
+        setAudioStatus(`❌ 启动失败: ${e}`);
+        setAudioSubOn(false);
+      }
+    } else {
+      try { await invoke("audio_subtitle_stop"); } catch {}
+      setAudioSubOn(false);
+      setAudioPartial("");
+      setAudioStatus("已停止");
+      await appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
+    }
+  }, [audioSubOn, audioLang]);
+
+  /* 监听音频字幕事件:audio-status(状态)/audio-partial(增量文本)/audio-final(定稿句→翻译) */
+  useEffect(() => {
+    const s = appWindow.listen<string>("audio-status", (e) => {
+      const msg = e.payload;
+      setAudioStatus(msg);
+      if (msg.startsWith("error")) setAudioSubOn(false);
+    });
+    const p = appWindow.listen<{ text: string }>("audio-partial", (e) => {
+      setAudioPartial(e.payload.text);
+    });
+    const f = appWindow.listen<{ text: string }>("audio-final", (e) => {
+      const text = e.payload.text.trim();
+      if (!text || text === lastAudioTranslatedRef.current) return;
+      setAudioPartial("");
+      submitAudioSubtitle(text);
+    });
+    return () => { s.then((fn) => fn()); p.then((fn) => fn()); f.then((fn) => fn()); };
+  }, [submitAudioSubtitle]);
+
+  const toggleAudioSubtitleRef = useRef(toggleAudioSubtitle);
+  useEffect(() => { toggleAudioSubtitleRef.current = toggleAudioSubtitle; }, [toggleAudioSubtitle]);
 
   /* 切换字幕开关(Ctrl+Shift+U、主界面按钮、悬浮窗按钮共用);
      开启时自动弹出悬浮窗并同步状态,悬浮窗切到字幕页 */
@@ -437,6 +532,8 @@ function MainWindow() {
         try { await invoke("open_screenshot_overlay", { from: "main" }); } catch {}
       } else if (e.payload === "toggle-subtitle") {
         toggleSubtitleRef.current();
+      } else if (e.payload === "toggle-audio-subtitle") {
+        toggleAudioSubtitleRef.current();
       }
     });
     return () => { u.then((f) => f()); };
@@ -609,6 +706,34 @@ function MainWindow() {
       </header>
 
       <main className="app-body">
+        {/* 音频实时字幕控制面板(第7波) */}
+        <div className={`subtitle-panel${audioSubOn ? " on" : ""}`}>
+          <div className="subtitle-panel-row">
+            <span className="subtitle-label">🎙️ 音频字幕</span>
+            <span className={`subtitle-status${audioSubOn ? " live" : ""}`}>
+              {audioSubOn ? "● 运行中" : "○ 已停止"} {audioStatus && <em className="subtitle-msg">· {audioStatus}</em>}
+            </span>
+            <button className="btn-float" onClick={toggleAudioSubtitle} title="开关系统内部音频实时识别(识别→翻译→悬浮窗显示)">
+              {audioSubOn ? "停止" : "开始"}
+            </button>
+            <label className="subtitle-mode">
+              <span>识别语言</span>
+              <select value={audioLang} onChange={(e) => setAudioLang(e.target.value)} title="音频识别语言:自动/中文/英语/日语/韩语(切换需重启)">
+                <option value="auto">自动(中英日)</option>
+                <option value="zh">中文</option>
+                <option value="en">英语</option>
+                <option value="ja">日语</option>
+                <option value="ko">韩语</option>
+              </select>
+            </label>
+          </div>
+          {audioSubOn && audioPartial && (
+            <div className="subtitle-current">
+              <div className="subtitle-current-src">🎙️ {audioPartial}</div>
+            </div>
+          )}
+        </div>
+
         {/* 视频实时字幕控制面板 */}
         <div className={`subtitle-panel${subtitleOn ? " on" : ""}`}>
           <div className="subtitle-panel-row">

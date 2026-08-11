@@ -35,5 +35,12 @@ windows = { version = "0.62", features = [
     "Storage_Streams",
     "Foundation",
     "Win32_System_Com",
+    # 音频:WASAPI loopback 捕获系统内部播放音频(第7波)
+    "Win32_Media_Audio",
+    "Win32_Foundation",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
 ] }
+# 第7波:流式语音识别 ASR(sherpa-onnx 官方预编译库自动下载,静态链接)
+sherpa-onnx = "1.13.5"
 
