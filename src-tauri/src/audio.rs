@@ -27,15 +27,48 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
 
-/// 全局音频引擎状态:None = 未启动
-static AUDIO_ENGINE: std::sync::OnceLock<Mutex<Option<Arc<AudioEngineInner>>>> =
+/// 全局音频引擎状态:按来源存(电脑音频 / 麦克风),None = 未启动
+static AUDIO_ENGINE: std::sync::OnceLock<Mutex<std::collections::HashMap<AudioSource, Arc<AudioEngineInner>>>> =
     std::sync::OnceLock::new();
 
-fn engine() -> std::sync::MutexGuard<'static, Option<Arc<AudioEngineInner>>> {
+fn engine() -> std::sync::MutexGuard<'static, std::collections::HashMap<AudioSource, Arc<AudioEngineInner>>> {
     AUDIO_ENGINE
-        .get_or_init(|| Mutex::new(None))
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
         .lock()
         .unwrap()
+}
+
+/// 音频来源
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum AudioSource {
+    /// 电脑内部音频(WASAPI loopback)
+    System,
+    /// 麦克风(捕获端点)
+    Mic,
+}
+
+impl AudioSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AudioSource::System => "system",
+            AudioSource::Mic => "mic",
+        }
+    }
+
+    pub fn from_str(s: &str) -> AudioSource {
+        match s {
+            "mic" => AudioSource::Mic,
+            _ => AudioSource::System,
+        }
+    }
+}
+
+/// 该来源对应的语音窗 label
+pub fn window_label(source: AudioSource) -> &'static str {
+    match source {
+        AudioSource::System => "audio-floating",
+        AudioSource::Mic => "audio-floating-mic",
+    }
 }
 
 /// 断句灵敏度(端点检测):每个语言独立数值(秒),主界面/悬浮窗/设置面板共享
@@ -68,44 +101,28 @@ pub fn get_sensitivity(lang: &str) -> f32 {
 pub fn set_sensitivity(lang: &str, value: f32, app: &AppHandle) {
     let clamped = if value.is_finite() { value.clamp(0.1, 5.0) } else { 1.2 };
     sensitivity_map().insert(lang.to_string(), clamped);
-    // 广播到主界面与语音窗(用 eval,跨窗口事件不可靠);广播 clamp 后的值,保证两端一致
+    // 广播到主界面与所有语音窗(用 eval,跨窗口事件不可靠);广播 clamp 后的值,保证两端一致
     let payload = serde_json::json!({ "lang": lang, "value": clamped }).to_string();
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.eval(&format!("window.__audioSensChanged && window.__audioSensChanged({payload})"));
-    }
-    if let Some(w) = app.get_webview_window("audio-floating") {
-        let _ = w.eval(&format!("window.__audioSensChanged && window.__audioSensChanged({payload})"));
+    for win in ["main", "audio-floating", "audio-floating-mic"] {
+        if let Some(w) = app.get_webview_window(win) {
+            let _ = w.eval(&format!("window.__audioSensChanged && window.__audioSensChanged({payload})"));
+        }
     }
     eprintln!("[audio] sensitivity {lang}={clamped} stored + broadcast");
 }
 
 /// 应用某语言的灵敏度(重启识别器使端点参数生效);由滑块松手时调用,避免拖动过程反复重启
 pub fn apply_sensitivity(lang: &str, app: &AppHandle) {
-    let running = engine().as_ref().map(|e| e.running.load(Ordering::SeqCst)).unwrap_or(false);
-    eprintln!("[audio] apply_sensitivity lang={lang} running={running}");
-    if !running {
-        return;
-    }
-    // 仅当正在识别的就是该语言才重启
-    let cur_lang = current_lang();
-    eprintln!("[audio] apply_sensitivity cur_lang={cur_lang}");
-    if cur_lang != lang {
-        return;
-    }
-    eprintln!("[audio] sensitivity applied, restarting recognizer (lang={lang})");
-    stop();
-    let _ = start(&lang, app.clone());
-}
-
-/// 当前正在识别的语言
-fn current_lang() -> String {
-    // 引擎不记录语言,通过模型目录推断
-    let cur = engine().clone();
-    if let Some(e) = cur {
-        // 简化:从 AudioEngineInner 读取(由 start 写入)
-        e.lang.lock().unwrap().clone()
-    } else {
-        String::new()
+    // 所有运行中的引擎,若其语言匹配则重启
+    for (source, e) in engine().clone() {
+        let running = e.running.load(Ordering::SeqCst);
+        let cur_lang = e.lang.lock().unwrap().clone();
+        eprintln!("[audio] apply_sensitivity source={:?} lang={lang} running={running} cur_lang={cur_lang}", source);
+        if running && cur_lang == lang {
+            eprintln!("[audio] sensitivity applied, restarting recognizer (source={:?} lang={lang})", source);
+            stop(source);
+            let _ = start(source, &lang, app.clone());
+        }
     }
 }
 
@@ -218,12 +235,13 @@ impl AudioEngineInner {
 }
 
 /// 启动音频实时识别
+/// - source: 音频来源(System=电脑内部音频 / Mic=麦克风)
 /// - lang: "zh" | "en" | "ja" | "ko" | "auto"
 /// 模型加载在后台线程执行(避免同步 command 阻塞 UI / C 库崩溃拖垮主进程);
-/// 加载结果通过 audio-status 事件上报("loading"→"ready"/"error:xxx")
-pub fn start(lang: &str, app: AppHandle) -> Result<(), String> {
-    // 已运行则先停掉
-    stop();
+/// 加载结果通过 audio-status 事件上报({source, status}:"loading"→"ready"/"error:xxx")
+pub fn start(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), String> {
+    // 已运行则先停掉(同来源)
+    stop(source);
 
     let lang = lang.to_string();
     let model_dir = model_dir_for_lang(&lang)
@@ -235,9 +253,8 @@ pub fn start(lang: &str, app: AppHandle) -> Result<(), String> {
     let run_app = app.clone();
     let inner2 = inner.clone();
     let handle = std::thread::spawn(move || {
-        eprintln!("[audio] thread start, emitting loading...");
-        let _ = run_app.emit_to("main", "audio-status", "loading");
-        eprintln!("[audio] emitting loading done");
+        eprintln!("[audio] thread start source={:?}, emitting loading...", source);
+        let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "loading" }));
         // 后台线程:扫描模型 + 加载识别器
         let loaded = (|| -> Result<OnlineRecognizer, String> {
             eprintln!("[audio] scanning model files...");
@@ -267,35 +284,34 @@ pub fn start(lang: &str, app: AppHandle) -> Result<(), String> {
             Err(e) => {
                 eprintln!("[audio] model load error: {e}");
                 inner2.running.store(false, Ordering::SeqCst);
-                let _ = run_app.emit_to("main", "audio-status", format!("error:{e}"));
+                let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": format!("error:{e}") }));
                 return;
             }
         };
-        let _ = run_app.emit_to("main", "audio-status", "ready");
+        let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "ready" }));
         // 捕获循环(内部含 ASR 喂数据)
-        let result = capture_loop(&inner2, &recognizer, &run_app);
+        let result = capture_loop(source, &inner2, &recognizer, &run_app);
         inner2.running.store(false, Ordering::SeqCst);
         match result {
             Ok(()) => {
-                let _ = run_app.emit_to("main", "audio-status", "stopped");
+                let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "stopped" }));
             }
             Err(e) => {
                 eprintln!("[audio] capture error: {e}");
-                let _ = run_app.emit_to("main", "audio-status", format!("error:{e}"));
+                let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": format!("error:{e}") }));
             }
         }
     });
 
     *inner.handle.lock().unwrap() = Some(handle);
-    *engine() = Some(inner);
-    let _ = app.emit_to("main", "audio-status", "ready");
+    engine().insert(source, inner);
     Ok(())
 }
 
-/// 停止音频识别
-pub fn stop() {
+/// 停止指定来源的音频识别
+pub fn stop(source: AudioSource) {
     let mut guard = engine();
-    if let Some(inner) = guard.take() {
+    if let Some(inner) = guard.remove(&source) {
         inner.running.store(false, Ordering::SeqCst);
         if let Some(h) = inner.handle.lock().unwrap().take() {
             let _ = h.join();
@@ -303,9 +319,17 @@ pub fn stop() {
     }
 }
 
-/// 查询是否在运行
-pub fn is_running() -> bool {
-    engine().as_ref().map(|e| e.running.load(Ordering::SeqCst)).unwrap_or(false)
+/// 停止所有来源的音频识别
+pub fn stop_all() {
+    let sources: Vec<AudioSource> = engine().keys().copied().collect();
+    for s in sources {
+        stop(s);
+    }
+}
+
+/// 查询指定来源是否在运行
+pub fn is_running(source: AudioSource) -> bool {
+    engine().get(&source).map(|e| e.running.load(Ordering::SeqCst)).unwrap_or(false)
 }
 
 // ============ WASAPI loopback 捕获 ============
@@ -329,8 +353,9 @@ unsafe fn parse_format(pwf: *const WAVEFORMATEX) -> (u16, u32, u16, bool) {
     }
 }
 
-/// WASAPI loopback 捕获循环(系统播放的音频)→ 喂给识别器
+/// WASAPI 捕获循环(电脑内部音频 loopback / 麦克风)→ 喂给识别器
 fn capture_loop(
+    source: AudioSource,
     inner: &AudioEngineInner,
     recognizer: &OnlineRecognizer,
     app: &AppHandle,
@@ -351,11 +376,15 @@ fn capture_loop(
         .map_err(|e| format!("CoCreateInstance(MMDeviceEnumerator) 失败: {e}"))?;
         eprintln!("[audio] capture_loop: enumerator OK");
 
-        // 默认渲染端点(系统正在播放的设备)
+        // 端点:电脑音频=默认渲染端点(loopback);麦克风=默认捕获端点
+        let (dataflow, role) = match source {
+            AudioSource::System => (eRender, eConsole),
+            AudioSource::Mic => (windows::Win32::Media::Audio::eCapture, eConsole),
+        };
         let device = enumerator
-            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .GetDefaultAudioEndpoint(dataflow, role)
             .map_err(|e| format!("GetDefaultAudioEndpoint 失败: {e}"))?;
-        eprintln!("[audio] capture_loop: device OK");
+        eprintln!("[audio] capture_loop: device OK (source={:?})", source);
 
         // 激活 IAudioClient
         let audio_client: IAudioClient = device
@@ -372,17 +401,21 @@ fn capture_loop(
             "[audio] mix format: {channels}ch {sample_rate}Hz {bits}bit float={is_float}"
         );
 
-        // 初始化共享模式 loopback
+        // 初始化共享模式:电脑音频带 LOOPBACK 回录标志;麦克风普通捕获
+        let stream_flags = match source {
+            AudioSource::System => AUDCLNT_STREAMFLAGS_LOOPBACK,
+            AudioSource::Mic => 0,
+        };
         audio_client
             .Initialize(
                 AUDCLNT_SHAREMODE_SHARED,
-                AUDCLNT_STREAMFLAGS_LOOPBACK,
+                stream_flags,
                 200_0000, // 200ms 缓冲(100ns 单位)
                 0,
                 mix_format,
                 None,
             )
-            .map_err(|e| format!("Initialize(LOOPBACK) 失败: {e}"))?;
+            .map_err(|e| format!("Initialize 失败: {e}"))?;
 
         // 获取捕获客户端
         let capture: IAudioCaptureClient = audio_client
@@ -396,6 +429,7 @@ fn capture_loop(
         let stream = recognizer.create_stream();
         let mut partial_last: String = String::new();
         let mut last_emit = Instant::now();
+        let mut last_level = Instant::now();   // 音量事件节流
 
         audio_client.Start().map_err(|e| format!("Start 失败: {e}"))?;
         eprintln!("[audio] loopback capture started");
@@ -404,6 +438,7 @@ fn capture_loop(
 
         let mut diag_frames: u64 = 0;   // 诊断:累计捕获帧数
         let mut diag_last = Instant::now();
+        let mut mic_diag_last = Instant::now(); // 麦克风样本诊断计时
 
         while inner.running.load(Ordering::SeqCst) {
             let mut data_ptr: *mut u8 = std::ptr::null_mut();
@@ -489,6 +524,31 @@ fn capture_loop(
 
             capture.ReleaseBuffer(num_frames).ok();
 
+            // 计算帧能量(RMS):用于音量显示(所有来源)
+            let energy: f32 = mono.iter().map(|s| s * s).sum::<f32>() / mono.len().max(1) as f32;
+            let level_db = (energy + 1e-10).log10() * 10.0; // dB 尺度,静音约 -100dB
+            // 音量事件:节流 ~100ms,供前端显示实时音量条(方便调试/确认有声音进来)
+            if last_level.elapsed() >= Duration::from_millis(100) {
+                last_level = Instant::now();
+                let _ = app.emit_to("main", "audio-level", serde_json::json!({ "source": source.as_str(), "level": level_db }));
+            }
+            // 诊断(仅麦克风,节流 1s):打印样本范围/均值,判断是静音/直流/正常语音
+            if source == AudioSource::Mic && mic_diag_last.elapsed() >= Duration::from_secs(1) {
+                mic_diag_last = Instant::now();
+                let mut min_s = f32::MAX;
+                let mut max_s = f32::MIN;
+                let mut mean_s = 0.0f32;
+                for &s in &mono {
+                    if s < min_s { min_s = s; }
+                    if s > max_s { max_s = s; }
+                    mean_s += s;
+                }
+                mean_s /= mono.len().max(1) as f32;
+                eprintln!("[audio] mic diag: energy={energy:.2e} rms_db={level_db:.1} min={min_s:.4} max={max_s:.4} mean={mean_s:.4} n={}", mono.len());
+            }
+            // 注:不做 VAD 跳帧——跳过静音帧会把音频切成碎片,破坏流式 ASR 连续性
+            // (麦克风曾因此识别出乱码碎片)。静音断句交给端点检测(rule2)处理。
+
             // 重采样到 16k(flush=false,还有后续)
             let resampled = resampler.resample(&mono, false);
             if resampled.is_empty() {
@@ -508,19 +568,19 @@ fn capture_loop(
                     {
                         partial_last = text.clone();
                         last_emit = Instant::now();
-                        eprintln!("[audio] partial: {text}");
-                        let r = app.emit_to("main", "audio-partial", serde_json::json!({ "text": text }));
+                        eprintln!("[audio] partial({:?}): {text}", source);
+                        let r = app.emit_to("main", "audio-partial", serde_json::json!({ "source": source.as_str(), "text": text }));
                         if let Err(e) = &r { eprintln!("[audio] emit audio-partial FAILED: {e}"); }
                     }
                     if recognizer.is_endpoint(&stream) {
                         // 端点:定稿整句
                         let final_text = result.text.trim().to_string();
                         if !final_text.is_empty() {
-                            eprintln!("[audio] final: {final_text}");
+                            eprintln!("[audio] final({:?}): {final_text}", source);
                             let r = app.emit_to(
                                 "main",
                                 "audio-final",
-                                serde_json::json!({ "text": final_text }),
+                                serde_json::json!({ "source": source.as_str(), "text": final_text }),
                             );
                             if let Err(e) = &r { eprintln!("[audio] emit audio-final FAILED: {e}"); }
                         }

@@ -74,22 +74,29 @@ fn ping() -> String {
 
 // ============ 第7波:音频实时翻译 commands ============
 
-/// 启动系统内部音频实时识别(lang: zh/en/ja/ko/auto)
+/// 启动音频实时识别(source: "system"=电脑音频 / "mic"=麦克风)
 #[tauri::command]
-fn audio_subtitle_start(lang: String, app: tauri::AppHandle) -> Result<(), String> {
-    audio::start(&lang, app)
+fn audio_subtitle_start(source: String, lang: String, app: tauri::AppHandle) -> Result<(), String> {
+    let src = audio::AudioSource::from_str(&source);
+    audio::start(src, &lang, app)
 }
 
-/// 停止音频实时识别
+/// 停止指定来源的音频识别(source: "system" / "mic";省略则全停)
 #[tauri::command]
-fn audio_subtitle_stop() {
-    audio::stop();
+fn audio_subtitle_stop(source: Option<String>) {
+    match source {
+        Some(s) => audio::stop(audio::AudioSource::from_str(&s)),
+        None => audio::stop_all(),
+    }
 }
 
-/// 查询音频识别是否运行中
+/// 查询指定来源是否运行中(source: "system" / "mic")
 #[tauri::command]
-fn audio_subtitle_running() -> bool {
-    audio::is_running()
+fn audio_subtitle_running(source: Option<String>) -> bool {
+    match source {
+        Some(s) => audio::is_running(audio::AudioSource::from_str(&s)),
+        None => audio::is_running(audio::AudioSource::System) || audio::is_running(audio::AudioSource::Mic),
+    }
 }
 
 /// 获取所有语言的断句灵敏度(秒)
@@ -296,36 +303,40 @@ fn close_floating_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 打开音频字幕独立语音窗(与视频字幕窗分开;窗口 setup 时已预建,这里只 show)
+/// 打开指定来源的语音窗(source: "system" / "mic";窗口 setup 时已预建,这里只 show)
 #[tauri::command]
-fn open_audio_floating_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window("audio-floating") {
+fn open_audio_floating_window(source: String, app: tauri::AppHandle) -> Result<(), String> {
+    let label = audio::window_label(audio::AudioSource::from_str(&source));
+    if let Some(w) = app.get_webview_window(label) {
         let _ = w.show();
         let _ = w.set_focus();
-        eprintln!("[audio-floating] shown");
+        eprintln!("[{label}] shown");
     }
     Ok(())
 }
 
-/// 关闭(隐藏)音频字幕独立语音窗
+/// 关闭(隐藏)指定来源的语音窗(source: "system" / "mic")
 #[tauri::command]
-fn close_audio_floating_window(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(w) = app.get_webview_window("audio-floating") {
-        eprintln!("[audio-floating] hiding...");
+fn close_audio_floating_window(source: String, app: tauri::AppHandle) -> Result<(), String> {
+    let label = audio::window_label(audio::AudioSource::from_str(&source));
+    if let Some(w) = app.get_webview_window(label) {
+        eprintln!("[{label}] hiding...");
         // 先清空内容,再隐藏(确保用户看不到残留)
         let _ = w.eval("window.__audioShow && window.__audioShow({text:'',src:'',tgt:'',result:''})");
         let _ = w.hide();
-        eprintln!("[audio-floating] hidden");
+        eprintln!("[{label}] hidden");
     } else {
-        eprintln!("[audio-floating] close: window not found");
+        eprintln!("[{label}] close: window not found");
     }
     Ok(())
 }
 
 /// 主窗口 → 语音窗中转:直接用 eval 注入 JS 到语音窗 webview
 /// (绕开 Tauri 事件系统——跨窗口 emit 在本环境不可靠,静默丢失)
+/// source: "system" → audio-floating 窗 / "mic" → audio-floating-mic 窗
 #[tauri::command]
 fn audio_forward_to_floating(
+    source: String,
     text: String,
     src: String,
     tgt: String,
@@ -333,11 +344,12 @@ fn audio_forward_to_floating(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     use tauri::Manager as _;
-    let has = app.get_webview_window("audio-floating").is_some();
+    let label = audio::window_label(audio::AudioSource::from_str(&source));
+    let has = app.get_webview_window(label).is_some();
     let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
-    eprintln!("[audio] forward: has={has} windows={labels:?} src={src} tgt={tgt} text_len={} result_len={}", text.chars().count(), result.chars().count());
-    let Some(w) = app.get_webview_window("audio-floating") else {
-        return Err("audio-floating 窗口不存在".to_string());
+    eprintln!("[audio] forward: to={label} has={has} windows={labels:?} src={src} tgt={tgt} text_len={} result_len={}", text.chars().count(), result.chars().count());
+    let Some(w) = app.get_webview_window(label) else {
+        return Err(format!("{label} 窗口不存在"));
     };
     // 转义 payload 为 JS 字符串(JSON 序列化后嵌入)
     let js_payload = serde_json::json!({ "text": text, "src": src, "tgt": tgt, "result": result }).to_string();
@@ -353,10 +365,11 @@ fn audio_forward_to_floating(
 ///  后者鼠标移出 WebView 后 mousemove 丢失。这里 GetCursorPos 轮询 + tauri set_position,
 ///  不依赖 WebView 事件,鼠标移出窗口仍可拖动)
 #[tauri::command]
-fn audio_floating_drag_begin(app: tauri::AppHandle) -> Result<(), String> {
+fn audio_floating_drag_begin(source: String, app: tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager as _;
-    let Some(w) = app.get_webview_window("audio-floating") else {
-        return Err("audio-floating 窗口不存在".to_string());
+    let label = audio::window_label(audio::AudioSource::from_str(&source));
+    let Some(w) = app.get_webview_window(label) else {
+        return Err(format!("{label} 窗口不存在"));
     };
     // 拖动进行中则忽略重复触发(防多线程并发竞争窗口位置)
     static DRAGGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -573,6 +586,19 @@ pub fn run() {
                 // 音频字幕独立语音窗(右下角,透明置顶;与视频字幕窗分开)
                 let _ = WebviewWindowBuilder::new(handle, "audio-floating", WebviewUrl::App("index.html".into()))
                     .title("语音窗")
+                    .inner_size(380.0, 220.0)
+                    .min_inner_size(280.0, 160.0)
+                    .resizable(false)
+                    .decorations(false)
+                    .transparent(true)
+                    .always_on_top(true)
+                    .skip_taskbar(true)
+                    .shadow(false)
+                    .visible(false)
+                    .build();
+                // 麦克风语音窗(独立窗口,与电脑音频窗分开)
+                let _ = WebviewWindowBuilder::new(handle, "audio-floating-mic", WebviewUrl::App("index.html".into()))
+                    .title("麦克风语音窗")
                     .inner_size(380.0, 220.0)
                     .min_inner_size(280.0, 160.0)
                     .resizable(false)

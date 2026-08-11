@@ -170,10 +170,18 @@ function MainWindow() {
   const [subCurrent, setSubCurrent] = useState<{ text: string; result: string } | null>(null); // 当前字幕(主窗口显示)
 
   /* ===== 音频实时字幕(第 7 波:系统内部音频 → ASR → 翻译) ===== */
-  const [audioSubOn, setAudioSubOn] = useState(false);          // 音频字幕开关
-  const [audioStatus, setAudioStatus] = useState("");           // 音频字幕状态
-  const [audioPartial, setAudioPartial] = useState("");         // 增量识别文本(边说边出)
+  const [audioMode, setAudioMode] = useState<"system" | "mic" | "both">("system"); // 音频来源模式
+  const [audioSubOn, setAudioSubOn] = useState<Record<string, boolean>>({});       // 各来源开关
+  const [audioStatus, setAudioStatus] = useState<Record<string, string>>({});      // 各来源状态
+  const [audioPartial, setAudioPartial] = useState<Record<string, string>>({});    // 各来源增量文本
+  const [audioLevel, setAudioLevel] = useState<Record<string, number>>({});        // 各来源实时音量(dB)
   const [sensitivities, setSensitivities] = useState<Record<string, number>>({}); // 各语言断句灵敏度(秒)
+
+  // 便捷访问:某来源是否运行 / 状态 / 增量文本
+  const isSrcOn = (src: string) => !!audioSubOn[src];
+  const srcStatus = (src: string) => audioStatus[src] ?? "";
+  const srcPartial = (src: string) => audioPartial[src] ?? "";
+  const srcLevel = (src: string) => audioLevel[src] ?? -100;
 
   /* 读取某语言灵敏度(懒加载:首次从 Rust 拉全部) */
   const sensitivityForLang = (lang: string): number | undefined => {
@@ -203,10 +211,10 @@ function MainWindow() {
     (window as any).__audioSensChanged = handler;
     return () => { delete (window as any).__audioSensChanged; };
   }, []);
-  const audioTranslatingRef = useRef(false);                    // 翻译串行:翻译中跳过
-  const audioPendingRef = useRef("");                           // 待翻译的最新增量文本(最新优先)
-  const audioFinalRef = useRef("");                             // 当前定稿句(端点定稿后锁定)
-  const lastAudioTranslatedRef = useRef("");                    // 去重:上次已翻译文本
+  const audioTranslatingRef = useRef<Record<string, boolean>>({});  // 各来源翻译串行标志
+  const audioPendingRef = useRef<Record<string, string>>({});       // 各来源待翻译的最新文本
+  const audioFinalRef = useRef<Record<string, string>>({});         // 各来源当前定稿句
+  const lastAudioTranslatedRef = useRef<Record<string, string>>({}); // 各来源去重
 
   const subRegionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const subTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -310,107 +318,159 @@ function MainWindow() {
   const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);
   useEffect(() => { subtitleOcrHandlerRef.current = handleSubtitleOcr; }, [handleSubtitleOcr]);
 
-  /* 音频字幕翻译:原文实时增长 + 译文完成后整体替换(保留旧译文,不闪)
+  /* 音频字幕翻译(source: 来源):原文实时增长 + 译文完成后整体替换(保留旧译文,不闪)
      增量时 result="" 只更新原文;译文完成时 result 非空整体替换 */
-  const submitAudioSubtitle = useCallback(async (text: string) => {
+  const submitAudioSubtitle = useCallback(async (source: string, text: string) => {
     if (!text.trim()) return;
-    if (audioTranslatingRef.current) { audioPendingRef.current = text; return; }
-    audioTranslatingRef.current = true;
+    if (audioTranslatingRef.current[source]) { audioPendingRef.current[source] = text; return; }
+    audioTranslatingRef.current[source] = true;
     try {
       let src = sourceLang;
       let tgt = targetLang;
       if (src === "auto") src = detectLang(text);
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
-      lastAudioTranslatedRef.current = text;
+      lastAudioTranslatedRef.current[source] = text;
       // 只更新原文(保留旧译文),译文完成后再整体替换
       const send = (result: string) =>
-        invoke("audio_forward_to_floating", { text, src, tgt, result }).catch((e) => {
-          setAudioStatus(`❌ 转发失败: ${JSON.stringify(e)}`);
+        invoke("audio_forward_to_floating", { source, text, src, tgt, result }).catch((e) => {
+          setAudioStatus((prev) => ({ ...prev, [source]: `❌ 转发失败: ${JSON.stringify(e)}` }));
         });
       await send("");
       let result = await fetchOllamaFull(model, src, tgt, text, numCtx);
       if (!result.trim()) result = "(空响应)";
       await send(result);
-      setAudioStatus("");
+      setAudioStatus((prev) => ({ ...prev, [source]: "" }));
     } catch (e: any) {
-      setAudioStatus(`❌ 翻译失败: ${e}`);
+      setAudioStatus((prev) => ({ ...prev, [source]: `❌ 翻译失败: ${e}` }));
     } finally {
-      audioTranslatingRef.current = false;
+      audioTranslatingRef.current[source] = false;
       // 翻译期间来了新字:立刻翻译最新的(最新优先,跳过中间态)
-      if (audioPendingRef.current) {
-        const t = audioPendingRef.current;
-        audioPendingRef.current = "";
-        submitAudioSubtitle(t);
+      if (audioPendingRef.current[source]) {
+        const t = audioPendingRef.current[source];
+        audioPendingRef.current[source] = "";
+        submitAudioSubtitle(source, t);
       }
     }
   }, [model, sourceLang, targetLang, numCtx]);
 
-  /* 音频字幕开关(与视频字幕互斥:开音频自动关视频) */
+  /* 模式对应的来源列表 */
+  const sourcesForMode = useCallback((mode: string): string[] => {
+    if (mode === "both") return ["system", "mic"];
+    return [mode];
+  }, []);
+
+  /* 音频字幕开关:按当前模式启动/停止对应来源(与视频字幕互斥) */
   const toggleAudioSubtitle = useCallback(async () => {
-    const next = !audioSubOn;
-    if (next) {
-      // 互斥:先关视频字幕
+    const anyOn = sourcesForMode(audioMode).some((s) => !!audioSubOn[s]);
+    if (!anyOn) {
+      // 启动当前模式的所有来源
       setSubtitleOn(false);
       appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
-      setAudioStatus("⏳ 正在加载 ASR 模型…");
-      try {
-        // 语言跟随主面板:非 auto 才指定 ASR 模型语言(auto 用 8 语模型自动识别)
-        const asrLang = sourceLang === "auto" ? "auto" : sourceLang;
-        await invoke("audio_subtitle_start", { lang: asrLang });
-        setAudioSubOn(true);
-        // 打开独立语音窗
-        await invoke("open_audio_floating_window").catch(() => {});
-      } catch (e: any) {
-        setAudioStatus(`❌ 启动失败: ${e}`);
-        setAudioSubOn(false);
+      const asrLang = sourceLang === "auto" ? "auto" : sourceLang;
+      for (const src of sourcesForMode(audioMode)) {
+        setAudioStatus((prev) => ({ ...prev, [src]: "⏳ 正在加载 ASR 模型…" }));
+        try {
+          await invoke("audio_subtitle_start", { source: src, lang: asrLang });
+          setAudioSubOn((prev) => ({ ...prev, [src]: true }));
+          await invoke("open_audio_floating_window", { source: src }).catch(() => {});
+        } catch (e: any) {
+          setAudioStatus((prev) => ({ ...prev, [src]: `❌ 启动失败: ${e}` }));
+          setAudioSubOn((prev) => ({ ...prev, [src]: false }));
+        }
       }
     } else {
-      try { await invoke("audio_subtitle_stop"); } catch {}
-      setAudioSubOn(false);
-      setAudioPartial("");
-      audioFinalRef.current = "";
-      setAudioStatus("已停止");
-      await invoke("close_audio_floating_window").catch(() => {});
+      // 停止当前模式的所有来源
+      for (const src of sourcesForMode(audioMode)) {
+        try { await invoke("audio_subtitle_stop", { source: src }); } catch {}
+        setAudioSubOn((prev) => ({ ...prev, [src]: false }));
+        setAudioPartial((prev) => ({ ...prev, [src]: "" }));
+        audioFinalRef.current[src] = "";
+        setAudioStatus((prev) => ({ ...prev, [src]: "已停止" }));
+        await invoke("close_audio_floating_window", { source: src }).catch(() => {});
+      }
     }
-  }, [audioSubOn, sourceLang]);
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode]);
 
-  /* 监听音频字幕事件:audio-status/audio-partial(增量→累积翻译)/audio-final(定稿→停顿后清空) */
+  /* 切换音频来源模式:运行中切换 = 自动关旧来源+启新来源(不停止);
+     停止状态切换 = 仅改模式选择 */
+  const changeAudioMode = useCallback(async (mode: "system" | "mic" | "both") => {
+    const oldOn = sourcesForMode(audioMode).some((s) => !!audioSubOn[s]);
+    setAudioMode(mode);
+    if (!oldOn) return; // 没在运行,只改选择
+    // 运行中:先停不在新模式里的来源 + 关其窗
+    const oldSrcs = sourcesForMode(audioMode);
+    const newSrcs = sourcesForMode(mode);
+    for (const src of oldSrcs) {
+      if (!newSrcs.includes(src)) {
+        try { await invoke("audio_subtitle_stop", { source: src }); } catch {}
+        setAudioSubOn((prev) => ({ ...prev, [src]: false }));
+        setAudioPartial((prev) => ({ ...prev, [src]: "" }));
+        audioFinalRef.current[src] = "";
+        setAudioStatus((prev) => ({ ...prev, [src]: "已停止" }));
+        await invoke("close_audio_floating_window", { source: src }).catch(() => {});
+      }
+    }
+    // 再启动新模式里新增的来源 + 开其窗
+    const asrLang = sourceLang === "auto" ? "auto" : sourceLang;
+    for (const src of newSrcs) {
+      if (!oldSrcs.includes(src)) {
+        setAudioStatus((prev) => ({ ...prev, [src]: "⏳ 正在加载 ASR 模型…" }));
+        try {
+          await invoke("audio_subtitle_start", { source: src, lang: asrLang });
+          setAudioSubOn((prev) => ({ ...prev, [src]: true }));
+          await invoke("open_audio_floating_window", { source: src }).catch(() => {});
+        } catch (e: any) {
+          setAudioStatus((prev) => ({ ...prev, [src]: `❌ 启动失败: ${e}` }));
+          setAudioSubOn((prev) => ({ ...prev, [src]: false }));
+        }
+      }
+    }
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode]);
+
+  /* 监听音频字幕事件(带 source):status/partial/final */
   useEffect(() => {
-    const s = appWindow.listen<string>("audio-status", (e) => {
-      const msg = e.payload;
-      setAudioStatus(msg);
-      if (msg.startsWith("error")) setAudioSubOn(false);
-      if (msg === "stopped") { setAudioSubOn(false); setAudioPartial(""); }
+    const s = appWindow.listen<{ source: string; status: string }>("audio-status", (e) => {
+      const { source, status } = e.payload;
+      setAudioStatus((prev) => ({ ...prev, [source]: status }));
+      if (status.startsWith("error")) setAudioSubOn((prev) => ({ ...prev, [source]: false }));
+      if (status === "stopped") { setAudioSubOn((prev) => ({ ...prev, [source]: false })); setAudioPartial((prev) => ({ ...prev, [source]: "" })); }
       // apply 灵敏度重启识别器后会再发 ready,恢复运行状态(不误显示"已停止")
-      if (msg === "ready") { setAudioSubOn(true); }
+      if (status === "ready") { setAudioSubOn((prev) => ({ ...prev, [source]: true })); }
     });
-    const p = appWindow.listen<{ text: string }>("audio-partial", (e) => {
-      const text = e.payload.text.trim();
-      setAudioPartial(text);
-      if (!text) return;
+    const p = appWindow.listen<{ source: string; text: string }>("audio-partial", (e) => {
+      const { source, text } = e.payload;
+      const trimmed = text.trim();
+      setAudioPartial((prev) => ({ ...prev, [source]: trimmed }));
+      if (!trimmed) return;
       // 与当前定稿句不同才触发累积翻译(同一句内增量变化都要翻,译文跟着增长)
-      if (text !== audioFinalRef.current) {
-        submitAudioSubtitle(text);
+      if (trimmed !== audioFinalRef.current[source]) {
+        submitAudioSubtitle(source, trimmed);
       }
     });
-    const f = appWindow.listen<{ text: string }>("audio-final", (e) => {
-      const text = e.payload.text.trim();
-      if (!text) return;
-      audioFinalRef.current = text;
-      submitAudioSubtitle(text);
+    const f = appWindow.listen<{ source: string; text: string }>("audio-final", (e) => {
+      const { source, text } = e.payload;
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      audioFinalRef.current[source] = trimmed;
+      submitAudioSubtitle(source, trimmed);
       // 保留最后一句显示(暂停/停顿不清空),新句子到来时自动替换
-      setAudioPartial(text);
+      setAudioPartial((prev) => ({ ...prev, [source]: trimmed }));
     });
-    // 语音窗关闭:同步停止音频字幕
-    const closed = appWindow.listen("audio-floating-closed", () => {
-      setAudioSubOn(false);
-      setAudioPartial("");
-      audioFinalRef.current = "";
-      setAudioStatus("已停止(语音窗关闭)");
-      invoke("audio_subtitle_stop").catch(() => {});
+    // 实时音量事件(辅助调试麦克风/电脑音频是否有声音)
+    const lv = appWindow.listen<{ source: string; level: number }>("audio-level", (e) => {
+      setAudioLevel((prev) => ({ ...prev, [e.payload.source]: e.payload.level }));
+    });
+    // 语音窗关闭:同步停止该来源
+    const closed = appWindow.listen<{ source?: string }>("audio-floating-closed", (e) => {
+      const src = e.payload?.source ?? "system";
+      setAudioSubOn((prev) => ({ ...prev, [src]: false }));
+      setAudioPartial((prev) => ({ ...prev, [src]: "" }));
+      audioFinalRef.current[src] = "";
+      setAudioStatus((prev) => ({ ...prev, [src]: "已停止(语音窗关闭)" }));
+      invoke("audio_subtitle_stop", { source: src }).catch(() => {});
     });
     return () => {
-      s.then((fn) => fn()); p.then((fn) => fn()); f.then((fn) => fn()); closed.then((fn) => fn());
+      s.then((fn) => fn()); p.then((fn) => fn()); f.then((fn) => fn()); closed.then((fn) => fn()); lv.then((fn) => fn());
     };
   }, [submitAudioSubtitle]);
 
@@ -419,15 +479,23 @@ function MainWindow() {
 
   /* 切换字幕开关(Ctrl+Shift+U、主界面按钮、悬浮窗按钮共用);
      开启时自动弹出悬浮窗并同步状态,悬浮窗切到字幕页;与音频字幕互斥 */
+  const stopAllAudio = useCallback(() => {
+    // 停所有来源音频字幕 + 关所有语音窗
+    invoke("audio_subtitle_stop", { source: "system" }).catch(() => {});
+    invoke("audio_subtitle_stop", { source: "mic" }).catch(() => {});
+    invoke("close_audio_floating_window", { source: "system" }).catch(() => {});
+    invoke("close_audio_floating_window", { source: "mic" }).catch(() => {});
+    setAudioSubOn({});
+    setAudioPartial({});
+    setAudioStatus({});
+  }, []);
+
   const toggleSubtitle = useCallback(() => {
     setSubtitleOn((on) => {
       const next = !on;
       if (next) {
         // 互斥:开视频字幕自动关音频字幕
-        setAudioSubOn(false);
-        invoke("audio_subtitle_stop").catch(() => {});
-        setAudioPartial("");
-        invoke("close_audio_floating_window").catch(() => {});
+        stopAllAudio();
         ensureSubRegion();
         invoke("open_floating_window").catch(() => {});
         setFloatingOpen(true);
@@ -437,7 +505,7 @@ function MainWindow() {
       }
       return next;
     });
-  }, []);
+  }, [stopAllAudio]);
 
   const toggleSubtitleRef = useRef(toggleSubtitle);
   useEffect(() => { toggleSubtitleRef.current = toggleSubtitle; }, [toggleSubtitle]);
@@ -447,17 +515,14 @@ function MainWindow() {
     setSubtitleOn((on) => {
       if (on) return on;   // 已运行,幂等
       // 互斥:开视频字幕自动关音频字幕
-      setAudioSubOn(false);
-      invoke("audio_subtitle_stop").catch(() => {});
-      setAudioPartial("");
-      invoke("close_audio_floating_window").catch(() => {});
+      stopAllAudio();
       ensureSubRegion();
       invoke("open_floating_window").catch(() => {});
       setFloatingOpen(true);
       appWindow.emitTo("floating", "subtitle-state", "on").catch(() => {});
       return true;
     });
-  }, []);
+  }, [stopAllAudio]);
 
   /* 悬浮窗显式停止(幂等) */
   const stopSubtitle = useCallback(() => {
@@ -768,15 +833,24 @@ function MainWindow() {
 
       <main className="app-body">
         {/* 音频实时字幕控制面板(第7波) */}
-        <div className={`subtitle-panel${audioSubOn ? " on" : ""}`}>
+        <div className={`subtitle-panel${sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? " on" : ""}`}>
           <div className="subtitle-panel-row">
             <span className="subtitle-label">🎙️ 音频字幕</span>
-            <span className={`subtitle-status${audioSubOn ? " live" : ""}`}>
-              {audioSubOn ? "● 运行中" : "○ 已停止"} {audioStatus && <em className="subtitle-msg">· {audioStatus}</em>}
+            <span className={`subtitle-status${sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? " live" : ""}`}>
+              {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "● 运行中" : "○ 已停止"}
+              {sourcesForMode(audioMode).map((s) => srcStatus(s)).filter(Boolean).map((st, i) => <em key={i} className="subtitle-msg">· {st}</em>)}
             </span>
-            <button className="btn-float" onClick={toggleAudioSubtitle} title="开关系统内部音频实时识别(识别→翻译→独立语音窗显示;与视频字幕互斥)">
-              {audioSubOn ? "停止" : "开始"}
+            <button className="btn-float" onClick={toggleAudioSubtitle} title="开关音频实时识别(识别→翻译→独立语音窗显示;与视频字幕互斥)">
+              {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "停止" : "开始"}
             </button>
+            <label className="subtitle-mode">
+              <span>音频来源</span>
+              <select value={audioMode} onChange={(e) => changeAudioMode(e.target.value as "system" | "mic" | "both")} title="电脑音频=抓系统播放的声音;麦克风=抓麦克风;同时=两个都抓。运行中切换自动换来源,不停止">
+                <option value="system">电脑音频</option>
+                <option value="mic">麦克风</option>
+                <option value="both">电脑音频+麦克风</option>
+              </select>
+            </label>
             <span className="subtitle-region">识别语言:跟随主面板({LANGS.find((l) => l.code === sourceLang)?.label ?? sourceLang})</span>
           </div>
           <div className="subtitle-panel-row">
@@ -792,11 +866,25 @@ function MainWindow() {
               <b>{sensitivityForLang(sourceLang)?.toFixed(1) ?? 1.2}s</b>
             </label>
           </div>
-          {audioSubOn && audioPartial && (
-            <div className="subtitle-current">
-              <div className="subtitle-current-src">🎙️ {audioPartial}</div>
+          {/* 实时音量条(调试用:确认来源有声音进来;dB -100~0) */}
+          {sourcesForMode(audioMode).filter((s) => isSrcOn(s)).map((s) => (
+            <div key={`lvl-${s}`} className="subtitle-panel-row" style={{ alignItems: "center", gap: 8 }}>
+              <span className="subtitle-label" style={{ fontSize: 11 }}>{s === "mic" ? "🎤" : "🎙️"}音量</span>
+              <div style={{ flex: 1, height: 8, background: "var(--ios-separator)", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{
+                  height: "100%", width: `${Math.max(0, Math.min(100, ((srcLevel(s) + 100) / 100) * 100))}%`,
+                  background: srcLevel(s) > -40 ? "var(--ios-blue)" : "var(--ios-green)",
+                  transition: "width 80ms linear",
+                }} />
+              </div>
+              <b style={{ fontSize: 11, minWidth: 44 }}>{srcLevel(s).toFixed(1)}dB</b>
             </div>
-          )}
+          ))}
+          {sourcesForMode(audioMode).filter((s) => srcPartial(s)).map((s) => (
+            <div key={s} className="subtitle-current">
+              <div className="subtitle-current-src">{s === "mic" ? "🎤" : "🎙️"} {srcPartial(s)}</div>
+            </div>
+          ))}
         </div>
 
         {/* 视频实时字幕控制面板 */}
@@ -1019,7 +1107,10 @@ function FloatingWindow() {
 
 /* ============ 音频字幕独立语音窗(第7波) ============ */
 /* 与视频字幕窗分开:单独窗口,透明/置顶/可拖动,专显示音频识别原文+译文 */
+/* 电脑音频窗(label=audio-floating)与麦克风窗(label=audio-floating-mic)共用本组件 */
 function AudioFloatingWindow() {
+  const source = appWindow.label === "audio-floating-mic" ? "mic" : "system";
+  const isMic = source === "mic";
   const [trans, setTrans] = useState<{ text: string; src: string; tgt: string; result: string } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [opacity, setOpacity] = useState(0.88);
@@ -1085,9 +1176,9 @@ function AudioFloatingWindow() {
   const closeAndStop = () => {
     setTrans(null);
     // 通知主窗口更新状态(音频字幕已关)
-    appWindow.emitTo("main", "audio-floating-closed", "").catch(() => {});
-    invoke("close_audio_floating_window").catch(() => {});
-    invoke("audio_subtitle_stop").catch(() => {});
+    appWindow.emitTo("main", "audio-floating-closed", { source }).catch(() => {});
+    invoke("close_audio_floating_window", { source }).catch(() => {});
+    invoke("audio_subtitle_stop", { source }).catch(() => {});
   };
 
   /* 拖动:调用 Rust GetCursorPos 增量轮询(系统层,跟手;startDragging 对本窗口无效) */
@@ -1095,8 +1186,8 @@ function AudioFloatingWindow() {
   return (
     <div className="floating-root">
       <div className="floating-card" style={{ opacity }}>
-        <div className="floating-bar" onMouseDown={(e) => { if (!(e.target as HTMLElement).closest(".floating-actions")) { e.preventDefault(); invoke("audio_floating_drag_begin").catch(() => {}); } }}>
-          <span className="floating-title">🎙️ 语音</span>
+        <div className="floating-bar" onMouseDown={(e) => { if (!(e.target as HTMLElement).closest(".floating-actions")) { e.preventDefault(); invoke("audio_floating_drag_begin", { source }).catch(() => {}); } }}>
+          <span className="floating-title">{isMic ? "🎤 麦克风" : "🎙️ 电脑音频"}</span>
           <div className="floating-actions">
             <button
               className="floating-btn"
@@ -1317,7 +1408,7 @@ export default function App() {
   useEffect(() => { setLabel(appWindow.label); }, []);
 
   if (label === "floating") return <FloatingWindow />;
-  if (label === "audio-floating") return <AudioFloatingWindow />;
+  if (label === "audio-floating" || label === "audio-floating-mic") return <AudioFloatingWindow />;
   if (label === "screenshot-overlay") return <ScreenshotOverlay />;
   return <MainWindow />;
 }
