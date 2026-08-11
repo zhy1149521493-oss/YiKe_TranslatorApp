@@ -92,6 +92,24 @@ fn audio_subtitle_running() -> bool {
     audio::is_running()
 }
 
+/// 获取所有语言的断句灵敏度(秒)
+#[tauri::command]
+fn audio_get_sensitivities() -> std::collections::HashMap<String, f32> {
+    audio::all_sensitivities()
+}
+
+/// 设置某语言的断句灵敏度(秒):存值 + 广播联动(主界面/悬浮窗),不重启识别
+#[tauri::command]
+fn audio_set_sensitivity(lang: String, value: f32, app: tauri::AppHandle) {
+    audio::set_sensitivity(&lang, value, &app);
+}
+
+/// 应用某语言的灵敏度(重启识别器使端点生效);滑块松手时调用
+#[tauri::command]
+fn audio_apply_sensitivity(lang: String, app: tauri::AppHandle) {
+    audio::apply_sensitivity(&lang, &app);
+}
+
 /// 全局缓存的 RapidOcr 实例:模型只加载一次,避免每次截图重复初始化(截图慢的主因)
 static OCR_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<RapidOcr>>> = std::sync::OnceLock::new();
 
@@ -293,9 +311,108 @@ fn open_audio_floating_window(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn close_audio_floating_window(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(w) = app.get_webview_window("audio-floating") {
+        eprintln!("[audio-floating] hiding...");
+        // 先清空内容,再隐藏(确保用户看不到残留)
+        let _ = w.eval("window.__audioShow && window.__audioShow({text:'',src:'',tgt:'',result:''})");
         let _ = w.hide();
         eprintln!("[audio-floating] hidden");
+    } else {
+        eprintln!("[audio-floating] close: window not found");
     }
+    Ok(())
+}
+
+/// 主窗口 → 语音窗中转:直接用 eval 注入 JS 到语音窗 webview
+/// (绕开 Tauri 事件系统——跨窗口 emit 在本环境不可靠,静默丢失)
+#[tauri::command]
+fn audio_forward_to_floating(
+    text: String,
+    src: String,
+    tgt: String,
+    result: String,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    use tauri::Manager as _;
+    let has = app.get_webview_window("audio-floating").is_some();
+    let labels: Vec<String> = app.webview_windows().keys().cloned().collect();
+    eprintln!("[audio] forward: has={has} windows={labels:?} src={src} tgt={tgt} text_len={} result_len={}", text.chars().count(), result.chars().count());
+    let Some(w) = app.get_webview_window("audio-floating") else {
+        return Err("audio-floating 窗口不存在".to_string());
+    };
+    // 转义 payload 为 JS 字符串(JSON 序列化后嵌入)
+    let js_payload = serde_json::json!({ "text": text, "src": src, "tgt": tgt, "result": result }).to_string();
+    let js = format!("window.__audioShow && window.__audioShow({js_payload})");
+    w.eval(&js)
+        .map_err(|e| format!("eval 到语音窗失败: {e}"))?;
+    eprintln!("[audio] forward eval OK");
+    Ok(())
+}
+
+/// 语音窗系统级拖动:Rust 循环移动窗口直到鼠标释放
+/// (startDragging / 前端 setPosition 在本窗口均无效:前者系统拖拽被透明窗口吞,
+///  后者鼠标移出 WebView 后 mousemove 丢失。这里 GetCursorPos 轮询 + tauri set_position,
+///  不依赖 WebView 事件,鼠标移出窗口仍可拖动)
+#[tauri::command]
+fn audio_floating_drag_begin(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager as _;
+    let Some(w) = app.get_webview_window("audio-floating") else {
+        return Err("audio-floating 窗口不存在".to_string());
+    };
+    // 拖动进行中则忽略重复触发(防多线程并发竞争窗口位置)
+    static DRAGGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if DRAGGING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    // 用系统级 SetWindowPos 直接移动(无 IPC 延迟,比 tauri set_position 顺滑)
+    let hwnd0 = w.hwnd().map_err(|e| format!("获取窗口句柄失败: {e}"))?;
+    let hwnd_raw = hwnd0.0 as usize; // usize 可跨线程 Send
+    let pos0 = w.outer_position().map_err(|e| format!("读取窗口位置失败: {e}"))?;
+    std::thread::spawn(move || {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetCursorPos, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+        let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut core::ffi::c_void);
+        unsafe {
+            // 记录鼠标起点与窗口起点
+            let mut start = POINT::default();
+            let _ = GetCursorPos(&mut start);
+            let mut win_x = pos0.x;
+            let mut win_y = pos0.y;
+            let mut last_x = start.x;
+            let mut last_y = start.y;
+            // 循环:窗口位置 += 鼠标位移增量(系统级移动,无 IPC,跟手)
+            loop {
+                let mut p = POINT::default();
+                let _ = GetCursorPos(&mut p);
+                // 左键已释放 → 结束
+                if GetAsyncKeyState(0x01) & (0x8000u16 as i16) == 0 {
+                    break;
+                }
+                let dx = p.x - last_x;
+                let dy = p.y - last_y;
+                last_x = p.x;
+                last_y = p.y;
+                if dx != 0 || dy != 0 {
+                    win_x += dx;
+                    win_y += dy;
+                    let _ = SetWindowPos(
+                        hwnd,
+                        None,
+                        win_x,
+                        win_y,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(4));
+            }
+            DRAGGING.store(false, std::sync::atomic::Ordering::SeqCst);
+            eprintln!("[audio-floating] drag end");
+        }
+    });
     Ok(())
 }
 
@@ -404,7 +521,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running])
+        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");
@@ -486,7 +603,14 @@ pub fn run() {
                     .shadow(false)
                     .visible(false)
                     .build();
-                eprintln!("[setup] 预建隐藏窗口完成(floating / screenshot-overlay)");
+                eprintln!("[setup] 预建隐藏窗口完成(floating / screenshot-overlay / audio-floating)");
+                // 诊断:打印所有 webview window 的 label(确认 audio-floating 的 label)
+                let ww: Vec<String> = app
+                    .webview_windows()
+                    .iter()
+                    .map(|(l, _)| l.clone())
+                    .collect();
+                eprintln!("[setup] webview_windows: {ww:?}");
             }
 
             // 【全局快捷键:Rust 侧注册】

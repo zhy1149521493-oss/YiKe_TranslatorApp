@@ -40,6 +40,9 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
+    # 拖动语音窗:SetCapture/GetCursorPos/SetWindowPos/GetAsyncKeyState
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
 ] }
 # 第7波:流式语音识别 ASR(sherpa-onnx 官方预编译库自动下载,静态链接)
 sherpa-onnx = "1.13.5"

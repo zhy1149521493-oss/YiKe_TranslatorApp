@@ -173,6 +173,36 @@ function MainWindow() {
   const [audioSubOn, setAudioSubOn] = useState(false);          // 音频字幕开关
   const [audioStatus, setAudioStatus] = useState("");           // 音频字幕状态
   const [audioPartial, setAudioPartial] = useState("");         // 增量识别文本(边说边出)
+  const [sensitivities, setSensitivities] = useState<Record<string, number>>({}); // 各语言断句灵敏度(秒)
+
+  /* 读取某语言灵敏度(懒加载:首次从 Rust 拉全部) */
+  const sensitivityForLang = (lang: string): number | undefined => {
+    if (Object.keys(sensitivities).length === 0) return undefined;
+    return sensitivities[lang];
+  };
+  /* 设置某语言灵敏度:更新本地 + 写 Rust(Rust 广播到所有端,联动共享);松手时应用生效 */
+  const setSensitivityForLang = (lang: string, value: number) => {
+    setSensitivities((prev) => ({ ...prev, [lang]: value }));
+    invoke("audio_set_sensitivity", { lang, value }).catch(() => {});
+  };
+  /* 滑块松手:应用灵敏度(重启识别器使端点生效,拖动过程不反复重启) */
+  const applySensitivityForLang = (lang: string) => {
+    invoke("audio_apply_sensitivity", { lang }).catch(() => {});
+  };
+  /* 启动时加载灵敏度配置 */
+  useEffect(() => {
+    invoke<Record<string, number>>("audio_get_sensitivities")
+      .then((s) => setSensitivities(s))
+      .catch(() => {});
+  }, []);
+  /* 监听 Rust 广播:其他端(悬浮窗/设置)改了灵敏度,这里跟随 */
+  useEffect(() => {
+    const handler = (e: { lang: string; value: number }) => {
+      setSensitivities((prev) => ({ ...prev, [e.lang]: e.value }));
+    };
+    (window as any).__audioSensChanged = handler;
+    return () => { delete (window as any).__audioSensChanged; };
+  }, []);
   const audioTranslatingRef = useRef(false);                    // 翻译串行:翻译中跳过
   const audioPendingRef = useRef("");                           // 待翻译的最新增量文本(最新优先)
   const audioFinalRef = useRef("");                             // 当前定稿句(端点定稿后锁定)
@@ -280,7 +310,8 @@ function MainWindow() {
   const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);
   useEffect(() => { subtitleOcrHandlerRef.current = handleSubtitleOcr; }, [handleSubtitleOcr]);
 
-  /* 音频字幕翻译:原文逐字滚动 + 每次增量重翻整句(流式输出,串行+最新优先) */
+  /* 音频字幕翻译:原文实时增长 + 译文完成后整体替换(保留旧译文,不闪)
+     增量时 result="" 只更新原文;译文完成时 result 非空整体替换 */
   const submitAudioSubtitle = useCallback(async (text: string) => {
     if (!text.trim()) return;
     if (audioTranslatingRef.current) { audioPendingRef.current = text; return; }
@@ -291,18 +322,15 @@ function MainWindow() {
       if (src === "auto") src = detectLang(text);
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
       lastAudioTranslatedRef.current = text;
-      // 原文优先:先显示原文,译文流式替换
-      const first = { text, src, tgt, result: "" };
-      appWindow.emitTo("audio-floating", "audio-show-translation", first).catch(() => {});
-      let result = "";
-      await fetchOllamaStream(model, src, tgt, text, numCtx, (tok) => {
-        result += tok;
-        const p = { text, src, tgt, result };
-        appWindow.emitTo("audio-floating", "audio-show-translation", p).catch(() => {});
-      });
+      // 只更新原文(保留旧译文),译文完成后再整体替换
+      const send = (result: string) =>
+        invoke("audio_forward_to_floating", { text, src, tgt, result }).catch((e) => {
+          setAudioStatus(`❌ 转发失败: ${JSON.stringify(e)}`);
+        });
+      await send("");
+      let result = await fetchOllamaFull(model, src, tgt, text, numCtx);
       if (!result.trim()) result = "(空响应)";
-      const p = { text, src, tgt, result };
-      await appWindow.emitTo("audio-floating", "audio-show-translation", p).catch(() => {});
+      await send(result);
       setAudioStatus("");
     } catch (e: any) {
       setAudioStatus(`❌ 翻译失败: ${e}`);
@@ -346,19 +374,21 @@ function MainWindow() {
     }
   }, [audioSubOn, sourceLang]);
 
-  /* 监听音频字幕事件:audio-status(状态)/audio-partial(增量→逐字重翻)/audio-final(定稿) */
+  /* 监听音频字幕事件:audio-status/audio-partial(增量→累积翻译)/audio-final(定稿→停顿后清空) */
   useEffect(() => {
     const s = appWindow.listen<string>("audio-status", (e) => {
       const msg = e.payload;
       setAudioStatus(msg);
-      appWindow.emitTo("audio-floating", "audio-floating-status", msg).catch(() => {});
       if (msg.startsWith("error")) setAudioSubOn(false);
+      if (msg === "stopped") { setAudioSubOn(false); setAudioPartial(""); }
+      // apply 灵敏度重启识别器后会再发 ready,恢复运行状态(不误显示"已停止")
+      if (msg === "ready") { setAudioSubOn(true); }
     });
     const p = appWindow.listen<{ text: string }>("audio-partial", (e) => {
       const text = e.payload.text.trim();
       setAudioPartial(text);
       if (!text) return;
-      // 逐字翻译:与当前定稿句不同才触发重翻(同一句内的增量变化都要翻)
+      // 与当前定稿句不同才触发累积翻译(同一句内增量变化都要翻,译文跟着增长)
       if (text !== audioFinalRef.current) {
         submitAudioSubtitle(text);
       }
@@ -367,10 +397,21 @@ function MainWindow() {
       const text = e.payload.text.trim();
       if (!text) return;
       audioFinalRef.current = text;
-      setAudioPartial("");
       submitAudioSubtitle(text);
+      // 保留最后一句显示(暂停/停顿不清空),新句子到来时自动替换
+      setAudioPartial(text);
     });
-    return () => { s.then((fn) => fn()); p.then((fn) => fn()); f.then((fn) => fn()); };
+    // 语音窗关闭:同步停止音频字幕
+    const closed = appWindow.listen("audio-floating-closed", () => {
+      setAudioSubOn(false);
+      setAudioPartial("");
+      audioFinalRef.current = "";
+      setAudioStatus("已停止(语音窗关闭)");
+      invoke("audio_subtitle_stop").catch(() => {});
+    });
+    return () => {
+      s.then((fn) => fn()); p.then((fn) => fn()); f.then((fn) => fn()); closed.then((fn) => fn());
+    };
   }, [submitAudioSubtitle]);
 
   const toggleAudioSubtitleRef = useRef(toggleAudioSubtitle);
@@ -738,6 +779,19 @@ function MainWindow() {
             </button>
             <span className="subtitle-region">识别语言:跟随主面板({LANGS.find((l) => l.code === sourceLang)?.label ?? sourceLang})</span>
           </div>
+          <div className="subtitle-panel-row">
+            <label className="subtitle-fps">
+              断句灵敏度
+              <input
+                type="range" min="1" max="40" step="1"
+                value={Math.round((sensitivityForLang(sourceLang) ?? 1.2) * 10)}
+                onChange={(e) => setSensitivityForLang(sourceLang, Number(e.target.value) / 10)}
+                onPointerUp={() => applySensitivityForLang(sourceLang)}
+                title="识别停顿多久算一句结束(秒):数值越小越敏感,英语建议 0.3s"
+              />
+              <b>{sensitivityForLang(sourceLang)?.toFixed(1) ?? 1.2}s</b>
+            </label>
+          </div>
           {audioSubOn && audioPartial && (
             <div className="subtitle-current">
               <div className="subtitle-current-src">🎙️ {audioPartial}</div>
@@ -970,11 +1024,47 @@ function AudioFloatingWindow() {
   const [status, setStatus] = useState<string | null>(null);
   const [opacity, setOpacity] = useState(0.88);
   const [showSettings, setShowSettings] = useState(false);
+  // 断句灵敏度(共享):语言 → 秒
+  const [sens, setSens] = useState<Record<string, number>>({});
 
   useEffect(() => {
+    invoke<Record<string, number>>("audio_get_sensitivities").then((s) => setSens(s)).catch(() => {});
+  }, []);
+
+  /* 监听 Rust 广播:主界面/设置改了灵敏度,这里跟随 */
+  useEffect(() => {
+    const handler = (e: { lang: string; value: number }) => {
+      setSens((prev) => ({ ...prev, [e.lang]: e.value }));
+    };
+    (window as any).__audioSensChanged = handler;
+    return () => { delete (window as any).__audioSensChanged; };
+  }, []);
+
+  /* 修改灵敏度:写 Rust(广播到所有端);松手时应用生效 */
+  const changeSens = (lang: string, v: number) => {
+    setSens((prev) => ({ ...prev, [lang]: v }));
+    invoke("audio_set_sensitivity", { lang, value: v }).catch(() => {});
+  };
+  const applySens = (lang: string) => {
+    invoke("audio_apply_sensitivity", { lang }).catch(() => {});
+  };
+
+  useEffect(() => {
+    // Rust 侧通过 eval 调用 window.__audioShow(payload) 注入数据
+    // result 为空 → 只更新原文(保留旧译文);result 非空 → 整体替换(新译文直接换旧译文,不闪)
+    const show = (p: { text: string; src: string; tgt: string; result: string }) => {
+      if (!p.text) { setTrans(null); setStatus(null); return; } // 空 payload = 清空,准备下一句
+      if (!p.result) {
+        setTrans((prev) => (prev ? { ...prev, text: p.text } : { text: p.text, src: p.src, tgt: p.tgt, result: "" }));
+      } else {
+        setTrans({ text: p.text, src: p.src, tgt: p.tgt, result: p.result });
+      }
+      setStatus(null);
+    };
+    (window as any).__audioShow = show;
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
       "audio-show-translation",
-      (e) => { setTrans(e.payload); setStatus(null); }
+      (e) => show(e.payload)
     );
     const s = appWindow.listen<string>(
       "audio-floating-status",
@@ -982,15 +1072,30 @@ function AudioFloatingWindow() {
     );
     const c = appWindow.listen("audio-close-me", () => {
       setTrans(null);
-      invoke("close_audio_floating_window").catch(() => {});
+      closeAndStop();
     });
-    return () => { u.then((f) => f()); s.then((f) => f()); c.then((f) => f()); };
+    return () => {
+      u.then((f) => f()); s.then((f) => f()); c.then((f) => f());
+      delete (window as any).__audioShow;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /* 关闭语音窗并同步停止音频字幕 */
+  const closeAndStop = () => {
+    setTrans(null);
+    // 通知主窗口更新状态(音频字幕已关)
+    appWindow.emitTo("main", "audio-floating-closed", "").catch(() => {});
+    invoke("close_audio_floating_window").catch(() => {});
+    invoke("audio_subtitle_stop").catch(() => {});
+  };
+
+  /* 拖动:调用 Rust GetCursorPos 增量轮询(系统层,跟手;startDragging 对本窗口无效) */
 
   return (
     <div className="floating-root">
       <div className="floating-card" style={{ opacity }}>
-        <div className="floating-bar" onMouseDown={() => appWindow.startDragging()}>
+        <div className="floating-bar" onMouseDown={(e) => { if (!(e.target as HTMLElement).closest(".floating-actions")) { e.preventDefault(); invoke("audio_floating_drag_begin").catch(() => {}); } }}>
           <span className="floating-title">🎙️ 语音</span>
           <div className="floating-actions">
             <button
@@ -1002,7 +1107,7 @@ function AudioFloatingWindow() {
               ⚙
             </button>
             <button className="floating-close" title="关闭" onMouseDown={(e) => e.stopPropagation()}
-              onClick={() => { setTrans(null); invoke("close_audio_floating_window").catch(() => {}); }}>✕</button>
+              onClick={closeAndStop}>✕</button>
           </div>
         </div>
 
@@ -1012,6 +1117,22 @@ function AudioFloatingWindow() {
               透明度
               <input type="range" min="30" max="100" value={Math.round(opacity * 100)} onChange={(e) => setOpacity(Number(e.target.value) / 100)} />
             </label>
+            {/* 断句灵敏度:按语言独立,与主界面共享 */}
+            {[
+              ["auto", "自动"], ["zh", "中文"], ["en", "英语"], ["ja", "日语"], ["ko", "韩语"],
+            ].map(([code, name]) => (
+              <label key={code} style={{ fontSize: 11 }}>
+                {name}断句
+                <input
+                  type="range" min="1" max="40" step="1"
+                  value={Math.round((sens[code] ?? 1.2) * 10)}
+                  onChange={(e) => changeSens(code, Number(e.target.value) / 10)}
+                  onPointerUp={() => applySens(code)}
+                  title="停顿多久算一句结束(秒):数值越小越敏感"
+                />
+                <b>{(sens[code] ?? 1.2).toFixed(1)}s</b>
+              </label>
+            ))}
           </div>
         )}
 

@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sherpa_onnx::{LinearResampler, OnlineRecognizer, OnlineRecognizerConfig};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use windows::core::GUID;
 use windows::Win32::Media::Audio::{
@@ -36,6 +36,82 @@ fn engine() -> std::sync::MutexGuard<'static, Option<Arc<AudioEngineInner>>> {
         .get_or_init(|| Mutex::new(None))
         .lock()
         .unwrap()
+}
+
+/// 断句灵敏度(端点检测):每个语言独立数值(秒),主界面/悬浮窗/设置面板共享
+/// 默认:英语语速快用 0.3s,其余 1.2s
+static SENSITIVITY: std::sync::OnceLock<Mutex<std::collections::HashMap<String, f32>>> =
+    std::sync::OnceLock::new();
+
+fn sensitivity_map() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, f32>> {
+    SENSITIVITY
+        .get_or_init(|| {
+            let mut m = std::collections::HashMap::new();
+            m.insert("auto".to_string(), 1.2);
+            m.insert("zh".to_string(), 1.2);
+            m.insert("en".to_string(), 0.3);
+            m.insert("ja".to_string(), 1.2);
+            m.insert("ko".to_string(), 1.2);
+            Mutex::new(m)
+        })
+        .lock()
+        .unwrap()
+}
+
+/// 读取某语言的断句灵敏度(秒)
+pub fn get_sensitivity(lang: &str) -> f32 {
+    sensitivity_map().get(lang).copied().unwrap_or(1.2)
+}
+
+/// 设置某语言的断句灵敏度(秒):存值并广播到主界面/语音窗(联动)
+/// 不重启识别器(避免滑块拖动时反复停止);真正生效由 audio_apply_sensitivity 触发
+pub fn set_sensitivity(lang: &str, value: f32, app: &AppHandle) {
+    let clamped = if value.is_finite() { value.clamp(0.1, 5.0) } else { 1.2 };
+    sensitivity_map().insert(lang.to_string(), clamped);
+    // 广播到主界面与语音窗(用 eval,跨窗口事件不可靠);广播 clamp 后的值,保证两端一致
+    let payload = serde_json::json!({ "lang": lang, "value": clamped }).to_string();
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.eval(&format!("window.__audioSensChanged && window.__audioSensChanged({payload})"));
+    }
+    if let Some(w) = app.get_webview_window("audio-floating") {
+        let _ = w.eval(&format!("window.__audioSensChanged && window.__audioSensChanged({payload})"));
+    }
+    eprintln!("[audio] sensitivity {lang}={clamped} stored + broadcast");
+}
+
+/// 应用某语言的灵敏度(重启识别器使端点参数生效);由滑块松手时调用,避免拖动过程反复重启
+pub fn apply_sensitivity(lang: &str, app: &AppHandle) {
+    let running = engine().as_ref().map(|e| e.running.load(Ordering::SeqCst)).unwrap_or(false);
+    eprintln!("[audio] apply_sensitivity lang={lang} running={running}");
+    if !running {
+        return;
+    }
+    // 仅当正在识别的就是该语言才重启
+    let cur_lang = current_lang();
+    eprintln!("[audio] apply_sensitivity cur_lang={cur_lang}");
+    if cur_lang != lang {
+        return;
+    }
+    eprintln!("[audio] sensitivity applied, restarting recognizer (lang={lang})");
+    stop();
+    let _ = start(&lang, app.clone());
+}
+
+/// 当前正在识别的语言
+fn current_lang() -> String {
+    // 引擎不记录语言,通过模型目录推断
+    let cur = engine().clone();
+    if let Some(e) = cur {
+        // 简化:从 AudioEngineInner 读取(由 start 写入)
+        e.lang.lock().unwrap().clone()
+    } else {
+        String::new()
+    }
+}
+
+/// 获取所有语言的断句灵敏度
+pub fn all_sensitivities() -> std::collections::HashMap<String, f32> {
+    sensitivity_map().clone()
 }
 
 /// ASR 模型目录(E:\TranslatorApp\asr\)
@@ -128,13 +204,15 @@ fn scan_model_files(dir: &std::path::Path) -> Result<(String, String, String, St
 struct AudioEngineInner {
     running: AtomicBool,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+    lang: Mutex<String>,
 }
 
 impl AudioEngineInner {
-    fn new() -> Self {
+    fn new(lang: String) -> Self {
         Self {
             running: AtomicBool::new(false),
             handle: Mutex::new(None),
+            lang: Mutex::new(lang),
         }
     }
 }
@@ -151,7 +229,7 @@ pub fn start(lang: &str, app: AppHandle) -> Result<(), String> {
     let model_dir = model_dir_for_lang(&lang)
         .ok_or_else(|| format!("语言 {lang} 暂不支持音频识别(目前支持 中/英/日/韩)"))?;
 
-    let inner = Arc::new(AudioEngineInner::new());
+    let inner = Arc::new(AudioEngineInner::new(lang.clone()));
     inner.running.store(true, Ordering::SeqCst);
 
     let run_app = app.clone();
@@ -174,8 +252,9 @@ pub fn start(lang: &str, app: AppHandle) -> Result<(), String> {
             cfg.model_config.provider = Some("cpu".to_string());
             cfg.decoding_method = Some("greedy_search".to_string());
             cfg.enable_endpoint = true;
-            cfg.rule1_min_trailing_silence = 2.4;
-            cfg.rule2_min_trailing_silence = 1.2;
+            // 端点检测(断句):灵敏度按语言独立配置(用户可调,默认英语短停顿)
+            cfg.rule1_min_trailing_silence = 2.4;   // 长停顿必断
+            cfg.rule2_min_trailing_silence = get_sensitivity(&lang); // 断句灵敏度(用户可调)
             cfg.rule3_min_utterance_length = 0.0;
             eprintln!("[audio] creating OnlineRecognizer (loading model)...");
             let r = OnlineRecognizer::create(&cfg);
@@ -323,6 +402,9 @@ fn capture_loop(
 
         let block_align = (bits / 8) as usize * channels as usize;
 
+        let mut diag_frames: u64 = 0;   // 诊断:累计捕获帧数
+        let mut diag_last = Instant::now();
+
         while inner.running.load(Ordering::SeqCst) {
             let mut data_ptr: *mut u8 = std::ptr::null_mut();
             let mut num_frames: u32 = 0;
@@ -336,6 +418,10 @@ fn capture_loop(
             );
             if hr.is_err() {
                 // 无数据等待
+                if diag_last.elapsed() >= Duration::from_secs(1) {
+                    eprintln!("[audio] diag: GetBuffer err {:?} (1s, frames={diag_frames})", hr);
+                    diag_last = Instant::now();
+                }
                 std::thread::sleep(Duration::from_millis(5));
                 continue;
             }
@@ -343,6 +429,11 @@ fn capture_loop(
                 capture.ReleaseBuffer(num_frames).ok();
                 std::thread::sleep(Duration::from_millis(5));
                 continue;
+            }
+            diag_frames += num_frames as u64;
+            if diag_last.elapsed() >= Duration::from_secs(1) {
+                eprintln!("[audio] diag: got {num_frames} frames (total ~{diag_frames}/s)");
+                diag_last = Instant::now();
             }
 
             // 解析样本 → f32 单声道
@@ -417,17 +508,21 @@ fn capture_loop(
                     {
                         partial_last = text.clone();
                         last_emit = Instant::now();
-                        let _ = app.emit_to("main", "audio-partial", serde_json::json!({ "text": text }));
+                        eprintln!("[audio] partial: {text}");
+                        let r = app.emit_to("main", "audio-partial", serde_json::json!({ "text": text }));
+                        if let Err(e) = &r { eprintln!("[audio] emit audio-partial FAILED: {e}"); }
                     }
                     if recognizer.is_endpoint(&stream) {
                         // 端点:定稿整句
                         let final_text = result.text.trim().to_string();
                         if !final_text.is_empty() {
-                            let _ = app.emit_to(
+                            eprintln!("[audio] final: {final_text}");
+                            let r = app.emit_to(
                                 "main",
                                 "audio-final",
                                 serde_json::json!({ "text": final_text }),
                             );
+                            if let Err(e) = &r { eprintln!("[audio] emit audio-final FAILED: {e}"); }
                         }
                         recognizer.reset(&stream);
                         partial_last.clear();
