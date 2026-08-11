@@ -700,7 +700,7 @@ function FloatingWindow() {
 /* ============ 截图覆盖层 ============ */
 function ScreenshotOverlay() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rect = useRef({ sx: 0, sy: 0, ex: 0, ey: 0 });
+  const rect = useRef({ sx: 0, sy: 0, ex: 0, ey: 0 });   // 鼠标坐标(CSS 像素)
   const drawing = useRef(false);
   const sourceRef = useRef<string>("main");
   const bgImageRef = useRef<HTMLImageElement | null>(null); // 静态截图背景(视频区域显示为黑时的预览替代)
@@ -709,23 +709,30 @@ function ScreenshotOverlay() {
     const c = canvasRef.current;
     if (!c) return;
     const ctx = c.getContext("2d")!;
-    const dpr = window.devicePixelRatio || 1;
-    const W = window.innerWidth, H = window.innerHeight;
 
-    /* 重绘:背景图(若有)→ 半透明遮罩 → 选区挖空+描边 */
+    /* CSS 坐标 → 物理坐标(canvas 物理尺寸与背景图一致,用实际比例换算,不依赖 devicePixelRatio) */
+    const toPhys = (v: number) => v * (c.width / window.innerWidth);
+
+    /* 重绘:背景图 → 半透明遮罩 → 选区重画背景图(选区显示画面而非透明,避免透出下方黑屏视频)+描边 */
     const drawScene = () => {
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, W, H);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, c.width, c.height);
       const bg = bgImageRef.current;
-      if (bg) ctx.drawImage(bg, 0, 0, W, H);
+      if (bg) ctx.drawImage(bg, 0, 0, c.width, c.height);
       ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, W, H);
+      ctx.fillRect(0, 0, c.width, c.height);
       if (drawing.current) {
-        const rx = Math.min(rect.current.sx, rect.current.ex);
-        const ry = Math.min(rect.current.sy, rect.current.ey);
-        const rw = Math.abs(rect.current.ex - rect.current.sx);
-        const rh = Math.abs(rect.current.ey - rect.current.sy);
-        ctx.clearRect(rx, ry, rw, rh);
+        const sx = toPhys(rect.current.sx), sy = toPhys(rect.current.sy);
+        const ex = toPhys(rect.current.ex), ey = toPhys(rect.current.ey);
+        const rx = Math.min(sx, ex), ry = Math.min(sy, ey);
+        const rw = Math.abs(ex - sx), rh = Math.abs(ey - sy);
+        /* 选区:clip 后重画背景图(选区显示静态画面,不透明) */
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(rx, ry, rw, rh);
+        ctx.clip();
+        if (bg) ctx.drawImage(bg, 0, 0, c.width, c.height);
+        ctx.restore();
         ctx.strokeStyle = "#007aff";
         ctx.lineWidth = 2;
         ctx.strokeRect(rx, ry, rw, rh);
@@ -735,17 +742,26 @@ function ScreenshotOverlay() {
     /* 收到 overlay-start(窗口被显示)时初始化框选界面;from 由 Rust 事件传入 */
     const start = (payload: string) => {
       sourceRef.current = payload || "main";
-      c.width = window.innerWidth * dpr;
-      c.height = window.innerHeight * dpr;
+      /* 清空旧背景,避免第二次截图显示第一次的画面 */
+      bgImageRef.current = null;
       drawing.current = false;
       rect.current = { sx: 0, sy: 0, ex: 0, ey: 0 };
+      /* 初始 canvas 尺寸(背景加载后校准到截图物理尺寸) */
+      c.width = Math.round(window.innerWidth * (window.devicePixelRatio || 1));
+      c.height = Math.round(window.innerHeight * (window.devicePixelRatio || 1));
       drawScene();
       /* 加载静态截图当背景:透明窗口叠加在浏览器视频上时视频显示为黑(Win32 合成限制),
          用实时截图当预览,框选时就能看到画面内容(视频显示为静态帧) */
       invoke<string>("capture_fullscreen")
         .then((b64) => {
           const img = new Image();
-          img.onload = () => { bgImageRef.current = img; drawScene(); };
+          img.onload = () => {
+            bgImageRef.current = img;
+            /* canvas 物理尺寸与截图一致 → 1:1 显示,比例正确 */
+            c.width = img.naturalWidth;
+            c.height = img.naturalHeight;
+            drawScene();
+          };
           img.src = "data:image/png;base64," + b64;
         })
         .catch(() => { /* 加载失败则保持透明背景 */ });
@@ -773,10 +789,10 @@ function ScreenshotOverlay() {
       if (!drawing.current) return;
       drawing.current = false;
       const { sx, sy, ex, ey } = rect.current;
-      const x = Math.min(sx, ex) * dpr;
-      const y = Math.min(sy, ey) * dpr;
-      const w = Math.abs(ex - sx) * dpr;
-      const h = Math.abs(ey - sy) * dpr;
+      const x = Math.round(toPhys(Math.min(sx, ex)));
+      const y = Math.round(toPhys(Math.min(sy, ey)));
+      const w = Math.round(toPhys(Math.abs(ex - sx)));
+      const h = Math.round(toPhys(Math.abs(ey - sy)));
       if (w < 10 || h < 10) { hide(); return; }
       appWindow.emitTo("main", "screenshot-done", { x, y, w, h, source: sourceRef.current });
       hide();
