@@ -112,11 +112,8 @@ fn ocr_image_b64(b64: String) -> Result<String, String> {
 
 /// Windows 系统 OCR(Windows.Media.Ocr):
 /// unpackaged Tauri 应用可调用(已 PoC 验证);速度远超 RapidOCR,中文需系统语言包。
-/// 独立引擎,不影响截图翻译的 RapidOCR。
-/// 用 futures block_on + IntoFuture 阻塞等待(可在非 async 线程使用,调用方需先 CoInitializeEx)。
-fn win_ocr_bytes(bytes: &[u8]) -> Result<String, String> {
-    use std::future::IntoFuture;
-    use futures_executor::block_on;
+/// 独立引擎,不影响截图翻译的 RapidOCR。async 版本(在 Tauri 异步运行时执行,Poc 已验证可行)。
+async fn win_ocr_bytes(bytes: &[u8]) -> Result<String, String> {
     use windows::{
         Graphics::Imaging::BitmapDecoder,
         Media::Ocr::OcrEngine,
@@ -132,18 +129,14 @@ fn win_ocr_bytes(bytes: &[u8]) -> Result<String, String> {
     {
         let writer = DataWriter::CreateDataWriter(&stream).map_err(|e| format!("写器: {e}"))?;
         writer.WriteBytes(bytes).map_err(|e| format!("写字节: {e}"))?;
-        block_on(writer.StoreAsync().map_err(|e| format!("store: {e}"))?.into_future())
-            .map_err(|e| format!("store await: {e}"))?;
+        writer.StoreAsync().map_err(|e| format!("store: {e}"))?.await.map_err(|e| format!("store await: {e}"))?;
         writer.DetachStream().map_err(|e| format!("detach: {e}"))?;
     }
-    let decoder = block_on(BitmapDecoder::CreateAsync(&stream).map_err(|e| format!("解码器: {e}"))?.into_future())
-        .map_err(|e| format!("解码 await: {e}"))?;
-    let bitmap = block_on(decoder.GetSoftwareBitmapAsync().map_err(|e| format!("位图: {e}"))?.into_future())
-        .map_err(|e| format!("位图 await: {e}"))?;
+    let decoder = BitmapDecoder::CreateAsync(&stream).map_err(|e| format!("解码器: {e}"))?.await.map_err(|e| format!("解码 await: {e}"))?;
+    let bitmap = decoder.GetSoftwareBitmapAsync().map_err(|e| format!("位图: {e}"))?.await.map_err(|e| format!("位图 await: {e}"))?;
 
     // 识别
-    let result = block_on(engine.RecognizeAsync(&bitmap).map_err(|e| format!("识别: {e}"))?.into_future())
-        .map_err(|e| format!("识别 await: {e}"))?;
+    let result = engine.RecognizeAsync(&bitmap).map_err(|e| format!("识别: {e}"))?.await.map_err(|e| format!("识别 await: {e}"))?;
 
     let mut texts: Vec<String> = Vec::new();
     let lines = result.Lines().map_err(|e| format!("lines: {e}"))?;
@@ -159,16 +152,16 @@ fn win_ocr_bytes(bytes: &[u8]) -> Result<String, String> {
 async fn win_ocr_b64(b64: String) -> Result<String, String> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let bytes = STANDARD.decode(b64.trim()).map_err(|e| format!("解码: {e}"))?;
-    win_ocr_bytes(&bytes)
+    win_ocr_bytes(&bytes).await
 }
 
 /// 系统 OCR:从内存图像识别(字幕帧用,编码 PNG → win_ocr_bytes)
-fn win_ocr_from_image(img: &image::RgbaImage) -> Result<String, String> {
+async fn win_ocr_from_image(img: &image::RgbaImage) -> Result<String, String> {
     let mut buf = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgba8(img.clone())
         .write_to(&mut buf, image::ImageFormat::Png)
         .map_err(|e| format!("编码: {e}"))?;
-    win_ocr_bytes(buf.get_ref())
+    win_ocr_bytes(buf.get_ref()).await
 }
 
 /// 截全屏并编码为 base64 PNG:供截图 overlay 作为背景预览。
@@ -207,24 +200,25 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Resu
 
 /// 视频实时字幕:连续截帧 + OCR。
 /// engine: "win"=Windows 系统 OCR(快),默认/其他=RapidOCR。与截图翻译隔离(事件 subtitle-ocr)。
+/// async:系统 OCR 需在 Tauri 异步运行时执行(PoC 验证可行),裸线程 + block_on 会卡死。
 #[tauri::command]
-fn subtitle_frame(x: i32, y: i32, w: i32, h: i32, engine: Option<String>, app: tauri::AppHandle) -> Result<String, String> {
+async fn subtitle_frame(x: i32, y: i32, w: i32, h: i32, engine: Option<String>, app: tauri::AppHandle) -> Result<String, String> {
     use tauri::Emitter;
     let use_win = engine.as_deref() == Some("win");
-    let app2 = app.clone();
-    std::thread::spawn(move || {
-        // 系统 OCR 走 WinRT,线程需初始化 COM(MTA)
-        if use_win {
-            unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED); }
+    let result: String = match capture_region(x, y, w, h) {
+        Ok(cropped) => {
+            let r = if use_win {
+                win_ocr_from_image(&cropped).await
+            } else {
+                ocr_image(&cropped)
+            };
+            r.unwrap_or_else(|e| format!("ERROR: {e}"))
         }
-        let result: String = (|| {
-            let cropped = capture_region(x, y, w, h)?;
-            if use_win { win_ocr_from_image(&cropped) } else { ocr_image(&cropped) }
-        })().unwrap_or_else(|e| format!("ERROR: {e}"));
-        let preview: String = result.chars().take(120).collect();
-        eprintln!("[subtitle] frame ocr({}): {}", if use_win { "win" } else { "rapid" }, preview);
-        let _ = app2.emit_to("main", "subtitle-ocr", result);
-    });
+        Err(e) => format!("ERROR: {e}"),
+    };
+    let preview: String = result.chars().take(120).collect();
+    eprintln!("[subtitle] frame ocr({}): {}", if use_win { "win" } else { "rapid" }, preview);
+    let _ = app.emit_to("main", "subtitle-ocr", result);
     Ok("processing".into())
 }
 

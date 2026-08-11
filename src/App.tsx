@@ -249,9 +249,12 @@ function MainWindow() {
     }
   }, [model, sourceLang, targetLang, numCtx]);
 
-  /* 字幕 OCR 结果:去重 → 句子稳定(500ms 去抖)→ 提交翻译 */
+  /* 字幕 OCR 结果:去重 → 句子稳定(300ms 去抖)→ 提交翻译 */
   const handleSubtitleOcr = useCallback((text: string) => {
-    if (!text.trim() || text.startsWith("ERROR:")) return;
+    if (!text.trim() || text.startsWith("ERROR:")) {
+      if (text.startsWith("ERROR:")) setSubStatus(`⚠️ 字幕OCR: ${text.slice(7, 150)}`); // 错误可见,不再静默
+      return;
+    }
     if (similarity(text, lastSubOcrRef.current) >= 0.9) return;   // 同一句连续帧,跳过
     lastSubOcrRef.current = text;
     if (text === lastSubTranslatedRef.current) return;            // 已翻译过,跳过
@@ -268,11 +271,20 @@ function MainWindow() {
   const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);
   useEffect(() => { subtitleOcrHandlerRef.current = handleSubtitleOcr; }, [handleSubtitleOcr]);
 
-  /* 切换字幕开关(Ctrl+Shift+U 与按钮共用) */
+  /* 切换字幕开关(Ctrl+Shift+U、主界面按钮、悬浮窗按钮共用);
+     开启时自动弹出悬浮窗并同步状态,悬浮窗切到字幕页 */
   const toggleSubtitle = useCallback(() => {
     setSubtitleOn((on) => {
-      if (!on) ensureSubRegion();
-      return !on;
+      const next = !on;
+      if (next) {
+        ensureSubRegion();
+        invoke("open_floating_window").catch(() => {});
+        setFloatingOpen(true);
+        appWindow.emitTo("floating", "subtitle-state", "on").catch(() => {});
+      } else {
+        appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
+      }
+      return next;
     });
   }, []);
 
@@ -410,7 +422,8 @@ function MainWindow() {
       ocrInFlightRef.current = false;   // 允许下一帧
       subtitleOcrHandlerRef.current(e.payload);
     });
-    return () => { u.then((f) => f()); };
+    const t = appWindow.listen("subtitle-toggle", () => { toggleSubtitleRef.current(); }); // 悬浮窗 🎬 按钮
+    return () => { u.then((f) => f()); t.then((f) => f()); };
   }, []);
 
   /* ---- 截图 ---- */
@@ -666,6 +679,7 @@ function FloatingWindow() {
   const [mode, setMode] = useState<"trans" | "subtitle">("trans");   // 翻译页 / 字幕页
   const [subtitle, setSubtitle] = useState<{ text: string; result: string } | null>(null); // 视频字幕
   const [subStatus, setSubStatus] = useState<string | null>(null);   // 字幕状态提示
+  const [subRunning, setSubRunning] = useState(false);               // 字幕是否运行中(主窗口同步)
 
   useEffect(() => {
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
@@ -686,7 +700,16 @@ function FloatingWindow() {
       "subtitle-status",
       (e) => setSubStatus(e.payload)
     );
-    return () => { u.then((f) => f()); s.then((f) => f()); c.then((f) => f()); st.then((f) => f()); ss.then((f) => f()); };
+    // 主窗口字幕运行状态同步
+    const sr = appWindow.listen<string>(
+      "subtitle-state",
+      (e) => {
+        const on = e.payload === "on";
+        setSubRunning(on);
+        if (on) setMode("subtitle");
+      }
+    );
+    return () => { u.then((f) => f()); s.then((f) => f()); c.then((f) => f()); st.then((f) => f()); ss.then((f) => f()); sr.then((f) => f()); };
   }, []);
 
   const closeFloating = async () => {
@@ -701,9 +724,16 @@ function FloatingWindow() {
         <div className="floating-bar" onMouseDown={() => appWindow.startDragging()}>
           <span className="floating-title">{mode === "subtitle" ? "字幕" : "翻译"}</span>
           <div className="floating-actions">
-            <button className={`floating-btn${mode === "subtitle" ? " active" : ""}`} title="视频字幕页" onMouseDown={(e) => e.stopPropagation()}
-              onClick={() => setMode(mode === "subtitle" ? "trans" : "subtitle")}>
+            <button className={`floating-btn${subRunning ? " active" : ""}`} title={subRunning ? "停止视频字幕" : "开始视频字幕"} onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                if (subRunning) { setMode("trans"); } else { setMode("subtitle"); }
+                appWindow.emitTo("main", "subtitle-toggle").catch(() => {}); // 通知主窗口开始/停止
+              }}>
               🎬
+            </button>
+            <button className="floating-btn" title="调整字幕区域" onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => { invoke("open_screenshot_overlay", { from: "subtitle" }).catch(() => {}); }}>
+              🎯
             </button>
             <button className="floating-btn" title="截图翻译" onMouseDown={(e) => e.stopPropagation()}
               onClick={async () => { try { await invoke("open_screenshot_overlay", { from: "floating" }); } catch {} }}>
