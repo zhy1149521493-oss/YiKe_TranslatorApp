@@ -176,6 +176,9 @@ function MainWindow() {
   const lastSubTranslatedRef = useRef("");                      // 去重:上次已翻译文本
   const subModeRef = useRef(subMode);
   useEffect(() => { subModeRef.current = subMode; }, [subMode]);
+  const subPendingRef = useRef("");                             // 待翻译的最新文本(去抖用)
+  const subDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null); // 句子稳定延迟
+  const subDirtyRef = useRef(false);                            // 翻译期间来了新句子
 
   /* 默认字幕区域:画面底部 1/4(物理像素) */
   const ensureSubRegion = () => {
@@ -203,37 +206,63 @@ function MainWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subtitleOn, subFps]);
 
-  /* 字幕 OCR 结果:去重 → 串行翻译 → 推送到悬浮窗字幕页 */
-  const handleSubtitleOcr = useCallback(async (text: string) => {
-    if (!text.trim() || text.startsWith("ERROR:")) return;
-    if (similarity(text, lastSubOcrRef.current) >= 0.9) return;   // 同一句连续帧,跳过
-    lastSubOcrRef.current = text;
-    if (text === lastSubTranslatedRef.current) return;            // 已翻译过,跳过
-    if (subTranslatingRef.current) return;                        // 翻译串行:进行中跳过
+  /* 提交翻译(句子已稳定):流式输出译文,最多滞后一句 */
+  const submitSubtitle = useCallback(async (text: string) => {
+    if (subTranslatingRef.current) { subDirtyRef.current = true; return; }
     subTranslatingRef.current = true;
+    subDirtyRef.current = false;
     try {
       let src = sourceLang;
       let tgt = targetLang;
       if (src === "auto") src = detectLang(text);
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
-      // 原文优先:先显示原文,译文好了替换
+      lastSubTranslatedRef.current = text;
+      // 原文优先:先显示原文,译文流式替换
       if (subModeRef.current === "ocr-first") {
         const first = { text, result: "" };
         appWindow.emitTo("floating", "subtitle-text", first).catch(() => {});
         setSubCurrent(first);
       }
-      const result = await fetchOllamaFull(model, src, tgt, text, numCtx);
-      lastSubTranslatedRef.current = text;
-      const payload = { text, result };
-      await appWindow.emitTo("floating", "subtitle-text", payload).catch(() => {});
-      setSubCurrent(payload);
+      let result = "";
+      await fetchOllamaStream(model, src, tgt, text, numCtx, (tok) => {
+        result += tok;
+        const p = { text, result };
+        appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
+        setSubCurrent(p);
+      });
+      if (!result.trim()) result = "(空响应)";
+      const p = { text, result };
+      await appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
+      setSubCurrent(p);
       setSubStatus("");
     } catch (e: any) {
       setSubStatus(`❌ 翻译失败: ${e}`);
     } finally {
       subTranslatingRef.current = false;
+      // 翻译期间来了新句子:翻译最新的(跳过中间态)
+      if (subDirtyRef.current && subPendingRef.current) {
+        const t = subPendingRef.current;
+        subPendingRef.current = "";
+        submitSubtitle(t);
+      }
     }
   }, [model, sourceLang, targetLang, numCtx]);
+
+  /* 字幕 OCR 结果:去重 → 句子稳定(500ms 去抖)→ 提交翻译 */
+  const handleSubtitleOcr = useCallback((text: string) => {
+    if (!text.trim() || text.startsWith("ERROR:")) return;
+    if (similarity(text, lastSubOcrRef.current) >= 0.9) return;   // 同一句连续帧,跳过
+    lastSubOcrRef.current = text;
+    if (text === lastSubTranslatedRef.current) return;            // 已翻译过,跳过
+    // 去抖:字幕逐字增长(Hello→Hello World→...),等句子稳定再翻,避免中间态反复翻译
+    if (subDebounceRef.current) clearTimeout(subDebounceRef.current);
+    subPendingRef.current = text;
+    subDebounceRef.current = setTimeout(() => {
+      const t = subPendingRef.current;
+      if (!t) return;
+      submitSubtitle(t);
+    }, 500);
+  }, [submitSubtitle]);
 
   const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);
   useEffect(() => { subtitleOcrHandlerRef.current = handleSubtitleOcr; }, [handleSubtitleOcr]);
@@ -704,34 +733,38 @@ function ScreenshotOverlay() {
   const drawing = useRef(false);
   const sourceRef = useRef<string>("main");
   const bgImageRef = useRef<HTMLImageElement | null>(null); // 静态截图背景(视频区域显示为黑时的预览替代)
+  const loadTokenRef = useRef(0);                          // 防旧背景图异步返回覆盖新图(重影)
 
   useEffect(() => {
     const c = canvasRef.current;
     if (!c) return;
     const ctx = c.getContext("2d")!;
+    /* canvas 用 CSS 像素(innerWidth),背景图缩放到 CSS 尺寸:
+       canvas 像素数=CSS 数 → 浏览器按自身 DPR 渲染,与窗口完全一致,不会放大 */
+    const W = window.innerWidth, H = window.innerHeight;
 
-    /* CSS 坐标 → 物理坐标(canvas 物理尺寸与背景图一致,用实际比例换算,不依赖 devicePixelRatio) */
-    const toPhys = (v: number) => v * (c.width / window.innerWidth);
+    /* CSS 坐标 → 物理坐标(背景图物理尺寸 / 窗口 CSS 尺寸) */
+    const toPhys = (v: number) => Math.round(v * (bgImageRef.current ? bgImageRef.current.naturalWidth / W : (window.devicePixelRatio || 1)));
 
-    /* 重绘:背景图 → 半透明遮罩 → 选区重画背景图(选区显示画面而非透明,避免透出下方黑屏视频)+描边 */
+    /* 重绘:背景图 → 半透明遮罩 → 选区重画背景图(选区显示画面而非透明)+描边 */
     const drawScene = () => {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, c.width, c.height);
+      ctx.clearRect(0, 0, W, H);
       const bg = bgImageRef.current;
-      if (bg) ctx.drawImage(bg, 0, 0, c.width, c.height);
+      if (bg) ctx.drawImage(bg, 0, 0, W, H);
       ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.fillRect(0, 0, W, H);
       if (drawing.current) {
-        const sx = toPhys(rect.current.sx), sy = toPhys(rect.current.sy);
-        const ex = toPhys(rect.current.ex), ey = toPhys(rect.current.ey);
-        const rx = Math.min(sx, ex), ry = Math.min(sy, ey);
-        const rw = Math.abs(ex - sx), rh = Math.abs(ey - sy);
+        const rx = Math.min(rect.current.sx, rect.current.ex);
+        const ry = Math.min(rect.current.sy, rect.current.ey);
+        const rw = Math.abs(rect.current.ex - rect.current.sx);
+        const rh = Math.abs(rect.current.ey - rect.current.sy);
         /* 选区:clip 后重画背景图(选区显示静态画面,不透明) */
         ctx.save();
         ctx.beginPath();
         ctx.rect(rx, ry, rw, rh);
         ctx.clip();
-        if (bg) ctx.drawImage(bg, 0, 0, c.width, c.height);
+        if (bg) ctx.drawImage(bg, 0, 0, W, H);
         ctx.restore();
         ctx.strokeStyle = "#007aff";
         ctx.lineWidth = 2;
@@ -742,13 +775,13 @@ function ScreenshotOverlay() {
     /* 收到 overlay-start(窗口被显示)时初始化框选界面;from 由 Rust 事件传入 */
     const start = (payload: string) => {
       sourceRef.current = payload || "main";
-      /* 清空旧背景,避免第二次截图显示第一次的画面 */
+      /* 清空旧背景 + 递增 token:旧请求的图片加载完成后丢弃,避免重影 */
       bgImageRef.current = null;
+      const token = ++loadTokenRef.current;
       drawing.current = false;
       rect.current = { sx: 0, sy: 0, ex: 0, ey: 0 };
-      /* 初始 canvas 尺寸(背景加载后校准到截图物理尺寸) */
-      c.width = Math.round(window.innerWidth * (window.devicePixelRatio || 1));
-      c.height = Math.round(window.innerHeight * (window.devicePixelRatio || 1));
+      c.width = W;
+      c.height = H;
       drawScene();
       /* 加载静态截图当背景:透明窗口叠加在浏览器视频上时视频显示为黑(Win32 合成限制),
          用实时截图当预览,框选时就能看到画面内容(视频显示为静态帧) */
@@ -756,10 +789,8 @@ function ScreenshotOverlay() {
         .then((b64) => {
           const img = new Image();
           img.onload = () => {
+            if (loadTokenRef.current !== token) return;   // 过期请求,丢弃
             bgImageRef.current = img;
-            /* canvas 物理尺寸与截图一致 → 1:1 显示,比例正确 */
-            c.width = img.naturalWidth;
-            c.height = img.naturalHeight;
             drawScene();
           };
           img.src = "data:image/png;base64," + b64;
@@ -789,10 +820,10 @@ function ScreenshotOverlay() {
       if (!drawing.current) return;
       drawing.current = false;
       const { sx, sy, ex, ey } = rect.current;
-      const x = Math.round(toPhys(Math.min(sx, ex)));
-      const y = Math.round(toPhys(Math.min(sy, ey)));
-      const w = Math.round(toPhys(Math.abs(ex - sx)));
-      const h = Math.round(toPhys(Math.abs(ey - sy)));
+      const x = toPhys(Math.min(sx, ex));
+      const y = toPhys(Math.min(sy, ey));
+      const w = toPhys(Math.abs(ex - sx));
+      const h = toPhys(Math.abs(ey - sy));
       if (w < 10 || h < 10) { hide(); return; }
       appWindow.emitTo("main", "screenshot-done", { x, y, w, h, source: sourceRef.current });
       hide();
