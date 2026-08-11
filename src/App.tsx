@@ -249,13 +249,13 @@ function MainWindow() {
     }
   }, [model, sourceLang, targetLang, numCtx]);
 
-  /* 字幕 OCR 结果:去重 → 句子稳定(300ms 去抖)→ 提交翻译 */
+  /* 字幕 OCR 结果:去重 → 句子稳定(500ms 去抖)→ 提交翻译 */
   const handleSubtitleOcr = useCallback((text: string) => {
     if (!text.trim() || text.startsWith("ERROR:")) {
       if (text.startsWith("ERROR:")) setSubStatus(`⚠️ 字幕OCR: ${text.slice(7, 150)}`); // 错误可见,不再静默
       return;
     }
-    if (similarity(text, lastSubOcrRef.current) >= 0.9) return;   // 同一句连续帧,跳过
+    if (similarity(text, lastSubOcrRef.current) >= 0.95) return;   // 同一句连续帧/OCR抖动,跳过(0.95 防闪烁)
     lastSubOcrRef.current = text;
     if (text === lastSubTranslatedRef.current) return;            // 已翻译过,跳过
     // 去抖:字幕逐字增长(Hello→Hello World→...),等句子稳定再翻,避免中间态反复翻译
@@ -265,7 +265,7 @@ function MainWindow() {
       const t = subPendingRef.current;
       if (!t) return;
       submitSubtitle(t);
-    }, 300);
+    }, 500);
   }, [submitSubtitle]);
 
   const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);
