@@ -92,6 +92,20 @@ fn ocr_instance() -> Result<std::sync::MutexGuard<'static, Option<RapidOcr>>, St
     Ok(guard)
 }
 
+/// 截全屏并编码为 base64 PNG:供截图 overlay 作为背景预览。
+/// 不透明窗口 + 静态截图背景方案:框选层显示位图,不依赖透明窗口透出真实屏幕
+/// (透明窗口叠加硬件视频会显示黑屏),框选时能看到画面内容。
+#[tauri::command]
+fn capture_fullscreen() -> Result<String, String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let monitors = xcap::Monitor::all().map_err(|e| format!("获取显示器: {e}"))?;
+    let primary = monitors.into_iter().next().ok_or("未找到显示器")?;
+    let img = primary.capture_image().map_err(|e| format!("截屏: {e}"))?;
+    let mut buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Png).map_err(|e| format!("编码: {e}"))?;
+    Ok(STANDARD.encode(buf.get_ref()))
+}
+
 /// 截图 + OCR: xcap 截全屏 → 裁剪到区域 → 保存 png → OCR → 返回文本
 #[tauri::command]
 fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Result<String, String> {
@@ -269,7 +283,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window])
+        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");

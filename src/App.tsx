@@ -729,29 +729,86 @@ function FloatingWindow() {
 /* ============ 截图覆盖层 ============ */
 function ScreenshotOverlay() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const rect = useRef({ sx: 0, sy: 0, ex: 0, ey: 0 });
+  const rect = useRef({ sx: 0, sy: 0, ex: 0, ey: 0 });   // 鼠标坐标(CSS 像素)
   const drawing = useRef(false);
   const sourceRef = useRef<string>("main");
+  const bgImageRef = useRef<HTMLImageElement | null>(null); // 静态截图背景(方案2.2:不透明窗口显示位图)
+  const loadTokenRef = useRef(0);                          // 防旧请求异步返回覆盖新图(重影)
 
   useEffect(() => {
     const c = canvasRef.current;
     if (!c) return;
     const ctx = c.getContext("2d")!;
-    const dpr = window.devicePixelRatio || 1;
-    const W = window.innerWidth, H = window.innerHeight;
+    let dprReal = window.devicePixelRatio || 1;            // 实测 DPR:窗口物理宽 / CSS 宽
+    let cssW = window.innerWidth, cssH = window.innerHeight;
+
+    /* canvas 物理像素 = 截图物理像素;CSS 显示尺寸 = 物理 / dprReal
+       → canvas 每个像素精确对应屏幕 1 物理像素,不放大不缩小 */
+    const fitCanvas = (pw: number, ph: number) => {
+      cssW = pw / dprReal;
+      cssH = ph / dprReal;
+      c.width = pw;
+      c.height = ph;
+      c.style.width = cssW + "px";
+      c.style.height = cssH + "px";
+    };
+
+    /* CSS 坐标 → 物理坐标 */
+    const toPhys = (v: number) => Math.round(v * (c.width / (cssW || window.innerWidth)));
+
+    /* 重绘:背景图 → 半透明遮罩 → 选区重画背景图(选区显示画面而非透明)+描边 */
+    const drawScene = () => {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, c.width, c.height);
+      const bg = bgImageRef.current;
+      if (bg) ctx.drawImage(bg, 0, 0, c.width, c.height);
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(0, 0, c.width, c.height);
+      if (drawing.current) {
+        const sx = toPhys(rect.current.sx), sy = toPhys(rect.current.sy);
+        const ex = toPhys(rect.current.ex), ey = toPhys(rect.current.ey);
+        const rx = Math.min(sx, ex), ry = Math.min(sy, ey);
+        const rw = Math.abs(ex - sx), rh = Math.abs(ey - sy);
+        /* 选区:clip 后重画背景图(显示静态画面,不透明) */
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(rx, ry, rw, rh);
+        ctx.clip();
+        if (bg) ctx.drawImage(bg, 0, 0, c.width, c.height);
+        ctx.restore();
+        ctx.strokeStyle = "#007aff";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(rx, ry, rw, rh);
+      }
+    };
 
     /* 收到 overlay-start(窗口被显示)时初始化框选界面;from 由 Rust 事件传入 */
-    const start = (payload: string) => {
+    const start = async (payload: string) => {
       sourceRef.current = payload || "main";
-      c.width = window.innerWidth * dpr;
-      c.height = window.innerHeight * dpr;
-      /* 用 setTransform 做 DPI 适配:画布物理像素,坐标用 CSS 像素 */
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      /* 初始遮罩 */
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+      bgImageRef.current = null;
+      const token = ++loadTokenRef.current;
       drawing.current = false;
       rect.current = { sx: 0, sy: 0, ex: 0, ey: 0 };
+      /* 实测 DPR:窗口物理尺寸 / CSS 尺寸(不依赖 devicePixelRatio 属性,WebView2 下该属性可能不准) */
+      try {
+        const size = await appWindow.innerSize();
+        if (window.innerWidth > 0) dprReal = size.width / window.innerWidth;
+      } catch { /* 保留默认 */ }
+      fitCanvas(Math.round(window.innerWidth * dprReal), Math.round(window.innerHeight * dprReal));
+      drawScene();
+      /* 静态截图当背景:显示位图而非依赖透明窗口透出真实屏幕(视频区域会黑) */
+      invoke<string>("capture_fullscreen")
+        .then((b64) => {
+          const img = new Image();
+          img.onload = () => {
+            if (loadTokenRef.current !== token) return;   // 过期请求,丢弃
+            bgImageRef.current = img;
+            fitCanvas(img.naturalWidth, img.naturalHeight);
+            drawScene();
+          };
+          img.src = "data:image/png;base64," + b64;
+        })
+        .catch(() => { /* 加载失败则保持空背景 */ });
     };
     const u = appWindow.listen<string>("overlay-start", (e) => start(e.payload));
 
@@ -763,34 +820,23 @@ function ScreenshotOverlay() {
       if (e.button !== 0) return;
       rect.current = { sx: e.clientX, sy: e.clientY, ex: e.clientX, ey: e.clientY };
       drawing.current = true;
+      drawScene();
     };
     const onMove = (e: MouseEvent) => {
       if (!(e.buttons & 1)) { onUp(); return; }
       if (!drawing.current) return;
       rect.current.ex = e.clientX;
       rect.current.ey = e.clientY;
-      /* 重置变换后用 CSS 像素绘制 */
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, W, H);
-      const rx = Math.min(rect.current.sx, rect.current.ex);
-      const ry = Math.min(rect.current.sy, rect.current.ey);
-      const rw = Math.abs(rect.current.ex - rect.current.sx);
-      const rh = Math.abs(rect.current.ey - rect.current.sy);
-      ctx.clearRect(rx, ry, rw, rh);
-      ctx.strokeStyle = "#007aff";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(rx, ry, rw, rh);
+      drawScene();
     };
     const onUp = () => {
       if (!drawing.current) return;
       drawing.current = false;
       const { sx, sy, ex, ey } = rect.current;
-      const x = Math.min(sx, ex) * dpr;
-      const y = Math.min(sy, ey) * dpr;
-      const w = Math.abs(ex - sx) * dpr;
-      const h = Math.abs(ey - sy) * dpr;
+      const x = toPhys(Math.min(sx, ex));
+      const y = toPhys(Math.min(sy, ey));
+      const w = toPhys(Math.abs(ex - sx));
+      const h = toPhys(Math.abs(ey - sy));
       if (w < 10 || h < 10) { hide(); return; }
       appWindow.emitTo("main", "screenshot-done", { x, y, w, h, source: sourceRef.current });
       hide();
