@@ -1024,10 +1024,27 @@ function MainWindow() {
 
   /* ---- 外接 API 供应商管理(第 8 波) ---- */
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;
-  /* 顶部模型下拉与引擎联动:外接/自动模式下有有效供应商 → 显示外接选项 */
-  const effApi = (engineMode === "api" || engineMode === "auto") &&
-    !!activeProvider && !!activeProvider.baseUrl.trim() && !!activeProvider.apiKey.trim() && !!activeProvider.model.trim();
-  const headerEngineValue = effApi && activeProvider ? `api:${activeProvider.id}` : model;
+  /* 顶部模型下拉:本地模型 + 所有已配置供应商的全部 API 模型(直接选,自动切供应商/引擎) */
+  const apiModelOptions: { providerId: string; model: string; label: string }[] = [];
+  {
+    const seen = new Set<string>();
+    for (const p of providers) {
+      if (!p.baseUrl.trim() || !p.apiKey.trim()) continue;
+      const names = p.models.length ? [...p.models] : [];
+      if (p.model && !names.includes(p.model)) names.push(p.model);
+      for (const m of names) {
+        if (!m.trim()) continue;
+        const key = `${p.id}::${m}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        apiModelOptions.push({ providerId: p.id, model: m, label: `🌐 ${p.alias || p.baseUrl} · ${m}` });
+      }
+    }
+  }
+  const activeApiModel = (engineMode === "api" || engineMode === "auto") && activeProvider && activeProvider.model.trim()
+    ? { providerId: activeProvider.id, model: activeProvider.model }
+    : null;
+  const headerEngineValue = activeApiModel ? `api:${activeApiModel.providerId}::${activeApiModel.model}` : model;
   const addProvider = (presetIndex?: number) => {
     const preset = presetIndex !== undefined ? PROVIDER_PRESETS[presetIndex] : undefined;
     const p: ProviderCfg = {
@@ -1093,10 +1110,10 @@ function MainWindow() {
       <header className="app-header">
         <h1>本地翻译助手</h1>
         <div className="toolbar-right">
-          <select className="tool-select" value={headerEngineValue} onChange={(e) => { const v = e.target.value; if (v.startsWith("api:")) { setActiveProviderId(v.slice(4)); setEngineMode("api"); } else { setModel(v); setEngineMode("local"); } }} title="翻译引擎:选本地模型=本地Ollama;选「外接」=外接API(供应商在⚙️翻译引擎面板配置)">
+          <select className="tool-select" value={headerEngineValue} onChange={(e) => { const v = e.target.value; if (v.startsWith("api:")) { const parts = v.slice(4).split("::"); if (parts.length >= 2 && parts[0] && parts[1]) { setActiveProviderId(parts[0]); updateProvider(parts[0], { model: parts[1] }); setEngineMode("api"); } } else { setModel(v); setEngineMode("local"); } }} title="选择翻译模型:本地模型=本地Ollama;🌐 外接模型=对应供应商 API(供应商在下方面板添加管理)">
             <option value="maternion/hy-mt2:1.8b">HY-MT2-1.8B (本地)</option>
             <option value="gemma3:4b">gemma3:4b (本地)</option>
-            {effApi && activeProvider && <option value={`api:${activeProvider.id}`}>🌐 {activeProvider.alias || activeProvider.baseUrl}{activeProvider.model ? ` · ${activeProvider.model}` : ""}</option>}
+            {apiModelOptions.map((o) => <option key={`${o.providerId}::${o.model}`} value={`api:${o.providerId}::${o.model}`}>{o.label}</option>)}
           </select>
           <select className="tool-select" value={numCtx} onChange={(e) => setNumCtx(Number(e.target.value))} title="上下文窗口">
             {CTX_OPTIONS.map((n) => <option key={n} value={n}>上下文 {n}</option>)}
@@ -1121,17 +1138,13 @@ function MainWindow() {
       </header>
 
       <main className="app-body">
-        {/* 翻译引擎配置(第8波:外接 API) */}
+        {/* 外接 API 供应商管理(第8波;模型在顶部下拉直接选) */}
         <div className={`subtitle-panel${enginePanelOpen ? " on" : ""}`}>
           <div className="subtitle-panel-row">
-            <span className="subtitle-label">⚙️ 翻译引擎</span>
-            <select className="tool-select" value={engineMode} onChange={(e) => setEngineMode(e.target.value as EngineMode)} title="本地=Ollama(默认);外接=OpenAI兼容API;自动=已配置外接则用外接,否则本地。请求失败直接报错,不自动回退">
-              <option value="local">本地 Ollama</option>
-              <option value="api">外接 API</option>
-              <option value="auto">自动</option>
-            </select>
+            <span className="subtitle-label">🌐 外接 API 供应商</span>
+            <span className="subtitle-msg">模型在顶部下拉直接选;这里只负责添加/管理供应商</span>
             <button className="btn-float" onClick={() => setEnginePanelOpen(!enginePanelOpen)} title="配置外接 API 供应商(Base URL / Key / 模型)">
-              {enginePanelOpen ? "收起供应商" : "配置供应商"}
+              {enginePanelOpen ? "收起" : "管理供应商"}
             </button>
             {engineStatus && <em className="subtitle-msg">· {engineStatus}</em>}
           </div>
