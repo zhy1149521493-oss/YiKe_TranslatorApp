@@ -50,5 +50,6 @@ npm run tauri build
 ## Notes
 
 - Portable green delivery: no installer; the runtime folder is self-contained.
+- Distribution: GitHub Releases (portable package + MSI/NSIS installers); the usage guide will be the GitHub README, written at publish time.
 - Fully offline: no feature depends on the internet.
 - Git commit identity for this repo: `Reasonix <reasonix@local>`.
