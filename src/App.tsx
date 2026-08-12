@@ -71,12 +71,22 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
 }
 
+/* 主题色(强调色)十六进制 → "r, g, b" 三元组(CSS rgba(var(--ios-accent-rgb), α) 用) */
+function hexToRgbTriplet(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return "0, 122, 255";
+  const n = parseInt(m[1], 16);
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+}
+
 /* 把主题 + 某界面的外观应用到当前窗口(设置 <html data-theme> + CSS 变量)。
-   bg/textColor 留空 = 跟随主题默认;字体大小/背景透明度即时生效 */
+   bg/textColor 留空 = 跟随主题默认;字体大小/背景透明度即时生效;
+   accent 留空 = 使用主题默认强调色,否则覆盖 --ios-blue / --ios-accent-rgb */
 function applyWindowTheme(
   surface: SurfaceKey,
   theme: string,
-  appearance: Record<SurfaceKey, AppearanceItem>
+  appearance: Record<SurfaceKey, AppearanceItem>,
+  accent?: string
 ) {
   const resolved =
     theme === "system"
@@ -87,6 +97,14 @@ function applyWindowTheme(
   document.documentElement.dataset.theme = resolved;
   const item = appearance[surface] ?? DEFAULT_APPEARANCE[surface];
   const st = document.documentElement.style;
+  const acc = (accent ?? "").trim();
+  if (acc) {
+    st.setProperty("--ios-blue", acc);
+    st.setProperty("--ios-accent-rgb", hexToRgbTriplet(acc));
+  } else {
+    st.removeProperty("--ios-blue");
+    st.removeProperty("--ios-accent-rgb");
+  }
   if (item.textColor) st.setProperty("--ios-text", item.textColor);
   else st.removeProperty("--ios-text");
   if (item.fontSize) st.setProperty("--w-font", `${item.fontSize}px`);
@@ -121,6 +139,15 @@ function keyEventToAccelerator(e: KeyboardEvent): { ok: boolean; combo: string; 
   const combo = [...mods, key].join("+");
   const reserved = ["Alt+F4", "Ctrl+Alt+Del", "Ctrl+Shift+Esc", "Alt+Tab", "Ctrl+Esc", "Alt+Space", "Alt+F2", "Alt+F7", "Alt+F8", "Alt+F10", "Alt+F11", "Alt+F12"];
   if (reserved.includes(combo)) return { ok: false, combo: "", reason: "该组合为系统保留,换一个" };
+  // 常用冲突拦截:单修饰键组合(如 Ctrl+C/V/X/A/S 等)全局注册会劫持系统/软件快捷键
+  if (mods.length === 1) {
+    if (mods[0] === "Ctrl") return { ok: false, combo: "", reason: `${combo} 是系统常用快捷键(复制/粘贴/全选等),全局注册会冲突,请改用 Ctrl+Shift+组合` };
+    if (mods[0] === "Alt") return { ok: false, combo: "", reason: `${combo} 与系统/软件菜单快捷键冲突,请改用 Ctrl+Shift+组合` };
+    if (mods[0] === "Shift") return { ok: false, combo: "", reason: `${combo} 会干扰正常打字,请改用 Ctrl+Shift+组合` };
+  }
+  if (mods.length === 2 && mods.includes("Ctrl") && mods.includes("Alt")) {
+    return { ok: false, combo: "", reason: `${combo} 可能与系统组合冲突,请改用 Ctrl+Shift+组合` };
+  }
   return { ok: true, combo };
 }
 
@@ -129,7 +156,7 @@ type IconName =
   | "pen" | "mic" | "film" | "camera" | "clipboard" | "settings" | "globe" | "dot"
   | "clock" | "sparkle" | "search" | "flask" | "trash" | "plus" | "up" | "down"
   | "check" | "warn" | "error" | "minimize" | "maximize" | "restore" | "close"
-  | "windows" | "target" | "volume" | "chevron" | "swap";
+  | "windows" | "target" | "volume" | "chevron" | "swap" | "play" | "stop";
 
 function Icon({ name, size = 16, className, style }: { name: IconName; size?: number; className?: string; style?: CSSProperties }) {
   const p: Record<IconName, React.ReactNode> = {
@@ -161,6 +188,8 @@ function Icon({ name, size = 16, className, style }: { name: IconName; size?: nu
     volume: (<><path d="M11 5L6 9H2v6h4l5 4V5z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /></>),
     chevron: (<path d="M6 9l6 6 6-6" />),
     swap: (<><path d="M7 4v13M3 13l4 4 4-4" /><path d="M17 20V7M13 11l4-4 4 4" /></>),
+    play: (<path d="M6 4l14 8-14 8V4z" />),
+    stop: (<rect x="5" y="5" width="14" height="14" rx="1" />),
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className} style={style} aria-hidden="true">
@@ -456,7 +485,9 @@ function MainWindow() {
   const [input, setInput] = useState("");
   const [sourceLang, setSourceLang] = useState("auto");
   const [targetLang, setTargetLang] = useState("zh");
-  const [output, setOutput] = useState("");
+  /* 各模式独立译文(文本/音频/视频/截图),显示在任务卡外的独立译文框 */
+  const [modeOutput, setModeOutput] = useState<Record<"text" | "audio" | "subtitle" | "screenshot", string>>({ text: "", audio: "", subtitle: "", screenshot: "" });
+  const [screenshotSrc, setScreenshotSrc] = useState(""); // 截图模式:截到的原文(灰框显示)
   const [translating, setTranslating] = useState(false);
   const [apiThinking, setApiThinking] = useState(false); // 外接推理模型"思考中"提示
   const [model, setModel] = useState("maternion/hy-mt2:1.8b");
@@ -477,7 +508,7 @@ function MainWindow() {
   /* Wave 9: 设置中心 / 主题 / 外观 / 快捷键 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<string>("general");
-  const [activeMode, setActiveMode] = useState<"text" | "audio" | "subtitle" | "screenshot" | "selection">("text");
+  const [activeMode, setActiveMode] = useState<"text" | "audio" | "subtitle" | "screenshot">("text");
   const [engineMenuOpen, setEngineMenuOpen] = useState(false);
   const [maximized, setMaximized] = useState(false);
   /* 跟踪最大化状态(标题栏 □/❐ 按钮图标切换) */
@@ -505,11 +536,60 @@ function MainWindow() {
     };
   }, [engineMenuOpen]);
   const [theme, setTheme] = useState<"light" | "dark" | "system">("light");
+  const [accentColor, setAccentColor] = useState(""); // 主题色(强调色):留空=跟随主题默认
   const [appearance, setAppearance] = useState<Record<SurfaceKey, AppearanceItem>>(DEFAULT_APPEARANCE);
   const [shortcuts, setShortcuts] = useState<Record<ShortcutAction, string>>(DEFAULT_SHORTCUTS);
   const [conflictHint, setConflictHint] = useState(true);
   const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(null);
   const [shortcutError, setShortcutError] = useState("");
+  /* UI3: 各模式语言方向是否独立(默认不独立=跟随文本翻译)+ 各模式自己的语言 */
+  const [independentLang, setIndependentLang] = useState(false);
+  const [modeLangs, setModeLangs] = useState<Record<"audio" | "subtitle" | "screenshot", { src: string; tgt: string }>>({
+    audio: { src: "auto", tgt: "zh" },
+    subtitle: { src: "auto", tgt: "zh" },
+    screenshot: { src: "auto", tgt: "zh" },
+  });
+  /* 某模式生效的语言:独立=用该模式自己的;否则跟随文本翻译 */
+  const langFor = (mode: "audio" | "subtitle" | "screenshot") =>
+    independentLang ? modeLangs[mode] : { src: sourceLang, tgt: targetLang };
+  const setModeLang = (mode: "audio" | "subtitle" | "screenshot", patch: { src?: string; tgt?: string }) => {
+    if (!independentLang) {
+      if (patch.src) setSourceLang(patch.src);
+      if (patch.tgt) setTargetLang(patch.tgt);
+      return;
+    }
+    setModeLangs((prev) => ({ ...prev, [mode]: { ...prev[mode], ...patch } }));
+  };
+  const swapModeLang = (mode: "audio" | "subtitle" | "screenshot") => {
+    const l = langFor(mode);
+    if (l.src === "auto") return;
+    setModeLang(mode, { src: l.tgt, tgt: l.src });
+  };
+  const toggleIndependentLang = (v: boolean) => {
+    if (v) {
+      // 开启独立:先把各模式初始化为当前文本翻译设置
+      setModeLangs({
+        audio: { src: sourceLang, tgt: targetLang },
+        subtitle: { src: sourceLang, tgt: targetLang },
+        screenshot: { src: sourceLang, tgt: targetLang },
+      });
+    }
+    setIndependentLang(v);
+  };
+  const renderLangBar = (mode: "audio" | "subtitle" | "screenshot") => {
+    const l = langFor(mode);
+    return (
+      <div className="lang-bar lang-center">
+        <select className="lang-sel" value={l.src} onChange={(e) => setModeLang(mode, { src: e.target.value })} title="源语言(自动检测=自动识别输入语言)">
+          {LANGS.map((x) => <option key={x.code} value={x.code}>{x.label}</option>)}
+        </select>
+        <button className="lang-swap" onClick={() => swapModeLang(mode)} title="交换语言方向"><Icon name="swap" size={15} /></button>
+        <select className="lang-sel" value={l.tgt} onChange={(e) => setModeLang(mode, { tgt: e.target.value })} title="目标语言">
+          {LANGS.filter((x) => x.code !== "auto").map((x) => <option key={x.code} value={x.code}>{x.label}</option>)}
+        </select>
+      </div>
+    );
+  };
   // 渲染时同步模块级镜像,供 translateStream/translateFull 路由读取
   engineCfg = { mode: engineMode, providers, activeProviderId };
 
@@ -524,6 +604,7 @@ function MainWindow() {
         if (cfg.mainClose === "quit") setMainClose("quit");
         const s = cfg.settings ?? {};
         setTheme(s.theme === "dark" || s.theme === "system" ? s.theme : "light");
+        setAccentColor(typeof s.accentColor === "string" ? s.accentColor : "");
         setAppearance(mergeAppearance(DEFAULT_APPEARANCE, s.appearance));
         setShortcuts({ ...DEFAULT_SHORTCUTS, ...(s.shortcuts ?? {}) });
         setConflictHint(s.translate?.conflictHint !== false);
@@ -532,6 +613,13 @@ function MainWindow() {
           if (s.translate.targetLang) setTargetLang(s.translate.targetLang);
           if (typeof s.translate.streamOn === "boolean") setStreamOn(s.translate.streamOn);
           if (s.translate.numCtx) setNumCtx(Number(s.translate.numCtx));
+          if (s.translate.independentLang === true) setIndependentLang(true);
+          const ml = s.translate?.modeLangs ?? {};
+          setModeLangs({
+            audio: { src: ml.audio?.src ?? "auto", tgt: ml.audio?.tgt ?? "zh" },
+            subtitle: { src: ml.subtitle?.src ?? "auto", tgt: ml.subtitle?.tgt ?? "zh" },
+            screenshot: { src: ml.screenshot?.src ?? "auto", tgt: ml.screenshot?.tgt ?? "zh" },
+          });
         }
         if (s.clipboard) setClipAuto(!!s.clipboard.auto);
         if (Array.isArray(cfg.providers)) {
@@ -551,6 +639,7 @@ function MainWindow() {
                 providers: list,
                 settings: {
                   theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light",
+                  accentColor: typeof s.accentColor === "string" ? s.accentColor : "",
                   appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance),
                   shortcuts: { ...DEFAULT_SHORTCUTS, ...(s.shortcuts ?? {}) },
                   translate: {
@@ -559,6 +648,7 @@ function MainWindow() {
                     streamOn: s.translate?.streamOn ?? true,
                     numCtx: s.translate?.numCtx ?? 1024,
                     conflictHint: s.translate?.conflictHint !== false,
+                    independentLang: s.translate?.independentLang === true,
                   },
                   subtitle: { fps: s.subtitle?.fps ?? 2, mode: s.subtitle?.mode ?? "trans-first", engine: s.subtitle?.engine ?? "win" },
                   clipboard: { auto: s.clipboard?.auto ?? false },
@@ -602,6 +692,8 @@ function MainWindow() {
   const [subMode, setSubMode] = useState<"trans-first" | "ocr-first">("trans-first"); // 翻译优先/原文优先
   const [subEngine, setSubEngine] = useState<"win" | "rapid">("win"); // 字幕 OCR 引擎:win=系统OCR(快)/rapid=RapidOCR
   const [subStatus, setSubStatus] = useState("");               // 字幕状态提示
+  const [subRegion, setSubRegion] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const subRegionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
   /* 从配置恢复字幕参数(须在 subFps/subMode/subEngine 声明之后执行) */
   useEffect(() => {
@@ -609,6 +701,12 @@ function MainWindow() {
     if (s.subtitle?.fps) setSubFps(Number(s.subtitle.fps));
     if (s.subtitle?.mode) setSubMode(s.subtitle.mode);
     if (s.subtitle?.engine) setSubEngine(s.subtitle.engine);
+    // 字幕区域持久化:重启后恢复上次框选的区域(否则回到默认底部 1/4,可能对不上视频)
+    const r = s.subtitle?.region;
+    if (r && typeof r.x === "number" && typeof r.y === "number" && r.w > 0 && r.h > 0) {
+      subRegionRef.current = { x: r.x, y: r.y, w: r.w, h: r.h };
+      setSubRegion({ x: r.x, y: r.y, w: r.w, h: r.h });
+    }
   }, []);
 
   /* mainClose 立即落盘:用户可能马上点 ✕(Rust 直接从文件读,不能等 400ms 防抖) */
@@ -618,9 +716,9 @@ function MainWindow() {
       config: {
         configVersion: 3, mainClose, engineMode, activeProviderId, providers,
         settings: {
-          theme, appearance, shortcuts,
-          translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint },
-          subtitle: { fps: subFps, mode: subMode, engine: subEngine },
+          theme, accentColor, appearance, shortcuts,
+          translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs },
+          subtitle: { fps: subFps, mode: subMode, engine: subEngine, region: subRegionRef.current },
           clipboard: { auto: clipAuto },
         },
       },
@@ -634,10 +732,11 @@ function MainWindow() {
     const t = setTimeout(() => {
       const settings = {
         theme,
+        accentColor,
         appearance,
         shortcuts,
-        translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint },
-        subtitle: { fps: subFps, mode: subMode, engine: subEngine },
+        translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs },
+        subtitle: { fps: subFps, mode: subMode, engine: subEngine, region: subRegionRef.current },
         clipboard: { auto: clipAuto },
       };
       invoke("save_app_config", { config: { configVersion: 3, mainClose, engineMode, activeProviderId, providers, settings } }).catch((e) => console.error("保存配置失败", e));
@@ -645,11 +744,10 @@ function MainWindow() {
       invoke("apply_shortcuts", { shortcuts }).catch(() => {});
     }, 400);
     return () => clearTimeout(t);
-  }, [engineMode, activeProviderId, providers, mainClose, theme, appearance, shortcuts, sourceLang, targetLang, streamOn, numCtx, conflictHint, subFps, subMode, subEngine, clipAuto]);
+  }, [engineMode, activeProviderId, providers, mainClose, theme, accentColor, appearance, shortcuts, sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs, subFps, subMode, subEngine, subRegion, clipAuto]);
 
   /* 主窗口应用主题 + 外观(CSS 变量即时生效) */
-  useEffect(() => { applyWindowTheme("main", theme, appearance); }, [theme, appearance]);
-  const [subRegion, setSubRegion] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  useEffect(() => { applyWindowTheme("main", theme, appearance, accentColor); }, [theme, appearance, accentColor]);
   const [subCurrent, setSubCurrent] = useState<{ text: string; result: string } | null>(null); // 当前字幕(主窗口显示)
 
   /* ===== 音频实时字幕(第 7 波:系统内部音频 → ASR → 翻译) ===== */
@@ -700,7 +798,6 @@ function MainWindow() {
   const audioFinalRef = useRef<Record<string, string>>({});         // 各来源当前定稿句
   const lastAudioTranslatedRef = useRef<Record<string, string>>({}); // 各来源去重
 
-  const subRegionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
   const subTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ocrInFlightRef = useRef(false);                         // 上一帧 OCR 未返回则跳过
   const subTranslatingRef = useRef(false);                      // 翻译串行:翻译中跳过新帧
@@ -744,8 +841,8 @@ function MainWindow() {
     subTranslatingRef.current = true;
     subDirtyRef.current = false;
     try {
-      let src = sourceLang;
-      let tgt = targetLang;
+      let src = langFor("subtitle").src;
+      let tgt = langFor("subtitle").tgt;
       if (src === "auto") src = detectLang(text);
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
       lastSubTranslatedRef.current = text;
@@ -761,14 +858,17 @@ function MainWindow() {
         const p = { text, result };
         appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
         setSubCurrent(p);
+        setModeOutput((prev) => ({ ...prev, subtitle: result }));
       });
       if (!result.trim()) result = "(空响应)";
       const p = { text, result };
       await appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
       setSubCurrent(p);
+      setModeOutput((prev) => ({ ...prev, subtitle: result }));
       setSubStatus("");
     } catch (e: any) {
       setSubStatus(`翻译失败: ${e}`);
+      setModeOutput((prev) => ({ ...prev, subtitle: `翻译失败: ${e}` }));
     } finally {
       subTranslatingRef.current = false;
       // 翻译期间来了新句子:翻译最新的(跳过中间态)
@@ -778,7 +878,7 @@ function MainWindow() {
         submitSubtitle(t);
       }
     }
-  }, [model, sourceLang, targetLang, numCtx]);
+  }, [model, numCtx, independentLang, modeLangs]);
 
   /* 字幕 OCR 结果:去重 → 句子稳定(500ms 去抖)→ 提交翻译 */
   const handleSubtitleOcr = useCallback((text: string) => {
@@ -821,8 +921,8 @@ function MainWindow() {
     audioTranslatingRef.current[source] = true;
     audioTranslateStartRef.current[source] = Date.now();
     try {
-      let src = sourceLang;
-      let tgt = targetLang;
+      let src = langFor("audio").src;
+      let tgt = langFor("audio").tgt;
       if (src === "auto") src = detectLang(text);
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
       lastAudioTranslatedRef.current[source] = text;
@@ -835,9 +935,11 @@ function MainWindow() {
       let result = await translateFull(model, src, tgt, text, numCtx);
       if (!result.trim()) result = "(空响应)";
       await send(result);
+      setModeOutput((prev) => ({ ...prev, audio: result }));
       setAudioStatus((prev) => ({ ...prev, [source]: "" }));
     } catch (e: any) {
       setAudioStatus((prev) => ({ ...prev, [source]: `翻译失败: ${e}` }));
+      setModeOutput((prev) => ({ ...prev, audio: `翻译失败: ${e}` }));
     } finally {
       audioTranslatingRef.current[source] = false;
       audioTranslateStartRef.current[source] = 0;
@@ -848,7 +950,7 @@ function MainWindow() {
         submitAudioSubtitle(source, t);
       }
     }
-  }, [model, sourceLang, targetLang, numCtx]);
+  }, [model, numCtx, independentLang, modeLangs]);
 
   /* 模式对应的来源列表 */
   const sourcesForMode = useCallback((mode: string): string[] => {
@@ -1109,7 +1211,7 @@ function MainWindow() {
   const runTranslation = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed) { setOutput(""); return; }
+      if (!trimmed) { setModeOutput((prev) => ({ ...prev, text: "" })); return; }
       // 单飞 + 排队:上一轮还没结束就来新输入 → 记住最新文本,结束后立刻翻
       if (busyRef.current) { pendingTextRef.current = trimmed; return; }
       busyRef.current = true;
@@ -1138,20 +1240,20 @@ function MainWindow() {
 
       setTranslating(true);
       if (streamOn) {
-        setOutput("");
+        setModeOutput((prev) => ({ ...prev, text: "" }));
         try {
           await translateStream(model, src, tgt, text, numCtx, (token) => {
             // 外接 API 走 Rust invoke 无法中途中止:过期流的 token 直接丢弃
             if (ctrl.signal.aborted) return;
             setApiThinking(false);
-            setOutput((prev) => prev + token);
+            setModeOutput((prev) => ({ ...prev, text: prev.text + token }));
           },
             ctrl.signal,
             () => { if (!ctrl.signal.aborted) setApiThinking(true); } // 推理帧 → "思考中"提示
           );
         } catch (e: any) {
           if (e.name !== "AbortError")
-            setOutput((prev) => prev + "\n\n" + e.message);
+            setModeOutput((prev) => ({ ...prev, text: prev.text + "\n\n" + e.message }));
         } finally {
           setApiThinking(false);
           busyRef.current = false;
@@ -1163,12 +1265,12 @@ function MainWindow() {
           }
         }
       } else {
-        setOutput("翻译中...");
+        setModeOutput((prev) => ({ ...prev, text: "翻译中..." }));
         try {
           const result = await translateFull(model, src, tgt, text, numCtx);
-          if (!ctrl.signal.aborted) setOutput(result);
+          if (!ctrl.signal.aborted) setModeOutput((prev) => ({ ...prev, text: result }));
         } catch (e: any) {
-          setOutput("翻译失败:" + e.message);
+          setModeOutput((prev) => ({ ...prev, text: "翻译失败:" + e.message }));
         } finally {
           setApiThinking(false);
           busyRef.current = false;
@@ -1253,7 +1355,8 @@ function MainWindow() {
         if (source === "floating") {
           appWindow.emitTo("floating", "screenshot-status", "正在 OCR 识别…").catch(() => {});
         } else {
-          setOutput("正在 OCR 识别…");
+          setScreenshotSrc("正在 OCR 识别…");
+          setModeOutput((prev) => ({ ...prev, screenshot: "" }));
         }
         // 优先用 overlay 从缓存背景图裁剪的选区(b64,不二次截屏,避免残影);否则回退截屏
         if (e.payload.b64) {
@@ -1265,7 +1368,8 @@ function MainWindow() {
               if (source === "floating") {
                 appWindow.emitTo("floating", "screenshot-status", `OCR 失败: ${msg}`).catch(() => {});
               } else {
-                setOutput(`OCR 失败: ${msg}`);
+                setScreenshotSrc(`OCR 失败: ${msg}`);
+                setModeOutput((prev) => ({ ...prev, screenshot: "" }));
               }
             });
         } else {
@@ -1280,7 +1384,7 @@ function MainWindow() {
         if (source === "floating") {
           appWindow.emitTo("floating", "screenshot-status", msg).catch(() => {});
         } else {
-          setOutput(msg);
+          setScreenshotSrc(msg);
         }
       };
       if (!ocrText || ocrText.startsWith("ERROR:")) {
@@ -1288,20 +1392,29 @@ function MainWindow() {
         return;
       }
       if (!ocrText.trim()) { showStatus("未识别到文字"); return; }
-      let src = sourceLang;
-      let tgt = targetLang;
+      let src = langFor("screenshot").src;
+      let tgt = langFor("screenshot").tgt;
       if (src === "auto") { src = detectLang(ocrText); }
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
-      showStatus("正在翻译…");
+      if (source === "floating") {
+        appWindow.emitTo("floating", "screenshot-status", "正在翻译…").catch(() => {});
+      } else {
+        setScreenshotSrc(ocrText); // 灰框固定显示截到的原文,翻译中不覆盖
+      }
       try {
         const result = await translateFull(model, src, tgt, ocrText, numCtx);
         if (source === "floating") {
           await appWindow.emitTo("floating", "show-translation", { text: ocrText, src, tgt, result }).catch(() => {});
         } else {
-          setOutput(`[OCR]\n${ocrText}\n\n[翻译]\n${result}`);
+          setModeOutput((prev) => ({ ...prev, screenshot: result }));
         }
       } catch (e: any) {
-        showStatus(`翻译失败: ${e}`);
+        if (source === "floating") {
+          appWindow.emitTo("floating", "screenshot-status", `翻译失败: ${e}`).catch(() => {});
+        } else {
+          setScreenshotSrc(`翻译失败: ${e}`);
+          setModeOutput((prev) => ({ ...prev, screenshot: "" }));
+        }
       }
     };
     const o = appWindow.listen<string>(
@@ -1309,7 +1422,7 @@ function MainWindow() {
       (e) => { handleOcrResult(screenshotSource.current, e.payload); }
     );
     return () => { u.then((f) => f()); o.then((f) => f()); };
-  }, [model, sourceLang, targetLang, numCtx]);
+  }, [model, numCtx, independentLang, modeLangs]);
 
   /* ---- 剪贴板监听:复制即译 ---- */
   useEffect(() => {
@@ -1493,11 +1606,10 @@ function MainWindow() {
       case "audio": return "音频翻译";
       case "subtitle": return "视频字幕";
       case "screenshot": return "截图翻译";
-      case "selection": return "划词翻译";
       default: return "文本翻译";
     }
   })();
-  const taskIcon: IconName = activeMode === "audio" ? "mic" : activeMode === "subtitle" ? "film" : activeMode === "screenshot" ? "camera" : activeMode === "selection" ? "clipboard" : "pen";
+  const taskIcon: IconName = activeMode === "audio" ? "mic" : activeMode === "subtitle" ? "film" : activeMode === "screenshot" ? "camera" : "pen";
   const statusInfo = (() => {
     if (sourcesForMode(audioMode).some((s) => isSrcOn(s))) {
       const st = sourcesForMode(audioMode).map((s) => srcStatus(s)).filter(Boolean)[0] ?? "";
@@ -1544,15 +1656,6 @@ function MainWindow() {
           </div>
         </div>
         <div className="toolbar-right">
-          <button className="icon-btn" title="截图翻译 (Ctrl+Shift+S)" onClick={startScreenshot}>
-            <Icon name="camera" size={16} />
-          </button>
-          <button className={`icon-btn${subtitleOn ? " active" : ""}`} onClick={toggleSubtitle} title="视频实时字幕 (Ctrl+Shift+U)">
-            <Icon name="film" size={16} />
-          </button>
-          <button className={`icon-btn${floatingOpen ? " active" : ""}`} onClick={toggleFloating} title={floatingOpen ? "关闭翻译悬浮窗" : "打开翻译悬浮窗"}>
-            <Icon name="windows" size={16} />
-          </button>
           <button className={`icon-btn${settingsOpen ? " active" : ""}`} onClick={() => setSettingsOpen(!settingsOpen)} title="设置中心">
             <Icon name="settings" size={16} />
           </button>
@@ -1576,6 +1679,7 @@ function MainWindow() {
               <button className="settings-nav-back" onClick={() => setSettingsOpen(false)}>← 返回翻译</button>
             </nav>
             <div className="settings-content">
+              <div className="settings-fade" key={settingsPage}>
               {settingsPage === "general" && (
                 <div className="settings-section">
                   <h2>常规</h2>
@@ -1586,6 +1690,12 @@ function MainWindow() {
                         <button key={v} className={`seg-item${theme === v ? " active" : ""}`} onClick={() => setTheme(v)}>{label}</button>
                       ))}
                     </div>
+                  </div>
+                  <div className="settings-row">
+                    <span>主题颜色</span>
+                    <input type="color" value={accentColor || (theme === "dark" ? "#0a84ff" : "#007aff")} onChange={(e) => setAccentColor(e.target.value)} title="自定义强调色(按钮 / 选中高亮等)" />
+                    <button className="btn-float" onClick={() => setAccentColor("")}>跟随默认</button>
+                    <span className="settings-note">强调色用于按钮、选中高亮等,即时生效</span>
                   </div>
                   <div className="settings-row">
                     <span>主窗口关闭行为</span>
@@ -1635,6 +1745,10 @@ function MainWindow() {
                       ))}
                     </div>
                   </div>
+                  <label className="settings-check">
+                    <input type="checkbox" checked={independentLang} onChange={(e) => toggleIndependentLang(e.target.checked)} />
+                    各模式语言方向相互独立(默认不独立=音频/视频/截图跟随文本翻译;开启后各自单独设置,改回不独立时回到跟随文本翻译)
+                  </label>
                   <p className="settings-note">语言方向也会同步主界面顶部的快捷选择。</p>
                 </div>
               )}
@@ -1806,7 +1920,7 @@ function MainWindow() {
               {settingsPage === "shortcuts" && (
                 <div className="settings-section">
                   <h2>快捷键</h2>
-                  <p className="settings-note">点击组合键进入录制,按下新组合保存;点「无快捷键」可禁用该项。至少需要一个修饰键(Ctrl/Alt/Shift),裸键和系统保留组合会被拒绝。</p>
+                  <p className="settings-note">点击组合键进入录制,按下新组合保存;点「无快捷键」可禁用该项。为避免全局冲突,仅支持 Ctrl+Shift / Alt+Shift / Ctrl+Alt+Shift + 字母/数字/F键/空格/方向键;Ctrl+C 这类常用快捷键和系统保留组合不可设置(录制时会提示原因)。</p>
                   <div className="shortcut-list">
                     {(Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).map((act) => {
                       const recording = recordingAction === act;
@@ -1839,11 +1953,17 @@ function MainWindow() {
                   <p>杀软(如火绒)可能拦截未签名程序:请加入白名单或信任后再使用;个别老式程序(如 DirectUI、游戏内文本)划词捕获不到。</p>
                 </div>
               )}
+              </div>
             </div>
           </div>
         </main>
       ) : (
       <main className="app-body workbench">
+        {/* 悬浮窗:细长圆角按钮,单独放在模式卡片上方 */}
+        <button className={`float-toggle${floatingOpen ? " active" : ""}`} onClick={toggleFloating} title={floatingOpen ? "关闭翻译悬浮窗" : "打开翻译悬浮窗(Ctrl+Shift+D)"}>
+          <Icon name="windows" size={14} /> {floatingOpen ? "关闭悬浮窗" : "打开悬浮窗"}
+        </button>
+
         {/* 翻译方式(工作台模式卡片) */}
         <div className="mode-grid">
           <button className={`mode-card${activeMode === "text" ? " active" : ""}`} onClick={() => setActiveMode("text")}>
@@ -1861,28 +1981,24 @@ function MainWindow() {
             <b>视频字幕</b>
             <span className="mode-desc">识别屏幕区域字幕并实时翻译</span>
           </button>
-          <button className="mode-card" onClick={() => { setActiveMode("screenshot"); startScreenshot(); }} title="框选屏幕区域,OCR 翻译">
+          <button className={`mode-card${activeMode === "screenshot" ? " active" : ""}`} onClick={() => setActiveMode("screenshot")} title="进入截图翻译:框选屏幕区域,OCR 翻译">
             <span className="mode-icon"><Icon name="camera" size={22} /></span>
             <b>截图翻译</b>
             <span className="mode-desc">框选屏幕区域,OCR 翻译</span>
-          </button>
-          <button className={`mode-card${activeMode === "selection" ? " active" : ""}`} onClick={() => { setActiveMode("selection"); toggleFloating(); }} title="复制任意文字自动翻译 (Ctrl+Shift+D)">
-            <span className="mode-icon"><Icon name="clipboard" size={22} /></span>
-            <b>划词翻译</b>
-            <span className="mode-desc">复制任意文字自动翻译</span>
           </button>
         </div>
 
         {/* 当前任务卡 */}
         <div className="task-card">
-          <div className="task-head">
-            <span className="task-title"><Icon name={taskIcon} size={18} /> {taskTitle}</span>
-            <span className={`status-pill ${statusInfo.tone}`}><Icon name={statusInfo.icon} size={11} /> {statusInfo.text}</span>
-          </div>
+          <div className="task-switch" key={activeMode}>
+            <div className="task-head">
+              <span className="task-title"><Icon name={taskIcon} size={18} /> {taskTitle}</span>
+              <span className={`status-pill ${statusInfo.tone}`}><Icon name={statusInfo.icon} size={11} /> {statusInfo.text}</span>
+            </div>
 
-          {/* 文本翻译(默认模式) */}
-          {activeMode === "text" && (
-            <div className="task-text">
+            {/* 文本翻译(默认模式) */}
+            {activeMode === "text" && (
+              <div className="task-text">
               <div className="lang-center">
                 <select className="lang-sel" value={sourceLang} onChange={(e) => setSourceLang(e.target.value)} title="源语言(自动检测=自动识别输入语言)">
                   {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
@@ -1905,32 +2021,28 @@ function MainWindow() {
                 onChange={(e) => setInput(e.target.value)}
                 rows={1}
               />
-              {conflictHint && conflict && !translating && output && (
+              {conflictHint && conflict && !translating && modeOutput.text && (
                 <div className="conflict-bar">
                   <span>检测到原文已是目标语言,需要交换翻译方向吗?</span>
                   <button className="btn-conflict" onClick={() => { setConflict(false); swapLangs(); }}>交换</button>
                   <button className="btn-conflict-dismiss" onClick={() => setConflict(false)}>忽略</button>
                 </div>
               )}
-              <div className="trans-output">
-                <div className="output-label">译文 {translating && <span className="pulse"><Icon name="dot" size={10} /></span>}{apiThinking && <span className="thinking-hint"><Icon name="sparkle" size={11} /> 模型思考中…</span>}</div>
-                <div className="output-text">{output || (translating ? "" : "输入后自动翻译...")}</div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* 音频翻译模式 */}
-          {activeMode === "audio" && (
-            <div className="task-mode-panel">
+            {/* 音频翻译模式 */}
+            {activeMode === "audio" && (
+              <div className="task-mode-panel">
+              {renderLangBar("audio")}
+              <button className={`mode-start${sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? " active" : ""}`} onClick={toggleAudioSubtitle} title="开关音频实时识别(识别→翻译→独立语音窗显示;与视频字幕互斥)">
+                <Icon name={sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "stop" : "play"} size={15} /> {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "停止音频翻译" : "开始音频翻译"}
+              </button>
               <div className="subtitle-panel-row">
-                <span className="subtitle-label"><Icon name="mic" size={15} /> 音频翻译</span>
                 <span className={`subtitle-status${sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? " live" : ""}`}>
                   {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? <Icon name="dot" size={10} style={{ color: "#34c759" }} /> : <Icon name="dot" size={10} style={{ color: "#c7c7cc" }} />} {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "运行中" : "已停止"}
                   {sourcesForMode(audioMode).map((s) => srcStatus(s)).filter(Boolean).map((st, i) => <em key={i} className="subtitle-msg">· {st}</em>)}
                 </span>
-                <button className="btn-float" onClick={toggleAudioSubtitle} title="开关音频实时识别(识别→翻译→独立语音窗显示;与视频字幕互斥)">
-                  {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "停止" : "开始"}
-                </button>
                 <label className="subtitle-mode">
                   <span>音频来源</span>
                   <select value={audioMode} onChange={(e) => changeAudioMode(e.target.value as "system" | "mic" | "both")} title="电脑音频=抓系统播放的声音;麦克风=抓麦克风;同时=两个都抓。运行中切换自动换来源,不停止">
@@ -1939,7 +2051,7 @@ function MainWindow() {
                     <option value="both">电脑音频+麦克风</option>
                   </select>
                 </label>
-                <span className="subtitle-region">识别语言:跟随主面板({LANGS.find((l) => l.code === sourceLang)?.label ?? sourceLang});断句灵敏度在 设置-音频</span>
+                <span className="subtitle-region">识别语言:{LANGS.find((l) => l.code === langFor("audio").src)?.label ?? langFor("audio").src}{independentLang ? "(音频独立)" : "(跟随文本翻译)"};断句灵敏度在 设置-音频</span>
               </div>
               {sourcesForMode(audioMode).filter((s) => isSrcOn(s)).map((s) => (
                 <div key={`lvl-${s}`} className="subtitle-panel-row" style={{ alignItems: "center", gap: 8 }}>
@@ -1959,50 +2071,57 @@ function MainWindow() {
                   <div className="subtitle-current-src"><Icon name={s === "mic" ? "mic" : "volume"} size={12} /> {srcPartial(s)}</div>
                 </div>
               ))}
-            </div>
-          )}
+              </div>
+            )}
 
-          {/* 视频字幕模式 */}
-          {activeMode === "subtitle" && (
-            <div className="task-mode-panel">
+            {/* 视频字幕模式 */}
+            {activeMode === "subtitle" && (
+              <div className="task-mode-panel">
+              {renderLangBar("subtitle")}
+              <button className={`mode-start${subtitleOn ? " active" : ""}`} onClick={toggleSubtitle} title="开关视频字幕 (Ctrl+Shift+U)">
+                <Icon name={subtitleOn ? "stop" : "play"} size={15} /> {subtitleOn ? "停止视频字幕" : "开始视频字幕"}
+              </button>
+              <div className="mode-start-sub">
+                <button className="mode-start-half" onClick={() => invoke("open_screenshot_overlay", { from: "subtitle" }).catch(() => {})} title="框选字幕识别区域(默认屏幕底部 1/4)">
+                  <Icon name="target" size={13} /> 调整区域
+                </button>
+                <button className="mode-start-half" onClick={testWinOcr} title="测试 Windows 系统 OCR(独立引擎,不影响 RapidOCR)">
+                  <Icon name="flask" size={13} /> 系统OCR测试
+                </button>
+              </div>
               <div className="subtitle-panel-row">
-                <span className="subtitle-label"><Icon name="film" size={15} /> 视频字幕</span>
                 <span className={`subtitle-status${subtitleOn ? " live" : ""}`}>
                   {subtitleOn ? <Icon name="dot" size={10} style={{ color: "#34c759" }} /> : <Icon name="dot" size={10} style={{ color: "#c7c7cc" }} />} {subtitleOn ? "运行中" : "已停止"} {subStatus && <em className="subtitle-msg">· {subStatus}</em>}
                 </span>
-                <button className="btn-float" onClick={toggleSubtitle} title="开关视频字幕 (Ctrl+Shift+U)">
-                  {subtitleOn ? "停止" : "开始"}
-                </button>
-                <button className="btn-float" onClick={() => invoke("open_screenshot_overlay", { from: "subtitle" }).catch(() => {})} title="框选字幕识别区域(默认屏幕底部 1/4)">
-                  <Icon name="target" size={13} /> 调整区域
-                </button>
-                <button className="btn-float" onClick={testWinOcr} title="测试 Windows 系统 OCR(独立引擎,不影响 RapidOCR)">
-                  <Icon name="flask" size={13} /> 系统OCR测试
-                </button>
               </div>
               {subRegion && <div className="subtitle-panel-row"><span className="subtitle-region">字幕区域: ({subRegion.x},{subRegion.y} {subRegion.w}×{subRegion.h});截帧频率/显示策略/OCR 引擎在 ⚙ 设置-视频字幕</span></div>}
               {subCurrent && (
                 <div className="subtitle-current">
                   <div className="subtitle-current-src">{subCurrent.text}</div>
-                  {subCurrent.result && <div className="subtitle-current-result">{subCurrent.result}</div>}
                 </div>
               )}
-            </div>
-          )}
+              </div>
+            )}
 
-          {/* 截图 / 划词模式:操作提示 */}
-          {activeMode === "screenshot" && (
-            <div className="task-mode-hint">
-              <p><Icon name="camera" size={18} /> 截图翻译</p>
-              <span>已触发框选:在屏幕上拖出需要翻译的区域(ESC / 右键取消)。悬浮窗发起的截图结果会显示在悬浮窗。</span>
-            </div>
-          )}
-          {activeMode === "selection" && (
-            <div className="task-mode-hint">
-              <p><Icon name="clipboard" size={18} /> 划词翻译</p>
-              <span>复制任意文字即自动弹出悬浮窗翻译;快捷键 Ctrl+Shift+D 开关悬浮窗。自动 / 手动模式在 设置-常规。</span>
-            </div>
-          )}
+            {/* 截图模式:截图键 + 原文灰框 */}
+            {activeMode === "screenshot" && (
+              <div className="task-mode-panel">
+              {renderLangBar("screenshot")}
+              <button className="mode-start" onClick={startScreenshot} title="框选屏幕区域,OCR 翻译(ESC/右键取消)">
+                <Icon name="camera" size={15} /> 截图翻译
+              </button>
+              <div className="subtitle-current">
+                <div className="subtitle-current-src">{screenshotSrc || "点击上方「截图翻译」框选屏幕区域,这里显示截到的原文"}</div>
+              </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 译文输出:独立于任务卡,每种模式各自一份互不影响 */}
+        <div className="trans-output trans-output-standalone">
+          <div className="output-label">译文 {translating && activeMode === "text" && <span className="pulse"><Icon name="dot" size={10} /></span>}{apiThinking && activeMode === "text" && <span className="thinking-hint"><Icon name="sparkle" size={11} /> 模型思考中…</span>}</div>
+          <div className="output-text">{modeOutput[activeMode] || (activeMode === "text" ? (translating ? "" : "输入后自动翻译...") : "暂无译文")}</div>
         </div>
       </main>
       )}
@@ -2021,16 +2140,16 @@ function FloatingWindow() {
   const [subRunning, setSubRunning] = useState(false);               // 字幕是否运行中(主窗口同步)
 
   /* Wave 9 外观:翻译页用 floating 外观,字幕页用 subtitle 外观 */
-  const [appr, setAppr] = useState<{ theme: string; appearance: Record<SurfaceKey, AppearanceItem> } | null>(null);
+  const [appr, setAppr] = useState<{ theme: string; accent: string; appearance: Record<SurfaceKey, AppearanceItem> } | null>(null);
   const surfaceKey: SurfaceKey = mode === "subtitle" ? "subtitle" : "floating";
   const surfaceKeyRef = useRef<SurfaceKey>(surfaceKey);
   surfaceKeyRef.current = surfaceKey;
   const currentAppr = appr?.appearance[surfaceKey] ?? DEFAULT_APPEARANCE[surfaceKey];
   const setSurfaceOpacity = (v: number) => {
-    const base = appr ?? { theme: "light", appearance: DEFAULT_APPEARANCE };
-    const next = { theme: base.theme, appearance: { ...base.appearance, [surfaceKey]: { ...base.appearance[surfaceKey], opacity: v } } };
+    const base = appr ?? { theme: "light", accent: "", appearance: DEFAULT_APPEARANCE };
+    const next = { theme: base.theme, accent: base.accent ?? "", appearance: { ...base.appearance, [surfaceKey]: { ...base.appearance[surfaceKey], opacity: v } } };
     setAppr(next);
-    applyWindowTheme(surfaceKey, next.theme, next.appearance);
+    applyWindowTheme(surfaceKey, next.theme, next.appearance, next.accent);
     invoke("update_appearance", { surface: surfaceKey, patch: { opacity: v } }).catch(() => {});
   };
 
@@ -2038,21 +2157,21 @@ function FloatingWindow() {
   useEffect(() => {
     invoke<any>("load_app_config").then((cfg) => {
       const s = cfg?.settings ?? {};
-      const st = { theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light", appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance) };
+      const st = { theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light", accent: typeof s.accentColor === "string" ? s.accentColor : "", appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance) };
       setAppr(st);
-      applyWindowTheme(surfaceKeyRef.current, st.theme, st.appearance);
+      applyWindowTheme(surfaceKeyRef.current, st.theme, st.appearance, st.accent);
     }).catch(() => {});
     (window as any).__applyAppSettings = (s: any) => {
-      const st = { theme: s?.theme === "dark" || s?.theme === "system" ? s.theme : "light", appearance: mergeAppearance(DEFAULT_APPEARANCE, s?.appearance) };
+      const st = { theme: s?.theme === "dark" || s?.theme === "system" ? s.theme : "light", accent: typeof s?.accentColor === "string" ? s.accentColor : "", appearance: mergeAppearance(DEFAULT_APPEARANCE, s?.appearance) };
       setAppr(st);
-      applyWindowTheme(surfaceKeyRef.current, st.theme, st.appearance);
+      applyWindowTheme(surfaceKeyRef.current, st.theme, st.appearance, st.accent);
     };
     return () => { delete (window as any).__applyAppSettings; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   /* 翻译页/字幕页切换时按当前界面重新应用外观 */
   useEffect(() => {
-    if (appr) applyWindowTheme(surfaceKey, appr.theme, appr.appearance);
+    if (appr) applyWindowTheme(surfaceKey, appr.theme, appr.appearance, appr.accent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, appr]);
 
@@ -2189,14 +2308,14 @@ function AudioFloatingWindow() {
   const [sens, setSens] = useState<Record<string, number>>({});
 
   /* Wave 9 外观:电脑音频窗用 audio 外观,麦克风窗用 audioMic 外观 */
-  const [appr, setAppr] = useState<{ theme: string; appearance: Record<SurfaceKey, AppearanceItem> } | null>(null);
+  const [appr, setAppr] = useState<{ theme: string; accent: string; appearance: Record<SurfaceKey, AppearanceItem> } | null>(null);
   const surfaceKey: SurfaceKey = isMic ? "audioMic" : "audio";
   const currentAppr = appr?.appearance[surfaceKey] ?? DEFAULT_APPEARANCE[surfaceKey];
   const setSurfaceOpacity = (v: number) => {
-    const base = appr ?? { theme: "light", appearance: DEFAULT_APPEARANCE };
-    const next = { theme: base.theme, appearance: { ...base.appearance, [surfaceKey]: { ...base.appearance[surfaceKey], opacity: v } } };
+    const base = appr ?? { theme: "light", accent: "", appearance: DEFAULT_APPEARANCE };
+    const next = { theme: base.theme, accent: base.accent ?? "", appearance: { ...base.appearance, [surfaceKey]: { ...base.appearance[surfaceKey], opacity: v } } };
     setAppr(next);
-    applyWindowTheme(surfaceKey, next.theme, next.appearance);
+    applyWindowTheme(surfaceKey, next.theme, next.appearance, next.accent);
     invoke("update_appearance", { surface: surfaceKey, patch: { opacity: v } }).catch(() => {});
   };
 
@@ -2204,20 +2323,20 @@ function AudioFloatingWindow() {
   useEffect(() => {
     invoke<any>("load_app_config").then((cfg) => {
       const s = cfg?.settings ?? {};
-      const st = { theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light", appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance) };
+      const st = { theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light", accent: typeof s.accentColor === "string" ? s.accentColor : "", appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance) };
       setAppr(st);
-      applyWindowTheme(surfaceKey, st.theme, st.appearance);
+      applyWindowTheme(surfaceKey, st.theme, st.appearance, st.accent);
     }).catch(() => {});
     (window as any).__applyAppSettings = (s: any) => {
-      const st = { theme: s?.theme === "dark" || s?.theme === "system" ? s.theme : "light", appearance: mergeAppearance(DEFAULT_APPEARANCE, s?.appearance) };
+      const st = { theme: s?.theme === "dark" || s?.theme === "system" ? s.theme : "light", accent: typeof s?.accentColor === "string" ? s.accentColor : "", appearance: mergeAppearance(DEFAULT_APPEARANCE, s?.appearance) };
       setAppr(st);
-      applyWindowTheme(surfaceKey, st.theme, st.appearance);
+      applyWindowTheme(surfaceKey, st.theme, st.appearance, st.accent);
     };
     return () => { delete (window as any).__applyAppSettings; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
-    if (appr) applyWindowTheme(surfaceKey, appr.theme, appr.appearance);
+    if (appr) applyWindowTheme(surfaceKey, appr.theme, appr.appearance, appr.accent);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appr]);
 
