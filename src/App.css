@@ -477,6 +477,57 @@ body,
   border-color: var(--ios-blue, #007aff);
   background: #fff;
 }
+.detect-picker {
+  margin-top: 6px;
+  border: 1px solid rgba(0, 122, 255, 0.25);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(0, 122, 255, 0.04);
+}
+.detect-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.detect-picker-head input {
+  flex: 1;
+  min-width: 140px;
+}
+.detect-picker-list {
+  max-height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.detect-picker-item {
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.8);
+  font-size: 13px;
+  color: var(--ios-text, #1c1c1e);
+  cursor: pointer;
+}
+.detect-picker-item:hover {
+  border-color: var(--ios-blue, #007aff);
+  color: var(--ios-blue, #007aff);
+}
+.detect-picker-item.added {
+  background: rgba(0, 122, 255, 0.12);
+  border-color: rgba(0, 122, 255, 0.4);
+  color: var(--ios-blue, #007aff);
+}
+.detect-picker-empty {
+  padding: 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ios-secondary, #8e8e93);
+}
 .subtitle-panel-row {
   display: flex;
   align-items: center;

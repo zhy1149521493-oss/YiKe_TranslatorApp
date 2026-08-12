@@ -308,24 +308,32 @@ function MainWindow() {
   const [activeProviderId, setActiveProviderId] = useState("");
   const [enginePanelOpen, setEnginePanelOpen] = useState(false);
   const [engineStatus, setEngineStatus] = useState("");
+  const [detectPicker, setDetectPicker] = useState<{ providerId: string; models: string[]; query: string } | null>(null);
   const configLoadedRef = useRef(false);
   // 渲染时同步模块级镜像,供 translateStream/translateFull 路由读取
   engineCfg = { mode: engineMode, providers, activeProviderId };
 
   /* 启动时加载引擎配置(config.json) */
   useEffect(() => {
-    invoke<{ engineMode?: EngineMode; activeProviderId?: string; providers?: ProviderCfg[] }>("load_app_config")
+    invoke<{ configVersion?: number; engineMode?: EngineMode; activeProviderId?: string; providers?: ProviderCfg[] }>("load_app_config")
       .then((cfg) => {
         configLoadedRef.current = true;
         if (!cfg) return;
         if (cfg.engineMode) setEngineMode(cfg.engineMode);
         if (Array.isArray(cfg.providers)) {
-          setProviders(
-            cfg.providers
-              .filter((p) => p && typeof p.id === "string")
-              .map((p) => ({ ...p, temperature: p.temperature ?? "", noThinking: p.noThinking ?? "" }))
-          );
-          if (cfg.activeProviderId && cfg.providers.some((p) => p.id === cfg.activeProviderId)) {
+          let list = cfg.providers
+            .filter((p) => p && typeof p.id === "string")
+            .map((p) => ({ ...p, temperature: p.temperature ?? "", noThinking: p.noThinking ?? "" }));
+          // 迁移(一次):旧版把检测到的所有模型自动塞进列表(中转站可能上百个);
+          // 新版语义=只保留用户明确添加/使用的模型。configVersion 置 2 后不再迁移。
+          if (cfg.configVersion !== 2) {
+            list = list.map((p) => ({ ...p, models: p.model && p.model.trim() ? [p.model] : [] }));
+            invoke("save_app_config", {
+              config: { configVersion: 2, engineMode: cfg.engineMode, activeProviderId: cfg.activeProviderId, providers: list },
+            }).catch(() => {});
+          }
+          setProviders(list);
+          if (cfg.activeProviderId && list.some((p) => p.id === cfg.activeProviderId)) {
             setActiveProviderId(cfg.activeProviderId);
           }
         }
@@ -337,7 +345,7 @@ function MainWindow() {
   useEffect(() => {
     if (!configLoadedRef.current) return;
     const t = setTimeout(() => {
-      invoke("save_app_config", { config: { engineMode, activeProviderId, providers } }).catch((e) => console.error("保存配置失败", e));
+      invoke("save_app_config", { config: { configVersion: 2, engineMode, activeProviderId, providers } }).catch((e) => console.error("保存配置失败", e));
     }, 400);
     return () => clearTimeout(t);
   }, [engineMode, activeProviderId, providers]);
@@ -1071,7 +1079,8 @@ function MainWindow() {
   const updateProvider = (id: string, patch: Partial<ProviderCfg>) => {
     setProviders((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   };
-  const probeModels = async (id: string) => {
+  /* 检测模型:拉取供应商可用模型列表,打开"选择器"让用户点选要添加的(绝不自动全量导入) */
+  const openModelPicker = async (id: string) => {
     const p = providers.find((x) => x.id === id);
     if (!p) return;
     if (!p.baseUrl.trim() || !p.apiKey.trim()) {
@@ -1082,11 +1091,19 @@ function MainWindow() {
     try {
       const models = await fetchApiModels(p);
       if (!models.length) throw new Error("模型列表为空(可手动输入模型名)");
-      updateProvider(id, { models, model: p.model || models[0] });
-      setEngineStatus(`✅ 检测到 ${models.length} 个模型`);
+      setDetectPicker({ providerId: id, models, query: "" });
+      setEngineStatus(`✅ 检测到 ${models.length} 个模型,点选要添加的(只添加你选的)`);
     } catch (e: any) {
       setEngineStatus(`❌ 检测失败: ${e?.message ?? e}`);
     }
+  };
+  /* 从选择器添加一个模型(仅这一个进入该供应商的模型列表并设为当前模型) */
+  const pickModel = (id: string, m: string) => {
+    const p = providers.find((x) => x.id === id);
+    if (!p) return;
+    const models = p.models.includes(m) ? p.models : [...p.models, m];
+    updateProvider(id, { models, model: m });
+    setEngineStatus(`✅ 已添加并选择: ${m}`);
   };
   const testProvider = async (id: string) => {
     const p = providers.find((x) => x.id === id);
@@ -1179,19 +1196,37 @@ function MainWindow() {
                       <input type="checkbox" checked={activeProvider.noThinking === "1"} onChange={(e) => updateProvider(activeProvider.id, { noThinking: e.target.checked ? "1" : "" })} />
                       禁用思考
                     </label>
-                    <button className="btn-float" onClick={() => probeModels(activeProvider.id)} title="GET {Base URL}/models 拉取模型列表">🔍 检测模型</button>
+                    <button className="btn-float" onClick={() => openModelPicker(activeProvider.id)} title="GET {Base URL}/models 拉取模型列表,点选要添加的(只添加你选的)">🔍 检测/选择模型</button>
                     <button className="btn-float" onClick={() => testProvider(activeProvider.id)} title="发一个小翻译请求验证连通性">🧪 测试连接</button>
                   </div>
                   <div className="subtitle-panel-row">
-                    <select className="engine-input" value={activeProvider.models.includes(activeProvider.model) ? activeProvider.model : "__custom__"} onChange={(e) => { const v = e.target.value; if (v !== "__custom__") updateProvider(activeProvider.id, { model: v }); }} title="检测到的模型列表;选「自定义…」可手动输入">
-                      {activeProvider.models.length === 0 && <option value="">暂无检测结果</option>}
+                    <select className="engine-input" value={activeProvider.models.includes(activeProvider.model) ? activeProvider.model : "__custom__"} onChange={(e) => { const v = e.target.value; if (v !== "__custom__") updateProvider(activeProvider.id, { model: v }); }} title="已添加的模型(只含你明确添加的);选「自定义…」手动输入">
                       {activeProvider.models.map((m) => <option key={m} value={m}>{m}</option>)}
                       <option value="__custom__">✏️ 自定义…</option>
                     </select>
                   </div>
                   {!activeProvider.models.includes(activeProvider.model) && (
                     <div className="subtitle-panel-row">
-                      <input className="engine-input" placeholder="手动输入模型名(如 hy-mt2-pro)" value={activeProvider.model} onChange={(e) => updateProvider(activeProvider.id, { model: e.target.value })} spellCheck={false} />
+                      <input className="engine-input" placeholder="手动输入模型名,失焦后加入已添加列表(如 hy-mt2-pro)" value={activeProvider.model} onChange={(e) => updateProvider(activeProvider.id, { model: e.target.value })} onBlur={() => { const v = activeProvider.model.trim(); if (v && !activeProvider.models.includes(v)) updateProvider(activeProvider.id, { models: [...activeProvider.models, v] }); }} spellCheck={false} />
+                    </div>
+                  )}
+                  {detectPicker && detectPicker.providerId === activeProvider.id && (
+                    <div className="detect-picker">
+                      <div className="detect-picker-head">
+                        <b>选择要添加的模型(共 {detectPicker.models.length} 个,只添加你点的)</b>
+                        <input className="engine-input" placeholder="搜索模型名..." value={detectPicker.query} onChange={(e) => setDetectPicker({ ...detectPicker, query: e.target.value })} autoFocus spellCheck={false} />
+                        <button className="btn-float" onClick={() => setDetectPicker(null)} title="关闭选择器">完成</button>
+                      </div>
+                      <div className="detect-picker-list">
+                        {detectPicker.models.filter((m) => m.toLowerCase().includes(detectPicker.query.trim().toLowerCase())).map((m) => (
+                          <button key={m} className={`detect-picker-item${activeProvider.models.includes(m) ? " added" : ""}`} onClick={() => pickModel(activeProvider.id, m)} title={activeProvider.models.includes(m) ? "已添加,点击切换为该模型" : "点击添加该模型并选中"}>
+                            {activeProvider.models.includes(m) ? "✓ " : "+ "}{m}
+                          </button>
+                        ))}
+                      </div>
+                      {detectPicker.models.filter((m) => m.toLowerCase().includes(detectPicker.query.trim().toLowerCase())).length === 0 && (
+                        <div className="detect-picker-empty">无匹配模型</div>
+                      )}
                     </div>
                   )}
                 </div>
