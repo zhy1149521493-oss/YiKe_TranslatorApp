@@ -1151,6 +1151,9 @@ function MainWindow() {
           <button className="btn-float" onClick={openFloating} title="打开翻译悬浮窗">
             {floatingOpen ? "📍 已开" : "🔲 悬浮窗"}
           </button>
+          <button className="btn-float" onClick={() => invoke("quit_app").catch((e) => console.error("退出失败", e))} title="退出程序(也可用系统托盘图标退出)">
+            ⏻ 退出
+          </button>
         </div>
       </header>
 

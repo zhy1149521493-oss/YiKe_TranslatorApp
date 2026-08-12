@@ -109,6 +109,22 @@ fn save_app_config(config: serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+/// 显示并聚焦主窗口(托盘"打开主窗口" / 左键点击托盘用)
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+        eprintln!("[main] shown from tray");
+    }
+}
+
+/// 退出程序:主窗口"退出"按钮 / 托盘"退出"菜单调用;触发 OllamaManager Drop 清理子进程
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    eprintln!("[app] quit requested");
+    app.exit(0);
+}
+
 // ============ 第8波:外接 API Rust 代理(绕过浏览器 CORS) ============
 // 中转站/中继服务(如 tokenhub)不返回 CORS 允许头,WebView fetch 会被浏览器拦截;
 // Rust 侧 reqwest 直连无此限制,同时统一处理超时(chat 60s / 模型列表 20s)。
@@ -772,7 +788,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, load_app_config, save_app_config, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, load_app_config, save_app_config, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");
@@ -902,11 +918,51 @@ pub fn run() {
                 });
                 eprintln!("[shortcut] Rust 侧注册 Ctrl+Shift+D/S/U 完成");
             }
+
+            // 【系统托盘】常驻工具的标准退出/恢复入口(第 8 波收尾):
+            // 左键点击=打开主窗口;菜单=打开主窗口 / 退出。
+            // 配合"主窗口 ✕ = 隐藏到后台",让用户明确知道程序仍在运行并可随时退出。
+            {
+                use tauri::menu::{Menu, MenuItem};
+                use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+                if let Some(icon) = app.default_window_icon().cloned() {
+                    let show_item = MenuItem::with_id(app, "show", "打开主窗口", true, None::<&str>)?;
+                    let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+                    let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+                    TrayIconBuilder::with_id("main-tray")
+                        .icon(icon)
+                        .menu(&menu)
+                        .show_menu_on_left_click(false)
+                        .on_menu_event(|app, event| match event.id.as_ref() {
+                            "show" => show_main_window(app),
+                            "quit" => app.exit(0),
+                            _ => {}
+                        })
+                        .on_tray_icon_event(|tray, event| {
+                            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                                show_main_window(tray.app_handle());
+                            }
+                        })
+                        .build(app)?;
+                    eprintln!("[tray] created (打开主窗口 / 退出)");
+                } else {
+                    eprintln!("[tray] default icon missing, tray skipped");
+                }
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
             match event {
-                tauri::WindowEvent::CloseRequested { .. } => eprintln!("[win] {} CloseRequested", window.label()),
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    eprintln!("[win] {} CloseRequested", window.label());
+                    // 驻留模式:主窗口 ✕ 只隐藏到后台(托盘仍在,可随时恢复/退出);
+                    // 否则主窗销毁后没有任何窗口,后台功能全停且无法再打开主窗。
+                    if window.label() == "main" {
+                        api.prevent_close();
+                        let _ = window.hide();
+                        eprintln!("[main] hidden to tray (resident mode)");
+                    }
+                }
                 tauri::WindowEvent::Destroyed => eprintln!("[win] {} Destroyed", window.label()),
                 _ => {}
             }
