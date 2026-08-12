@@ -5,7 +5,7 @@ use std::os::windows::process::CommandExt;
 use std::process::{Command as StdCommand, Child, Stdio};
 use std::sync::Mutex;
 use rapidocr_core::RapidOcr;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::ShortcutState;
 
 mod audio;
 
@@ -109,11 +109,62 @@ fn save_app_config(config: serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+/// 广播设置到所有悬浮窗(外观即时生效):eval 注入,跨窗口最可靠(见 DECISIONS #014)
+#[tauri::command]
+fn broadcast_settings(settings: serde_json::Value, app: tauri::AppHandle) -> Result<(), String> {
+    let js = format!("window.__applyAppSettings && window.__applyAppSettings({})", settings.to_string());
+    for label in ["floating", "audio-floating", "audio-floating-mic"] {
+        if let Some(w) = app.get_webview_window(label) {
+            let _ = w.eval(&js);
+        }
+    }
+    Ok(())
+}
+
+/// 悬浮窗快捷滑条改外观:读配置 → 合并 patch 到 settings.appearance[surface] → 存盘 → 广播
+#[tauri::command]
+fn update_appearance(surface: String, patch: serde_json::Value, app: tauri::AppHandle) -> Result<(), String> {
+    let mut cfg: serde_json::Value = load_app_config();
+    if !cfg.is_object() {
+        cfg = serde_json::json!({});
+    }
+    let obj = cfg.as_object_mut().ok_or("配置格式错误")?;
+    let settings = obj.entry("settings").or_insert_with(|| serde_json::json!({}));
+    let s_obj = settings.as_object_mut().ok_or("settings 格式错误")?;
+    let appearance = s_obj.entry("appearance").or_insert_with(|| serde_json::json!({}));
+    let a_obj = appearance.as_object_mut().ok_or("appearance 格式错误")?;
+    let target = a_obj.entry(surface).or_insert_with(|| serde_json::json!({}));
+    if let (Some(t), Some(p)) = (target.as_object_mut(), patch.as_object()) {
+        for (k, v) in p {
+            t.insert(k.clone(), v.clone());
+        }
+    }
+    save_app_config(cfg.clone())?;
+    let s = cfg.get("settings").cloned().unwrap_or_else(|| serde_json::json!({}));
+    broadcast_settings(s, app)
+}
+
 /// 显示并聚焦主窗口(托盘"打开主窗口" / 左键点击托盘用)
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.set_focus();
+        // 强制抢前台:Windows 前台锁会拒绝后台进程 SetForegroundWindow。
+        // 二次启动时已 AllowSetForegroundWindow(ASFW_ANY),这里再置顶兜底(TOPMOST 闪一下),
+        // 确保被其他窗口盖住时也能带到最前。
+        if let Ok(hwnd0) = w.hwnd() {
+            unsafe {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    BringWindowToTop, SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                };
+                // tauri 依赖 windows 0.61,本项目用 0.62:经裸指针转换,类型不互通
+                let hwnd = windows::Win32::Foundation::HWND(hwnd0.0 as usize as *mut core::ffi::c_void);
+                let _ = BringWindowToTop(hwnd);
+                let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                let _ = SetWindowPos(hwnd, Some(HWND_NOTOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+            let _ = w.set_focus();
+        }
         eprintln!("[main] shown from tray");
     }
 }
@@ -749,7 +800,7 @@ fn open_floating_window(app: tauri::AppHandle) -> Result<(), String> {
             .title("翻译悬浮窗")
             .inner_size(380.0, 220.0)
             .min_inner_size(280.0, 160.0)
-            .resizable(false)
+            .resizable(true)
             .decorations(false)
             .transparent(true)
             .always_on_top(true)
@@ -782,14 +833,187 @@ fn open_floating_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ============ Wave 9: 可配置全局快捷键 ============
+// 组合键存 config.json settings.shortcuts(action → "Ctrl+Shift+D" 等;空字符串 = 禁用)。
+// 设置中心改键后调用 apply_shortcuts 重新注册:先 unregister_all,再逐个注册。
+fn apply_shortcuts_impl(
+    app: &tauri::AppHandle,
+    shortcuts: &std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+    let mut items: Vec<(String, String)> = shortcuts
+        .iter()
+        .map(|(a, c)| (a.clone(), c.trim().to_string()))
+        .filter(|(_, c)| !c.is_empty())
+        .collect();
+    items.sort();
+    let mut registered = 0usize;
+    for (action, combo) in items {
+        let act = action.clone();
+        let ok = gs.on_shortcut(combo.as_str(), move |app, _s, e| {
+            if e.state == ShortcutState::Pressed {
+                let _ = app.emit_to("main", "global-shortcut", act.clone());
+            }
+        });
+        if let Err(e) = ok {
+            eprintln!("[shortcut] register {combo} failed: {e}");
+            return Err(format!("注册快捷键 {combo} 失败: {e}"));
+        }
+        registered += 1;
+        eprintln!("[shortcut] registered {combo} -> {action}");
+    }
+    eprintln!("[shortcut] total registered: {registered}");
+    Ok(())
+}
+
+/// 应用快捷键配置(设置中心保存后调用):空字符串 = 该动作无快捷键
+#[tauri::command]
+fn apply_shortcuts(shortcuts: std::collections::HashMap<String, String>, app: tauri::AppHandle) -> Result<(), String> {
+    apply_shortcuts_impl(&app, &shortcuts)
+}
+
+// ============ 单实例(2026-08-12) ============
+// 命名互斥体检测重复实例;二次启动时通过命名事件通知已有实例把主窗口带到前台,然后本实例退出。
+// 放在 run() 最前面:重复实例不会执行 ollama 清理/启动逻辑,不会误杀已有实例的子进程。
+const INSTANCE_MUTEX_NAME: &str = "Local\\TranslatorAssistant_SingleInstance";
+const INSTANCE_SHOW_EVENT: &str = "Local\\TranslatorAssistant_ShowEvent";
+static INSTANCE_MUTEX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+static SHOW_EVENT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+fn acquire_single_instance() -> bool {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows::Win32::System::Threading::{CreateEventW, CreateMutexW, ResetEvent, SetEvent, WaitForSingleObject};
+    unsafe {
+        let mutex_name = HSTRING::from(INSTANCE_MUTEX_NAME);
+        let m = match CreateMutexW(None, true, &mutex_name) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("[single-instance] mutex create failed: {e}, continuing anyway");
+                return true;
+            }
+        };
+        let already = GetLastError() == ERROR_ALREADY_EXISTS;
+        if already {
+            // 通知已有实例显示主窗口;先授予前台权限,确保它的 SetForegroundWindow 不被系统拒绝
+            use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
+            let _ = AllowSetForegroundWindow(windows::Win32::UI::WindowsAndMessaging::ASFW_ANY);
+            let ev_name = HSTRING::from(INSTANCE_SHOW_EVENT);
+            if let Ok(ev) = CreateEventW(None, true, false, &ev_name) {
+                if !ev.is_invalid() {
+                    let _ = SetEvent(ev);
+                }
+            }
+            return false;
+        }
+        let _ = INSTANCE_MUTEX.set(m.0 as usize);
+        let ev_name = HSTRING::from(INSTANCE_SHOW_EVENT);
+        if let Ok(ev) = CreateEventW(None, true, false, &ev_name) {
+            if !ev.is_invalid() {
+                let _ = SHOW_EVENT.set(ev.0 as usize);
+            }
+        }
+        // 等待"显示主窗口"通知:等 AppHandle 就绪后进入永久监听循环。
+        // 注意:之前用 WaitForSingleObject(10s) 超时后线程退出,导致启动 10 秒后
+        // 再双击 exe 时无人监听 → 置顶 99% 失灵。现在 INFINITE 等待 + ResetEvent 复位。
+        std::thread::spawn(|| {
+            for _ in 0..100 {
+                if APP_HANDLE.get().is_some() { break; }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            if let (Some(handle), Some(ev)) = (APP_HANDLE.get(), SHOW_EVENT.get()) {
+                let h = windows::Win32::Foundation::HANDLE(*ev as *mut core::ffi::c_void);
+                loop {
+                    let _ = WaitForSingleObject(h, u32::MAX); // INFINITE
+                    show_main_window(handle);
+                    let _ = ResetEvent(h);
+                }
+            }
+        });
+        true
+    }
+}
+
+/// 最小化主窗口(JS minimize 曾失效,直接走系统 ShowWindow,绕过 WebView/JS 层)
+#[tauri::command]
+fn minimize_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager as _;
+    if let Some(w) = app.get_webview_window("main") {
+        let hwnd0 = w.hwnd().map_err(|e| format!("获取窗口句柄失败: {e}"))?;
+        let hwnd = windows::Win32::Foundation::HWND(hwnd0.0 as usize as *mut core::ffi::c_void);
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_MINIMIZE};
+            let _ = ShowWindow(hwnd, SW_MINIMIZE);
+        }
+        eprintln!("[main] minimized via ShowWindow");
+    }
+    Ok(())
+}
+
+// ============ 悬浮窗缩放(透明窗 startResizeDragging 无效,改用系统轮询) ============
+#[tauri::command]
+fn floating_resize_begin(kind: String, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager as _;
+    let label = match kind.as_str() {
+        "audio" => "audio-floating",
+        "audioMic" => "audio-floating-mic",
+        _ => "floating",
+    };
+    let Some(w) = app.get_webview_window(label) else {
+        return Err(format!("{label} 窗口不存在"));
+    };
+    static RESIZING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if RESIZING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+    let hwnd0 = w.hwnd().map_err(|e| format!("获取窗口句柄失败: {e}"))?;
+    let hwnd_raw = hwnd0.0 as usize;
+    let size0 = w.outer_size().map_err(|e| format!("读取窗口尺寸失败: {e}"))?;
+    let scale = w.scale_factor().unwrap_or(1.0);
+    let min_w = (280.0 * scale).round() as i32;
+    let min_h = (160.0 * scale).round() as i32;
+    std::thread::spawn(move || {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER};
+        let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut core::ffi::c_void);
+        unsafe {
+            let mut start = POINT::default();
+            let _ = GetCursorPos(&mut start);
+            loop {
+                if GetAsyncKeyState(0x01) & (0x8000u16 as i16) == 0 { break; }
+                let mut p = POINT::default();
+                let _ = GetCursorPos(&mut p);
+                let cur_w = (size0.width as i32 + (p.x - start.x)).max(min_w);
+                let cur_h = (size0.height as i32 + (p.y - start.y)).max(min_h);
+                let _ = SetWindowPos(hwnd, None, 0, 0, cur_w as i32, cur_h as i32, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                std::thread::sleep(std::time::Duration::from_millis(4));
+            }
+            RESIZING.store(false, std::sync::atomic::Ordering::SeqCst);
+            eprintln!("[{label}] resize end");
+        }
+    });
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 单实例:已有一个实例在运行 → 让它显示到顶层,本实例直接退出
+    if !acquire_single_instance() {
+        eprintln!("[single-instance] another instance is running, bringing it to front and exiting");
+        std::process::exit(0);
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, load_app_config, save_app_config, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
+            // 单实例:记录 AppHandle 供"二次启动显示主窗口"线程使用
+            let _ = APP_HANDLE.set(app.handle().clone());
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");
             let _ = StdCommand::new("taskkill")
@@ -829,7 +1053,7 @@ pub fn run() {
                     .title("翻译悬浮窗")
                     .inner_size(380.0, 220.0)
                     .min_inner_size(280.0, 160.0)
-                    .resizable(false)
+                    .resizable(true)
                     .decorations(false)
                     .transparent(true)
                     .always_on_top(true)
@@ -842,7 +1066,7 @@ pub fn run() {
                     .title("语音窗")
                     .inner_size(380.0, 220.0)
                     .min_inner_size(280.0, 160.0)
-                    .resizable(false)
+                    .resizable(true)
                     .decorations(false)
                     .transparent(true)
                     .always_on_top(true)
@@ -855,7 +1079,7 @@ pub fn run() {
                     .title("麦克风语音窗")
                     .inner_size(380.0, 220.0)
                     .min_inner_size(280.0, 160.0)
-                    .resizable(false)
+                    .resizable(true)
                     .decorations(false)
                     .transparent(true)
                     .always_on_top(true)
@@ -893,30 +1117,27 @@ pub fn run() {
                 eprintln!("[setup] webview_windows: {ww:?}");
             }
 
-            // 【全局快捷键:Rust 侧注册】
-            // 不能在前端 register:release 版预建了 main/floating/overlay 三个窗口,
-            // 都加载 index.html 都会执行 register。Windows RegisterHotKey 对同一组合键
-            // 重复注册返回 ERROR_HOTKEY_ALREADY_REGISTERED,插件 store 按 hotkey id 只保留
-            // 一个 handler —— 先注册成功的窗口独占事件(可能是隐藏的 floating/overlay),
-            // 主窗口收不到(dev 版只有主窗口注册,所以正常)。
-            // 这里只注册一次,事件统一 emit 到主窗口,由前端监听处理。
+            // 【全局快捷键:Rust 侧注册(Wave 9 起可配置)】
+            // 只在 Rust 注册一次,事件统一 emit 到主窗口,由前端监听处理(避免 release 版
+            // 多窗口重复注册 RegisterHotKey 冲突,事件被隐藏窗口独占的问题)。
+            // 组合键从 config.json settings.shortcuts 读取(action → accelerator;空=禁用);
+            // 配置缺失时回退默认 Ctrl+Shift+D/S/U(音频字幕默认无快捷键)。
             {
-                let _ = app.global_shortcut().on_shortcut("CommandOrControl+Shift+D", |app, _s, e| {
-                    if e.state == ShortcutState::Pressed {
-                        let _ = app.emit_to("main", "global-shortcut", "toggle-floating");
-                    }
-                });
-                let _ = app.global_shortcut().on_shortcut("CommandOrControl+Shift+S", |app, _s, e| {
-                    if e.state == ShortcutState::Pressed {
-                        let _ = app.emit_to("main", "global-shortcut", "screenshot");
-                    }
-                });
-                let _ = app.global_shortcut().on_shortcut("CommandOrControl+Shift+U", |app, _s, e| {
-                    if e.state == ShortcutState::Pressed {
-                        let _ = app.emit_to("main", "global-shortcut", "toggle-subtitle");
-                    }
-                });
-                eprintln!("[shortcut] Rust 侧注册 Ctrl+Shift+D/S/U 完成");
+                let mut shortcuts: std::collections::HashMap<String, String> = std::fs::read_to_string(config_path())
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                    .and_then(|v| v.get("settings").and_then(|x| x.get("shortcuts")).cloned())
+                    .and_then(|v| serde_json::from_value::<std::collections::HashMap<String, String>>(v).ok())
+                    .unwrap_or_default();
+                if shortcuts.is_empty() {
+                    shortcuts.insert("toggle-floating".to_string(), "Ctrl+Shift+D".to_string());
+                    shortcuts.insert("screenshot".to_string(), "Ctrl+Shift+S".to_string());
+                    shortcuts.insert("toggle-subtitle".to_string(), "Ctrl+Shift+U".to_string());
+                    shortcuts.insert("toggle-audio-subtitle".to_string(), String::new());
+                }
+                if let Err(e) = apply_shortcuts_impl(app.handle(), &shortcuts) {
+                    eprintln!("[shortcut] setup register error: {e}");
+                }
             }
 
             // 【系统托盘】常驻工具的标准退出/恢复入口(第 8 波收尾):
@@ -967,7 +1188,12 @@ pub fn run() {
                         api.prevent_close();
                         if main_close == "quit" {
                             eprintln!("[main] CloseRequested → quit app (mainClose=quit)");
-                            let _ = window.app_handle().exit(0);
+                            // CloseRequested 处理中直接 exit 偶发不生效:延迟一小段再退出
+                            let handle = window.app_handle().clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(150));
+                                handle.exit(0);
+                            });
                         } else {
                             let _ = window.hide();
                             eprintln!("[main] hidden to tray (resident mode, mainClose=hide)");

@@ -6,6 +6,124 @@ import "./App.css";
 
 const appWindow = getCurrentWebviewWindow();
 
+/* ============ Wave 9: 设置中心 / 外观 / 快捷键 ============ */
+type SurfaceKey = "main" | "floating" | "audio" | "audioMic" | "subtitle";
+type AppearanceItem = { bg: string; opacity: number; textColor: string; fontSize: number };
+type ShortcutAction = "toggle-floating" | "screenshot" | "toggle-subtitle" | "toggle-audio-subtitle";
+
+const SURFACE_LABELS: Record<SurfaceKey, string> = {
+  main: "主窗口",
+  floating: "翻译悬浮窗",
+  audio: "电脑音频窗",
+  audioMic: "麦克风窗",
+  subtitle: "视频字幕窗",
+};
+
+const DEFAULT_APPEARANCE: Record<SurfaceKey, AppearanceItem> = {
+  main: { bg: "", opacity: 100, textColor: "", fontSize: 15 },
+  floating: { bg: "", opacity: 88, textColor: "", fontSize: 14 },
+  audio: { bg: "", opacity: 88, textColor: "", fontSize: 14 },
+  audioMic: { bg: "", opacity: 88, textColor: "", fontSize: 14 },
+  subtitle: { bg: "", opacity: 88, textColor: "", fontSize: 14 },
+};
+
+const DEFAULT_SHORTCUTS: Record<ShortcutAction, string> = {
+  "toggle-floating": "Ctrl+Shift+D",
+  screenshot: "Ctrl+Shift+S",
+  "toggle-subtitle": "Ctrl+Shift+U",
+  "toggle-audio-subtitle": "",
+};
+
+const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
+  "toggle-floating": "划词翻译(悬浮窗开关)",
+  screenshot: "截图翻译",
+  "toggle-subtitle": "视频字幕",
+  "toggle-audio-subtitle": "音频字幕",
+};
+
+const SETTINGS_NAV: [string, string][] = [
+  ["general", "常规"],
+  ["translate", "翻译"],
+  ["audio", "音频"],
+  ["subtitle", "视频字幕"],
+  ["floating", "悬浮窗"],
+  ["providers", "翻译服务"],
+  ["shortcuts", "快捷键"],
+  ["about", "关于"],
+];
+
+/* 配置合并:旧配置缺失的项用默认值补齐 */
+function mergeAppearance(
+  base: Record<SurfaceKey, AppearanceItem>,
+  patch?: Partial<Record<SurfaceKey, Partial<AppearanceItem>>>
+): Record<SurfaceKey, AppearanceItem> {
+  const out = {} as Record<SurfaceKey, AppearanceItem>;
+  for (const k of Object.keys(base) as SurfaceKey[]) {
+    out[k] = { ...base[k], ...(patch?.[k] ?? {}) };
+  }
+  return out;
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return `rgba(255,255,255,${alpha})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+/* 把主题 + 某界面的外观应用到当前窗口(设置 <html data-theme> + CSS 变量)。
+   bg/textColor 留空 = 跟随主题默认;字体大小/背景透明度即时生效 */
+function applyWindowTheme(
+  surface: SurfaceKey,
+  theme: string,
+  appearance: Record<SurfaceKey, AppearanceItem>
+) {
+  const resolved =
+    theme === "system"
+      ? window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light"
+      : theme;
+  document.documentElement.dataset.theme = resolved;
+  const item = appearance[surface] ?? DEFAULT_APPEARANCE[surface];
+  const st = document.documentElement.style;
+  if (item.textColor) st.setProperty("--ios-text", item.textColor);
+  else st.removeProperty("--ios-text");
+  if (item.fontSize) st.setProperty("--w-font", `${item.fontSize}px`);
+  else st.removeProperty("--w-font");
+  const alpha = Math.max(0, Math.min(1, item.opacity / 100));
+  if (surface === "main") {
+    if (item.bg) st.setProperty("--ios-bg", hexToRgba(item.bg, alpha));
+    else st.removeProperty("--ios-bg");
+  } else {
+    const base = item.bg || (resolved === "dark" ? "#2c2c2e" : "#ffffff");
+    st.setProperty("--floating-card-bg", hexToRgba(base, alpha));
+  }
+}
+
+/* 快捷键录制:keydown → accelerator。
+   仅支持 字母/数字/F1-F12/空格/方向键 + 至少一个修饰键(Ctrl/Alt/Shift);
+   拒绝无修饰符裸键、单独左右键、Win 系与系统保留组合 */
+function keyEventToAccelerator(e: KeyboardEvent): { ok: boolean; combo: string; reason?: string } {
+  if (e.metaKey) return { ok: false, combo: "", reason: "不支持 Win 键组合(系统保留)" };
+  const mods: string[] = [];
+  if (e.ctrlKey) mods.push("Ctrl");
+  if (e.altKey) mods.push("Alt");
+  if (e.shiftKey) mods.push("Shift");
+  let key = "";
+  if (/^Key[A-Z]$/.test(e.code)) key = e.code.slice(3);
+  else if (/^Digit[0-9]$/.test(e.code)) key = e.code.slice(5);
+  else if (/^F([1-9]|1[0-2])$/.test(e.code)) key = e.code;
+  else if (e.code === "Space") key = "Space";
+  else if (e.code.startsWith("Arrow")) key = e.code.slice(5);
+  else return { ok: false, combo: "", reason: "请使用字母 / 数字 / F1-F12 / 空格 / 方向键" };
+  if (mods.length === 0) return { ok: false, combo: "", reason: "至少需要一个修饰键(Ctrl / Alt / Shift),防误触" };
+  const combo = [...mods, key].join("+");
+  const reserved = ["Alt+F4", "Ctrl+Alt+Del", "Ctrl+Shift+Esc", "Alt+Tab", "Ctrl+Esc", "Alt+Space", "Alt+F2", "Alt+F7", "Alt+F8", "Alt+F10", "Alt+F11", "Alt+F12"];
+  if (reserved.includes(combo)) return { ok: false, combo: "", reason: "该组合为系统保留,换一个" };
+  return { ok: true, combo };
+}
+
 /* ============ 常量 ============ */
 const OLLAMA_API = "http://127.0.0.1:11434/api/generate";
 const CTX_OPTIONS = [512, 1024, 2048, 4096];
@@ -306,36 +424,79 @@ function MainWindow() {
   const [engineMode, setEngineMode] = useState<EngineMode>("local");
   const [providers, setProviders] = useState<ProviderCfg[]>([]);
   const [activeProviderId, setActiveProviderId] = useState("");
-  const [enginePanelOpen, setEnginePanelOpen] = useState(false);
   const [engineStatus, setEngineStatus] = useState("");
   const [detectPicker, setDetectPicker] = useState<{ providerId: string; models: string[]; query: string } | null>(null);
   const [mainClose, setMainClose] = useState<"hide" | "quit">("hide"); // 主窗口 ✕ 行为(Wave 9 设置面板提供 UI,默认隐藏到托盘)
   const configLoadedRef = useRef(false);
+  const loadedCfgRef = useRef<any>(null);
+  /* Wave 9: 设置中心 / 主题 / 外观 / 快捷键 */
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsPage, setSettingsPage] = useState<string>("general");
+  const [engineMenuOpen, setEngineMenuOpen] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark" | "system">("light");
+  const [appearance, setAppearance] = useState<Record<SurfaceKey, AppearanceItem>>(DEFAULT_APPEARANCE);
+  const [shortcuts, setShortcuts] = useState<Record<ShortcutAction, string>>(DEFAULT_SHORTCUTS);
+  const [conflictHint, setConflictHint] = useState(true);
+  const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(null);
+  const [shortcutError, setShortcutError] = useState("");
   // 渲染时同步模块级镜像,供 translateStream/translateFull 路由读取
   engineCfg = { mode: engineMode, providers, activeProviderId };
 
-  /* 启动时加载引擎配置(config.json) */
+  /* 启动时加载配置(config.json,含引擎 + Wave 9 设置) */
   useEffect(() => {
-    invoke<{ configVersion?: number; mainClose?: "hide" | "quit"; engineMode?: EngineMode; activeProviderId?: string; providers?: ProviderCfg[] }>("load_app_config")
+    invoke<any>("load_app_config")
       .then((cfg) => {
         configLoadedRef.current = true;
         if (!cfg) return;
+        loadedCfgRef.current = cfg;
         if (cfg.engineMode) setEngineMode(cfg.engineMode);
         if (cfg.mainClose === "quit") setMainClose("quit");
+        const s = cfg.settings ?? {};
+        setTheme(s.theme === "dark" || s.theme === "system" ? s.theme : "light");
+        setAppearance(mergeAppearance(DEFAULT_APPEARANCE, s.appearance));
+        setShortcuts({ ...DEFAULT_SHORTCUTS, ...(s.shortcuts ?? {}) });
+        setConflictHint(s.translate?.conflictHint !== false);
+        if (s.translate) {
+          if (s.translate.sourceLang) setSourceLang(s.translate.sourceLang);
+          if (s.translate.targetLang) setTargetLang(s.translate.targetLang);
+          if (typeof s.translate.streamOn === "boolean") setStreamOn(s.translate.streamOn);
+          if (s.translate.numCtx) setNumCtx(Number(s.translate.numCtx));
+        }
+        if (s.clipboard) setClipAuto(!!s.clipboard.auto);
         if (Array.isArray(cfg.providers)) {
           let list = cfg.providers
-            .filter((p) => p && typeof p.id === "string")
-            .map((p) => ({ ...p, temperature: p.temperature ?? "", noThinking: p.noThinking ?? "" }));
+            .filter((p: ProviderCfg) => p && typeof p.id === "string")
+            .map((p: ProviderCfg) => ({ ...p, temperature: p.temperature ?? "", noThinking: p.noThinking ?? "" }));
           // 迁移(一次):旧版把检测到的所有模型自动塞进列表(中转站可能上百个);
-          // 新版语义=只保留用户明确添加/使用的模型。configVersion 置 2 后不再迁移。
-          if (cfg.configVersion !== 2) {
-            list = list.map((p) => ({ ...p, models: p.model && p.model.trim() ? [p.model] : [] }));
+          // 新版语义=只保留用户明确添加/使用的模型。
+          if (cfg.configVersion !== 3) {
+            list = list.map((p: ProviderCfg) => ({ ...p, models: p.model && p.model.trim() ? [p.model] : [] }));
             invoke("save_app_config", {
-              config: { configVersion: 2, mainClose: cfg.mainClose ?? "hide", engineMode: cfg.engineMode, activeProviderId: cfg.activeProviderId, providers: list },
+              config: {
+                configVersion: 3,
+                mainClose: cfg.mainClose ?? "hide",
+                engineMode: cfg.engineMode,
+                activeProviderId: cfg.activeProviderId,
+                providers: list,
+                settings: {
+                  theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light",
+                  appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance),
+                  shortcuts: { ...DEFAULT_SHORTCUTS, ...(s.shortcuts ?? {}) },
+                  translate: {
+                    sourceLang: s.translate?.sourceLang ?? "auto",
+                    targetLang: s.translate?.targetLang ?? "en",
+                    streamOn: s.translate?.streamOn ?? true,
+                    numCtx: s.translate?.numCtx ?? 1024,
+                    conflictHint: s.translate?.conflictHint !== false,
+                  },
+                  subtitle: { fps: s.subtitle?.fps ?? 2, mode: s.subtitle?.mode ?? "trans-first", engine: s.subtitle?.engine ?? "win" },
+                  clipboard: { auto: s.clipboard?.auto ?? false },
+                },
+              },
             }).catch(() => {});
           }
           setProviders(list);
-          if (cfg.activeProviderId && list.some((p) => p.id === cfg.activeProviderId)) {
+          if (cfg.activeProviderId && list.some((p: ProviderCfg) => p.id === cfg.activeProviderId)) {
             setActiveProviderId(cfg.activeProviderId);
           }
         }
@@ -343,21 +504,23 @@ function MainWindow() {
       .catch(() => { configLoadedRef.current = true; });
   }, []);
 
-  /* 配置变更防抖保存(400ms,避免每次击键都写盘) */
-  useEffect(() => {
-    if (!configLoadedRef.current) return;
-    const t = setTimeout(() => {
-      invoke("save_app_config", { config: { configVersion: 2, mainClose, engineMode, activeProviderId, providers } }).catch((e) => console.error("保存配置失败", e));
-    }, 400);
-    return () => clearTimeout(t);
-  }, [engineMode, activeProviderId, providers]);
-
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
   const screenshotSource = useRef<string>("main"); // 截图发起方: main=桌面端 / floating=悬浮窗
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef(input);
   inputRef.current = input;
+  const textareaElRef = useRef<HTMLTextAreaElement>(null);
+  /* 输入框随内容自动增高(上限约 38% 窗口高,超出后内部滚动) */
+  useEffect(() => {
+    const el = textareaElRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const max = Math.round(window.innerHeight * 0.38);
+    const h = Math.min(Math.max(el.scrollHeight, 96), max);
+    el.style.height = h + "px";
+    el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+  }, [input]);
 
   const floatingRef = useRef(false);
   useEffect(() => { floatingRef.current = floatingOpen; }, [floatingOpen]);
@@ -368,6 +531,53 @@ function MainWindow() {
   const [subMode, setSubMode] = useState<"trans-first" | "ocr-first">("trans-first"); // 翻译优先/原文优先
   const [subEngine, setSubEngine] = useState<"win" | "rapid">("win"); // 字幕 OCR 引擎:win=系统OCR(快)/rapid=RapidOCR
   const [subStatus, setSubStatus] = useState("");               // 字幕状态提示
+
+  /* 从配置恢复字幕参数(须在 subFps/subMode/subEngine 声明之后执行) */
+  useEffect(() => {
+    const s = loadedCfgRef.current?.settings ?? {};
+    if (s.subtitle?.fps) setSubFps(Number(s.subtitle.fps));
+    if (s.subtitle?.mode) setSubMode(s.subtitle.mode);
+    if (s.subtitle?.engine) setSubEngine(s.subtitle.engine);
+  }, []);
+
+  /* mainClose 立即落盘:用户可能马上点 ✕(Rust 直接从文件读,不能等 400ms 防抖) */
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    invoke("save_app_config", {
+      config: {
+        configVersion: 3, mainClose, engineMode, activeProviderId, providers,
+        settings: {
+          theme, appearance, shortcuts,
+          translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint },
+          subtitle: { fps: subFps, mode: subMode, engine: subEngine },
+          clipboard: { auto: clipAuto },
+        },
+      },
+    }).catch((e) => console.error("保存配置失败", e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainClose]);
+
+  /* 配置变更防抖保存(400ms)+ 广播外观到其他窗口 + 重注册快捷键(须在相关 state 声明之后) */
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    const t = setTimeout(() => {
+      const settings = {
+        theme,
+        appearance,
+        shortcuts,
+        translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint },
+        subtitle: { fps: subFps, mode: subMode, engine: subEngine },
+        clipboard: { auto: clipAuto },
+      };
+      invoke("save_app_config", { config: { configVersion: 3, mainClose, engineMode, activeProviderId, providers, settings } }).catch((e) => console.error("保存配置失败", e));
+      invoke("broadcast_settings", { settings }).catch(() => {});
+      invoke("apply_shortcuts", { shortcuts }).catch(() => {});
+    }, 400);
+    return () => clearTimeout(t);
+  }, [engineMode, activeProviderId, providers, mainClose, theme, appearance, shortcuts, sourceLang, targetLang, streamOn, numCtx, conflictHint, subFps, subMode, subEngine, clipAuto]);
+
+  /* 主窗口应用主题 + 外观(CSS 变量即时生效) */
+  useEffect(() => { applyWindowTheme("main", theme, appearance); }, [theme, appearance]);
   const [subRegion, setSubRegion] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [subCurrent, setSubCurrent] = useState<{ text: string; result: string } | null>(null); // 当前字幕(主窗口显示)
 
@@ -779,13 +989,44 @@ function MainWindow() {
     setSourceLang(targetLang);
     setTargetLang(tmp);
   };
-  const openFloating = async () => {
+  /* 悬浮窗开关:已开时再点关闭(修复"只能开不能关") */
+  const toggleFloating = async () => {
     try {
-      await invoke("open_floating_window");
-      setFloatingOpen(true);
+      if (floatingOpen) {
+        await invoke("close_floating_window");
+        setFloatingOpen(false);
+      } else {
+        await invoke("open_floating_window");
+        setFloatingOpen(true);
+      }
     } catch (e) {
       console.error(e);
     }
+  };
+  /* 顶部引擎胶囊选择(本地模型 / 已配置 API 模型) */
+  const selectHeaderEngine = (v: string) => {
+    setEngineMenuOpen(false);
+    if (v.startsWith("api:")) {
+      const parts = v.slice(4).split("::");
+      if (parts.length >= 2 && parts[0] && parts[1]) {
+        setActiveProviderId(parts[0]);
+        updateProvider(parts[0], { model: parts[1] });
+        setEngineMode("api");
+      }
+    } else {
+      setModel(v);
+      setEngineMode("local");
+    }
+  };
+  /* 自绘标题栏:按住空白处拖动窗口(按钮/输入框不触发);双击最大化/还原 */
+  const onHeaderMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button, select, input, label, .toolbar-right")) return;
+    appWindow.startDragging().catch(() => {});
+  };
+  const onHeaderDoubleClick = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button, select, input, label")) return;
+    appWindow.toggleMaximize().catch(() => {});
   };
 
   /* ---- 翻译核心 ---- */
@@ -1054,6 +1295,12 @@ function MainWindow() {
   const activeApiModel = (engineMode === "api" || engineMode === "auto") && activeProvider && activeProvider.model.trim()
     ? { providerId: activeProvider.id, model: activeProvider.model }
     : null;
+  const engineLabel = (() => {
+    if (activeApiModel && activeProvider) return `🌐 ${activeProvider.alias || "API"} · ${activeApiModel.model}`;
+    if (model === "maternion/hy-mt2:1.8b") return "● HY-MT2 · 本地";
+    if (model === "gemma3:4b") return "● gemma3 · 本地";
+    return `● ${model} · 本地`;
+  })();
   const headerEngineValue = activeApiModel ? `api:${activeApiModel.providerId}::${activeApiModel.model}` : model;
   const addProvider = (presetIndex?: number) => {
     const preset = presetIndex !== undefined ? PROVIDER_PRESETS[presetIndex] : undefined;
@@ -1080,6 +1327,27 @@ function MainWindow() {
   };
   const updateProvider = (id: string, patch: Partial<ProviderCfg>) => {
     setProviders((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  };
+  /* 供应商排序:上移/下移(按钮方案,不用拖拽——WebView 拖拽易出问题) */
+  const moveProvider = (id: string, dir: -1 | 1) => {
+    setProviders((prev) => {
+      const idx = prev.findIndex((p) => p.id === id);
+      if (idx < 0) return prev;
+      const to = idx + dir;
+      if (to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[to]] = [next[to], next[idx]];
+      return next;
+    });
+  };
+  /* 移除供应商下的单个模型(删的是当前模型时,自动选剩余第一个) */
+  const removeModel = (id: string, m: string) => {
+    setProviders((prev) => prev.map((p) => {
+      if (p.id !== id) return p;
+      const models = p.models.filter((x) => x !== m);
+      const model = p.model === m ? (models[0] ?? "") : p.model;
+      return { ...p, models, model };
+    }));
   };
   /* 检测模型:拉取供应商可用模型列表,打开"选择器"让用户点选要添加的(绝不自动全量导入) */
   const openModelPicker = async (id: string) => {
@@ -1123,120 +1391,363 @@ function MainWindow() {
     }
   };
 
+  /* ---- 快捷键录制(Wave 9) ---- */
+  const startRecording = (act: ShortcutAction) => { setShortcutError(""); setRecordingAction(act); };
+  const stopRecording = () => setRecordingAction(null);
+  useEffect(() => {
+    if (!recordingAction) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Control" || e.key === "Alt" || e.key === "Shift") return; // 修饰键先按下,等待主键
+      const r = keyEventToAccelerator(e);
+      if (!r.ok) { setShortcutError(r.reason ?? "无效快捷键"); return; }
+      const clash = (Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).find((a) => a !== recordingAction && shortcuts[a] === r.combo);
+      if (clash) { setShortcutError(`此快捷键已被「${SHORTCUT_LABELS[clash]}」使用`); return; }
+      setShortcuts((prev) => ({ ...prev, [recordingAction]: r.combo }));
+      setShortcutError(`已设置为 ${r.combo}`);
+      setRecordingAction(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [recordingAction, shortcuts]);
+
   /* ---- UI ---- */
   return (
     <div className="app-main">
-      <header className="app-header">
-        <h1>本地翻译助手</h1>
+      <header className="app-header" onMouseDown={onHeaderMouseDown} onDoubleClick={onHeaderDoubleClick}>
+        <div className="app-brand">
+          <h1>翻译助手</h1>
+          <div className="engine-menu-wrap">
+            <button className="engine-pill" onClick={() => setEngineMenuOpen(!engineMenuOpen)} title="切换翻译引擎 / 模型">
+              {engineLabel} <span className="engine-pill-caret">▾</span>
+            </button>
+            {engineMenuOpen && (
+              <>
+                <div className="engine-menu-backdrop" onClick={() => setEngineMenuOpen(false)} />
+                <div className="engine-menu">
+                  <div className="engine-menu-title">翻译引擎</div>
+                  <button className={`engine-menu-item${headerEngineValue === "maternion/hy-mt2:1.8b" ? " active" : ""}`} onClick={() => selectHeaderEngine("maternion/hy-mt2:1.8b")}>
+                    {headerEngineValue === "maternion/hy-mt2:1.8b" ? "✓ " : ""}HY-MT2-1.8B (本地 · 推荐)
+                  </button>
+                  <button className={`engine-menu-item${headerEngineValue === "gemma3:4b" ? " active" : ""}`} onClick={() => selectHeaderEngine("gemma3:4b")}>
+                    {headerEngineValue === "gemma3:4b" ? "✓ " : ""}gemma3:4b (本地)
+                  </button>
+                  {apiModelOptions.length > 0 && <div className="engine-menu-divider" />}
+                  {apiModelOptions.map((o) => (
+                    <button key={`${o.providerId}::${o.model}`} className={`engine-menu-item${headerEngineValue === `api:${o.providerId}::${o.model}` ? " active" : ""}`} onClick={() => selectHeaderEngine(`api:${o.providerId}::${o.model}`)}>
+                      {headerEngineValue === `api:${o.providerId}::${o.model}` ? "✓ " : ""}{o.label}
+                    </button>
+                  ))}
+                  <div className="engine-menu-divider" />
+                  <button className="engine-menu-item manage" onClick={() => { setEngineMenuOpen(false); setSettingsOpen(true); setSettingsPage("providers"); }}>
+                    ⚙ 管理翻译服务
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
         <div className="toolbar-right">
-          <select className="tool-select" value={headerEngineValue} onChange={(e) => { const v = e.target.value; if (v.startsWith("api:")) { const parts = v.slice(4).split("::"); if (parts.length >= 2 && parts[0] && parts[1]) { setActiveProviderId(parts[0]); updateProvider(parts[0], { model: parts[1] }); setEngineMode("api"); } } else { setModel(v); setEngineMode("local"); } }} title="选择翻译模型:本地模型=本地Ollama;🌐 外接模型=对应供应商 API(供应商在下方面板添加管理)">
-            <option value="maternion/hy-mt2:1.8b">HY-MT2-1.8B (本地)</option>
-            <option value="gemma3:4b">gemma3:4b (本地)</option>
-            {apiModelOptions.map((o) => <option key={`${o.providerId}::${o.model}`} value={`api:${o.providerId}::${o.model}`}>{o.label}</option>)}
-          </select>
-          <select className="tool-select" value={numCtx} onChange={(e) => setNumCtx(Number(e.target.value))} title="上下文窗口">
-            {CTX_OPTIONS.map((n) => <option key={n} value={n}>上下文 {n}</option>)}
-          </select>
-          <select className="tool-select" value={streamOn ? "stream" : "full"} onChange={(e) => setStreamOn(e.target.value === "stream")} title="输出模式">
-            <option value="stream">流式输出</option>
-            <option value="full">完整输出</option>
-          </select>
-          <button className="btn-float" onClick={() => setClipAuto(!clipAuto)} title={clipAuto ? "复制即开(点击切换为手动)" : "手动模式(点击切换为自动)"}>
-            {clipAuto ? "📋 自动" : "📋 手动"}
-          </button>
-          <button className="btn-float" onClick={startScreenshot} title="截图翻译">
+          <button className="icon-btn" title="截图翻译 (Ctrl+Shift+S)" onClick={startScreenshot}>
             📷
           </button>
-          <button className={`btn-float${subtitleOn ? " active" : ""}`} onClick={toggleSubtitle} title="视频实时字幕 (Ctrl+Shift+U)">
-            {subtitleOn ? "🎬 字幕开" : "🎬 字幕"}
+          <button className={`icon-btn${subtitleOn ? " active" : ""}`} onClick={toggleSubtitle} title="视频实时字幕 (Ctrl+Shift+U)">
+            🎬
           </button>
-          <button className="btn-float" onClick={openFloating} title="打开翻译悬浮窗">
-            {floatingOpen ? "📍 已开" : "🔲 悬浮窗"}
+          <button className={`icon-btn${floatingOpen ? " active" : ""}`} onClick={toggleFloating} title={floatingOpen ? "关闭翻译悬浮窗" : "打开翻译悬浮窗"}>
+            🪟
           </button>
+          <button className={`icon-btn${settingsOpen ? " active" : ""}`} onClick={() => setSettingsOpen(!settingsOpen)} title="设置中心">
+            ⚙
+          </button>
+          <span className="win-divider" />
+          <button className="icon-btn win-btn" title="最小化" onMouseDown={(e) => e.stopPropagation()} onClick={() => { appWindow.minimize().catch(() => {}); invoke("minimize_main_window").catch(() => {}); }}>─</button>
+          <button className="icon-btn win-btn win-close" title="关闭(行为见 设置-常规)" onMouseDown={(e) => e.stopPropagation()} onClick={() => { appWindow.close().catch(() => {}); }}>✕</button>
         </div>
       </header>
 
-      <main className="app-body">
-        {/* 外接 API 供应商管理(第8波;模型在顶部下拉直接选) */}
-        <div className={`subtitle-panel${enginePanelOpen ? " on" : ""}`}>
-          <div className="subtitle-panel-row">
-            <span className="subtitle-label">🌐 外接 API 供应商</span>
-            <span className="subtitle-msg">模型在顶部下拉直接选;这里只负责添加/管理供应商</span>
-            <button className="btn-float" onClick={() => setEnginePanelOpen(!enginePanelOpen)} title="配置外接 API 供应商(Base URL / Key / 模型)">
-              {enginePanelOpen ? "收起" : "管理供应商"}
-            </button>
-            {engineStatus && <em className="subtitle-msg">· {engineStatus}</em>}
-          </div>
-          {enginePanelOpen && (
-            <div className="engine-panel">
-              <div className="subtitle-panel-row">
-                <select className="tool-select" value={activeProviderId} onChange={(e) => setActiveProviderId(e.target.value)} title="当前生效的供应商(外接/自动模式使用)">
-                  {providers.length === 0 && <option value="">未配置供应商</option>}
-                  {providers.map((p) => (
-                    <option key={p.id} value={p.id}>{p.alias || p.baseUrl || "(未命名)"}{p.model ? ` · ${p.model}` : ""}</option>
-                  ))}
-                </select>
-                <select className="tool-select" defaultValue="" onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v !== "") addProvider(Number(v)); }} title="按预设新建供应商,自动填 Base URL 和常见模型">
-                  <option value="">➕ 按预设新建…</option>
-                  {PROVIDER_PRESETS.map((pr, i) => <option key={pr.name} value={i}>{pr.name}</option>)}
-                </select>
-                <button className="btn-float" onClick={() => addProvider()} title="手动新增空供应商">➕ 新增</button>
-                {activeProvider && (
-                  <button className="btn-float" onClick={() => removeProvider(activeProvider.id)} title="删除当前供应商">🗑 删除</button>
-                )}
-              </div>
-              {activeProvider && (
-                <div className="engine-fields">
-                  <div className="subtitle-panel-row">
-                    <input className="engine-input" style={{ flex: 0.8 }} placeholder="别名(如 DeepSeek)" value={activeProvider.alias} onChange={(e) => updateProvider(activeProvider.id, { alias: e.target.value })} />
-                    <input className="engine-input" placeholder="Base URL(如 https://api.deepseek.com/v1)" value={activeProvider.baseUrl} onChange={(e) => updateProvider(activeProvider.id, { baseUrl: e.target.value })} spellCheck={false} />
+      {settingsOpen ? (
+        <main className="app-body settings-body">
+          <div className="settings-center">
+            <nav className="settings-nav">
+              <div className="settings-nav-head">⚙ 设置</div>
+              {SETTINGS_NAV.map(([key, label]) => (
+                <button key={key} className={`settings-nav-item${settingsPage === key ? " active" : ""}`} onClick={() => setSettingsPage(key)}>
+                  {label}
+                </button>
+              ))}
+              <button className="settings-nav-back" onClick={() => setSettingsOpen(false)}>← 返回翻译</button>
+            </nav>
+            <div className="settings-content">
+              {settingsPage === "general" && (
+                <div className="settings-section">
+                  <h2>常规</h2>
+                  <div className="settings-row">
+                    <span>主题</span>
+                    <div className="seg">
+                      {([["light", "浅色"], ["dark", "深色"], ["system", "跟随系统"]] as const).map(([v, label]) => (
+                        <button key={v} className={`seg-item${theme === v ? " active" : ""}`} onClick={() => setTheme(v)}>{label}</button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="subtitle-panel-row">
-                    <input className="engine-input" type="password" placeholder="API Key" value={activeProvider.apiKey} onChange={(e) => updateProvider(activeProvider.id, { apiKey: e.target.value })} autoComplete="off" spellCheck={false} />
-                    <input className="engine-input" style={{ maxWidth: 110 }} type="number" step="0.1" min="0" max="2" placeholder="温度(空=默认)" value={activeProvider.temperature} onChange={(e) => updateProvider(activeProvider.id, { temperature: e.target.value })} title="留空=不发送(用模型默认);Kimi 等模型只允许 1,DeepSeek 想要稳定可填 0.1" />
-                    <label className="subtitle-mode" title="推理模型(如 kimi-k2.5 / deepseek 思考版)先输出思维链,首字很慢;勾选后发送 thinking:disabled 跳过思考。若供应商不支持该参数会报错,取消勾选即可">
-                      <input type="checkbox" checked={activeProvider.noThinking === "1"} onChange={(e) => updateProvider(activeProvider.id, { noThinking: e.target.checked ? "1" : "" })} />
-                      禁用思考
-                    </label>
-                    <button className="btn-float" onClick={() => openModelPicker(activeProvider.id)} title="GET {Base URL}/models 拉取模型列表,点选要添加的(只添加你选的)">🔍 检测/选择模型</button>
-                    <button className="btn-float" onClick={() => testProvider(activeProvider.id)} title="发一个小翻译请求验证连通性">🧪 测试连接</button>
+                  <div className="settings-row">
+                    <span>主窗口关闭行为</span>
+                    <div className="seg">
+                      {([["hide", "隐藏到托盘"], ["quit", "直接退出"]] as const).map(([v, label]) => (
+                        <button key={v} className={`seg-item${mainClose === v ? " active" : ""}`} onClick={() => setMainClose(v)}>{label}</button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="subtitle-panel-row">
-                    <select className="engine-input" value={activeProvider.models.includes(activeProvider.model) ? activeProvider.model : "__custom__"} onChange={(e) => { const v = e.target.value; if (v !== "__custom__") updateProvider(activeProvider.id, { model: v }); }} title="已添加的模型(只含你明确添加的);选「自定义…」手动输入">
-                      {activeProvider.models.map((m) => <option key={m} value={m}>{m}</option>)}
-                      <option value="__custom__">✏️ 自定义…</option>
+                  <label className="settings-check">
+                    <input type="checkbox" checked={clipAuto} onChange={(e) => setClipAuto(e.target.checked)} />
+                    复制即译(复制任意文字自动弹出翻译悬浮窗)
+                  </label>
+                  <label className="settings-check">
+                    <input type="checkbox" checked={conflictHint} onChange={(e) => setConflictHint(e.target.checked)} />
+                    检测到原文已是目标语言时提示交换方向
+                  </label>
+                  <p className="settings-note">常驻模式:关闭主窗口默认隐藏到托盘,真正退出走系统托盘菜单「退出」。</p>
+                </div>
+              )}
+              {settingsPage === "translate" && (
+                <div className="settings-section">
+                  <h2>翻译</h2>
+                  <div className="settings-row">
+                    <span>默认源语言</span>
+                    <select className="tool-select" value={sourceLang} onChange={(e) => setSourceLang(e.target.value)}>
+                      {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
                     </select>
                   </div>
-                  {!activeProvider.models.includes(activeProvider.model) && (
-                    <div className="subtitle-panel-row">
-                      <input className="engine-input" placeholder="手动输入模型名,失焦后加入已添加列表(如 hy-mt2-pro)" value={activeProvider.model} onChange={(e) => updateProvider(activeProvider.id, { model: e.target.value })} onBlur={() => { const v = activeProvider.model.trim(); if (v && !activeProvider.models.includes(v)) updateProvider(activeProvider.id, { models: [...activeProvider.models, v] }); }} spellCheck={false} />
+                  <div className="settings-row">
+                    <span>默认目标语言</span>
+                    <select className="tool-select" value={targetLang} onChange={(e) => setTargetLang(e.target.value)}>
+                      {LANGS.filter((l) => l.code !== "auto").map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+                    </select>
+                  </div>
+                  <div className="settings-row">
+                    <span>上下文窗口</span>
+                    <select className="tool-select" value={numCtx} onChange={(e) => setNumCtx(Number(e.target.value))}>
+                      {CTX_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                  </div>
+                  <div className="settings-row">
+                    <span>输出模式</span>
+                    <div className="seg">
+                      {([["stream", "流式输出"], ["full", "完整输出"]] as const).map(([v, label]) => (
+                        <button key={v} className={`seg-item${(streamOn ? "stream" : "full") === v ? " active" : ""}`} onClick={() => setStreamOn(v === "stream")}>{label}</button>
+                      ))}
                     </div>
-                  )}
-                  {detectPicker && detectPicker.providerId === activeProvider.id && (
-                    <div className="detect-picker">
-                      <div className="detect-picker-head">
-                        <b>选择要添加的模型(共 {detectPicker.models.length} 个,只添加你点的)</b>
-                        <input className="engine-input" placeholder="搜索模型名..." value={detectPicker.query} onChange={(e) => setDetectPicker({ ...detectPicker, query: e.target.value })} autoFocus spellCheck={false} />
-                        <button className="btn-float" onClick={() => setDetectPicker(null)} title="关闭选择器">完成</button>
-                      </div>
-                      <div className="detect-picker-list">
-                        {detectPicker.models.filter((m) => m.toLowerCase().includes(detectPicker.query.trim().toLowerCase())).map((m) => (
-                          <button key={m} className={`detect-picker-item${activeProvider.models.includes(m) ? " added" : ""}`} onClick={() => pickModel(activeProvider.id, m)} title={activeProvider.models.includes(m) ? "已添加,点击切换为该模型" : "点击添加该模型并选中"}>
-                            {activeProvider.models.includes(m) ? "✓ " : "+ "}{m}
-                          </button>
-                        ))}
-                      </div>
-                      {detectPicker.models.filter((m) => m.toLowerCase().includes(detectPicker.query.trim().toLowerCase())).length === 0 && (
-                        <div className="detect-picker-empty">无匹配模型</div>
-                      )}
+                  </div>
+                  <p className="settings-note">语言方向也会同步主界面顶部的快捷选择。</p>
+                </div>
+              )}
+              {settingsPage === "audio" && (
+                <div className="settings-section">
+                  <h2>音频</h2>
+                  <p className="settings-note">断句灵敏度 = 识别停顿多久算一句结束(秒),数值越小越敏感;按识别语言独立设置,主界面和语音窗同步。</p>
+                  {[["auto", "自动"], ["zh", "中文"], ["en", "英语"], ["ja", "日语"], ["ko", "韩语"]].map(([code, name]) => (
+                    <div className="settings-row" key={code}>
+                      <span>{name}断句</span>
+                      <input type="range" min="1" max="40" step="1"
+                        value={Math.round((sensitivityForLang(code) ?? 1.2) * 10)}
+                        onChange={(e) => setSensitivityForLang(code, Number(e.target.value) / 10)}
+                        onPointerUp={() => applySensitivityForLang(code)} />
+                      <b>{(sensitivityForLang(code) ?? 1.2).toFixed(1)}s</b>
                     </div>
-                  )}
+                  ))}
+                </div>
+              )}
+              {settingsPage === "subtitle" && (
+                <div className="settings-section">
+                  <h2>视频字幕</h2>
+                  <div className="settings-row">
+                    <span>截帧频率</span>
+                    <input type="range" min="1" max="5" value={subFps} onChange={(e) => setSubFps(Number(e.target.value))} />
+                    <b>{subFps} 次/秒</b>
+                  </div>
+                  <div className="settings-row">
+                    <span>显示策略</span>
+                    <select className="tool-select" value={subMode} onChange={(e) => setSubMode(e.target.value as "trans-first" | "ocr-first")}>
+                      <option value="trans-first">翻译优先</option>
+                      <option value="ocr-first">原文优先</option>
+                    </select>
+                  </div>
+                  <div className="settings-row">
+                    <span>OCR 引擎</span>
+                    <select className="tool-select" value={subEngine} onChange={(e) => setSubEngine(e.target.value as "win" | "rapid")}>
+                      <option value="win">系统OCR(快)</option>
+                      <option value="rapid">RapidOCR</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+              {settingsPage === "floating" && (
+                <div className="settings-section">
+                  <h2>悬浮窗外观</h2>
+                  <p className="settings-note">改动即时生效、重启保留;背景/文字颜色点「跟随主题」可恢复默认。圆角/边距/毛玻璃强度等不做(选项太多反而难用)。</p>
+                  <div className="appearance-preview">
+                    <div className="appearance-preview-card" style={{
+                      background: hexToRgba(appearance.floating.bg || "#ffffff", appearance.floating.opacity / 100),
+                      color: appearance.floating.textColor || "var(--ios-text)",
+                      fontSize: `${appearance.floating.fontSize}px`,
+                    }}>
+                      <div style={{ opacity: 0.7, fontSize: "0.82em" }}>We need to leave now.</div>
+                      <div style={{ fontWeight: 600 }}>我们现在必须离开。</div>
+                    </div>
+                  </div>
+                  {(Object.keys(SURFACE_LABELS) as SurfaceKey[]).map((key) => {
+                    const item = appearance[key];
+                    const patch = (p: Partial<AppearanceItem>) => setAppearance((prev) => ({ ...prev, [key]: { ...prev[key], ...p } }));
+                    return (
+                      <div className="appearance-group" key={key}>
+                        <h3>{SURFACE_LABELS[key]}</h3>
+                        <div className="settings-row">
+                          <span>背景颜色</span>
+                          <input type="color" value={item.bg || (key === "main" ? "#f2f2f7" : "#ffffff")} onChange={(e) => patch({ bg: e.target.value })} />
+                          <button className="btn-float" onClick={() => patch({ bg: "" })}>跟随主题</button>
+                        </div>
+                        <div className="settings-row">
+                          <span>背景透明度</span>
+                          <input type="range" min="0" max="100" value={item.opacity} onChange={(e) => patch({ opacity: Number(e.target.value) })} />
+                          <b>{item.opacity}%</b>
+                        </div>
+                        <div className="settings-row">
+                          <span>文字颜色</span>
+                          <input type="color" value={item.textColor || "#1c1c1e"} onChange={(e) => patch({ textColor: e.target.value })} />
+                          <button className="btn-float" onClick={() => patch({ textColor: "" })}>跟随主题</button>
+                        </div>
+                        <div className="settings-row">
+                          <span>字号</span>
+                          <select className="tool-select" value={item.fontSize} onChange={(e) => patch({ fontSize: Number(e.target.value) })}>
+                            {[12, 14, 15, 16, 18, 20, 24].map((n) => <option key={n} value={n}>{n}px</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {settingsPage === "providers" && (
+                <div className="settings-section">
+                  <h2>翻译服务</h2>
+                  <p className="settings-note">供应商 = 外接 API 服务(Base URL + Key + 模型)。不配置时全部走本地模型;顶部模型下拉可直接切换本地/外接。</p>
+                  <div className="settings-row">
+                    <span>当前生效</span>
+                    <select className="tool-select" value={activeProviderId} onChange={(e) => setActiveProviderId(e.target.value)}>
+                      {providers.length === 0 && <option value="">未配置(本地模型)</option>}
+                      {providers.map((p) => <option key={p.id} value={p.id}>{p.alias || p.baseUrl || "(未命名)"}{p.model ? ` · ${p.model}` : ""}</option>)}
+                    </select>
+                    <select className="tool-select" defaultValue="" onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v !== "") addProvider(Number(v)); }} title="按预设新建供应商,自动填 Base URL 和常见模型">
+                      <option value="">➕ 按预设新建…</option>
+                      {PROVIDER_PRESETS.map((pr, i) => <option key={pr.name} value={i}>{pr.name}</option>)}
+                    </select>
+                    <button className="btn-float" onClick={() => addProvider()} title="手动新增空供应商">➕ 新增</button>
+                  </div>
+                  {engineStatus && <p className="settings-note">{engineStatus}</p>}
+                  <div className="provider-list">
+                    {providers.map((p, idx) => {
+                      const isActive = p.id === activeProviderId;
+                      return (
+                        <div className={`provider-card${isActive ? " active" : ""}`} key={p.id}>
+                          <div className="provider-card-head">
+                            <span className="provider-name">{isActive ? "🟢" : "⚪"} {p.alias || p.baseUrl || "(未命名)"}</span>
+                            <span className="provider-model">{p.model || "未选模型"}</span>
+                            <div className="provider-actions">
+                              <button className="btn-float" disabled={idx === 0} onClick={() => moveProvider(p.id, -1)} title="上移">↑</button>
+                              <button className="btn-float" disabled={idx === providers.length - 1} onClick={() => moveProvider(p.id, 1)} title="下移">↓</button>
+                              <button className={`btn-float${isActive ? " active" : ""}`} onClick={() => setActiveProviderId(p.id)} title="设为当前生效供应商">使用</button>
+                              <button className="btn-float" onClick={() => removeProvider(p.id)} title="删除该供应商">🗑</button>
+                            </div>
+                          </div>
+                          <div className="provider-fields">
+                            <input className="engine-input" placeholder="别名(如 DeepSeek)" value={p.alias} onChange={(e) => updateProvider(p.id, { alias: e.target.value })} />
+                            <input className="engine-input" placeholder="Base URL(如 https://api.deepseek.com/v1)" value={p.baseUrl} onChange={(e) => updateProvider(p.id, { baseUrl: e.target.value })} spellCheck={false} />
+                          </div>
+                          <div className="provider-fields">
+                            <input className="engine-input" type="password" placeholder="API Key" value={p.apiKey} onChange={(e) => updateProvider(p.id, { apiKey: e.target.value })} autoComplete="off" spellCheck={false} />
+                            <input className="engine-input" style={{ maxWidth: 110 }} type="number" step="0.1" min="0" max="2" placeholder="温度(空=默认)" value={p.temperature} onChange={(e) => updateProvider(p.id, { temperature: e.target.value })} title="留空=不发送(用模型默认);Kimi 只允许 1,DeepSeek 建议 0.1" />
+                            <label className="subtitle-mode" title="推理模型先输出思维链,首字很慢;勾选发送 thinking:disabled 跳过思考(不支持的供应商取消勾选)">
+                              <input type="checkbox" checked={p.noThinking === "1"} onChange={(e) => updateProvider(p.id, { noThinking: e.target.checked ? "1" : "" })} />
+                              禁用思考
+                            </label>
+                            <button className="btn-float" onClick={() => openModelPicker(p.id)} title="GET /models 拉取模型列表,点选要添加的(只添加你选的)">🔍 检测/选择模型</button>
+                            <button className="btn-float" onClick={() => testProvider(p.id)} title="发一个小翻译请求验证连通性">🧪 测试连接</button>
+                          </div>
+                          <div className="provider-models">
+                            <span className="settings-note">已添加模型(点 × 移除):</span>
+                            {p.models.length === 0 && <span className="settings-note">(空,点「检测/选择模型」添加)</span>}
+                            {p.models.map((m) => (
+                              <span key={m} className={`model-chip${p.model === m ? " selected" : ""}`}>
+                                {m}
+                                <button className="model-chip-x" title="移除该模型" onClick={() => removeModel(p.id, m)}>×</button>
+                              </span>
+                            ))}
+                          </div>
+                          {detectPicker && detectPicker.providerId === p.id && (
+                            <div className="detect-picker">
+                              <div className="detect-picker-head">
+                                <b>选择要添加的模型(共 {detectPicker.models.length} 个,只添加你点的)</b>
+                                <input className="engine-input" placeholder="搜索模型名..." value={detectPicker.query} onChange={(e) => setDetectPicker({ ...detectPicker, query: e.target.value })} autoFocus spellCheck={false} />
+                                <button className="btn-float" onClick={() => setDetectPicker(null)} title="关闭选择器">完成</button>
+                              </div>
+                              <div className="detect-picker-list">
+                                {detectPicker.models.filter((m) => m.toLowerCase().includes(detectPicker.query.trim().toLowerCase())).map((m) => (
+                                  <button key={m} className={`detect-picker-item${p.models.includes(m) ? " added" : ""}`} onClick={() => pickModel(p.id, m)} title={p.models.includes(m) ? "已添加,点击切换为该模型" : "点击添加该模型并选中"}>
+                                    {p.models.includes(m) ? "✓ " : "+ "}{m}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {providers.length === 0 && <p className="settings-note">还没有供应商:用上方「按预设新建」或「➕ 新增」添加。</p>}
+                  </div>
+                </div>
+              )}
+              {settingsPage === "shortcuts" && (
+                <div className="settings-section">
+                  <h2>快捷键</h2>
+                  <p className="settings-note">点击组合键进入录制,按下新组合保存;点「无快捷键」可禁用该项。至少需要一个修饰键(Ctrl/Alt/Shift),裸键和系统保留组合会被拒绝。</p>
+                  <div className="shortcut-list">
+                    {(Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).map((act) => {
+                      const recording = recordingAction === act;
+                      return (
+                        <div className={`shortcut-row${recording ? " recording" : ""}`} key={act}>
+                          <span className="shortcut-label">{SHORTCUT_LABELS[act]}</span>
+                          {recording ? (
+                            <span className="shortcut-recording">
+                              请按下新的快捷键… (Esc 取消)
+                              <button className="btn-float" onClick={stopRecording}>取消</button>
+                            </span>
+                          ) : (
+                            <>
+                              <button className="shortcut-combo" onClick={() => startRecording(act)} title="点击改键">{shortcuts[act] || "未设置"}</button>
+                              <button className="btn-float" onClick={() => { setShortcutError(""); setShortcuts((prev) => ({ ...prev, [act]: "" })); }}>无快捷键</button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {shortcutError && <p className={`settings-note${shortcutError.startsWith("已设置") ? "" : " shortcut-error"}`}>{shortcutError}</p>}
+                </div>
+              )}
+              {settingsPage === "about" && (
+                <div className="settings-section">
+                  <h2>关于</h2>
+                  <p>翻译助手 v0.1.0(Wave 9 设置中心)</p>
+                  <p>本地优先的桌面实时翻译工作台:文本 / 划词 / 截图 / 视频字幕 / 音频字幕,支持本地 Ollama 与外接 API 双引擎。</p>
+                  <p>⚠️ 杀软(如火绒)可能拦截未签名程序:请加入白名单或信任后再使用;个别老式程序(如 DirectUI、游戏内文本)划词捕获不到。</p>
                 </div>
               )}
             </div>
-          )}
-        </div>
-
+          </div>
+        </main>
+      ) : (
+      <main className="app-body">
         {/* 音频实时字幕控制面板(第7波) */}
         <div className={`subtitle-panel${sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? " on" : ""}`}>
           <div className="subtitle-panel-row">
@@ -1257,19 +1768,6 @@ function MainWindow() {
               </select>
             </label>
             <span className="subtitle-region">识别语言:跟随主面板({LANGS.find((l) => l.code === sourceLang)?.label ?? sourceLang})</span>
-          </div>
-          <div className="subtitle-panel-row">
-            <label className="subtitle-fps">
-              断句灵敏度
-              <input
-                type="range" min="1" max="40" step="1"
-                value={Math.round((sensitivityForLang(sourceLang) ?? 1.2) * 10)}
-                onChange={(e) => setSensitivityForLang(sourceLang, Number(e.target.value) / 10)}
-                onPointerUp={() => applySensitivityForLang(sourceLang)}
-                title="识别停顿多久算一句结束(秒):数值越小越敏感,英语建议 0.3s"
-              />
-              <b>{sensitivityForLang(sourceLang)?.toFixed(1) ?? 1.2}s</b>
-            </label>
           </div>
           {/* 实时音量条(调试用:确认来源有声音进来;dB -100~0) */}
           {sourcesForMode(audioMode).filter((s) => isSrcOn(s)).map((s) => (
@@ -1309,28 +1807,7 @@ function MainWindow() {
               🧪 系统OCR测试
             </button>
           </div>
-          <div className="subtitle-panel-row">
-            <label className="subtitle-fps">
-              截帧频率
-              <input type="range" min="1" max="5" value={subFps} onChange={(e) => setSubFps(Number(e.target.value))} />
-              <b>{subFps} 次/秒</b>
-            </label>
-            <label className="subtitle-mode">
-              显示策略
-              <select value={subMode} onChange={(e) => setSubMode(e.target.value as "trans-first" | "ocr-first")} title="翻译优先=只显示译文;原文优先=先显示原文,译文好了替换">
-                <option value="trans-first">翻译优先</option>
-                <option value="ocr-first">原文优先</option>
-              </select>
-            </label>
-            <label className="subtitle-mode">
-              OCR引擎
-              <select value={subEngine} onChange={(e) => setSubEngine(e.target.value as "win" | "rapid")} title="win=Windows系统OCR(快,需系统语言包);rapid=RapidOCR(离线模型)">
-                <option value="win">系统OCR(快)</option>
-                <option value="rapid">RapidOCR</option>
-              </select>
-            </label>
-            {subRegion && <span className="subtitle-region">区域: ({subRegion.x},{subRegion.y} {subRegion.w}×{subRegion.h})</span>}
-          </div>
+          {subRegion && <div className="subtitle-panel-row"><span className="subtitle-region">字幕区域: ({subRegion.x},{subRegion.y} {subRegion.w}×{subRegion.h}),参数在 ⚙ 设置-视频字幕</span></div>}
           {subCurrent && (
             <div className="subtitle-current">
               <div className="subtitle-current-src">{subCurrent.text}</div>
@@ -1357,14 +1834,15 @@ function MainWindow() {
         </div>
 
         <textarea
+          ref={textareaElRef}
           className="trans-input"
           placeholder="输入文字,自动翻译..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          rows={5}
+          rows={1}
         />
 
-        {conflict && !translating && output && (
+        {conflictHint && conflict && !translating && output && (
           <div className="conflict-bar">
             <span>检测到原文已是目标语言,需要交换翻译方向吗?</span>
             <button className="btn-conflict" onClick={() => { setConflict(false); swapLangs(); }}>交换</button>
@@ -1376,6 +1854,7 @@ function MainWindow() {
           <div className="output-text">{output || (translating ? "" : "输入后自动翻译...")}</div>
         </div>
       </main>
+      )}
     </div>
   );
 }
@@ -1384,12 +1863,47 @@ function MainWindow() {
 function FloatingWindow() {
   const [trans, setTrans] = useState<{ text: string; src: string; tgt: string; result: string } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [opacity, setOpacity] = useState(0.88);
   const [showSettings, setShowSettings] = useState(false);
   const [mode, setMode] = useState<"trans" | "subtitle">("trans");   // 翻译页 / 字幕页
   const [subtitle, setSubtitle] = useState<{ text: string; result: string } | null>(null); // 视频字幕
   const [subStatus, setSubStatus] = useState<string | null>(null);   // 字幕状态提示
   const [subRunning, setSubRunning] = useState(false);               // 字幕是否运行中(主窗口同步)
+
+  /* Wave 9 外观:翻译页用 floating 外观,字幕页用 subtitle 外观 */
+  const [appr, setAppr] = useState<{ theme: string; appearance: Record<SurfaceKey, AppearanceItem> } | null>(null);
+  const surfaceKey: SurfaceKey = mode === "subtitle" ? "subtitle" : "floating";
+  const surfaceKeyRef = useRef<SurfaceKey>(surfaceKey);
+  surfaceKeyRef.current = surfaceKey;
+  const currentAppr = appr?.appearance[surfaceKey] ?? DEFAULT_APPEARANCE[surfaceKey];
+  const setSurfaceOpacity = (v: number) => {
+    const base = appr ?? { theme: "light", appearance: DEFAULT_APPEARANCE };
+    const next = { theme: base.theme, appearance: { ...base.appearance, [surfaceKey]: { ...base.appearance[surfaceKey], opacity: v } } };
+    setAppr(next);
+    applyWindowTheme(surfaceKey, next.theme, next.appearance);
+    invoke("update_appearance", { surface: surfaceKey, patch: { opacity: v } }).catch(() => {});
+  };
+
+  /* 加载配置应用本窗外观;接收设置中心广播即时更新 */
+  useEffect(() => {
+    invoke<any>("load_app_config").then((cfg) => {
+      const s = cfg?.settings ?? {};
+      const st = { theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light", appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance) };
+      setAppr(st);
+      applyWindowTheme(surfaceKeyRef.current, st.theme, st.appearance);
+    }).catch(() => {});
+    (window as any).__applyAppSettings = (s: any) => {
+      const st = { theme: s?.theme === "dark" || s?.theme === "system" ? s.theme : "light", appearance: mergeAppearance(DEFAULT_APPEARANCE, s?.appearance) };
+      setAppr(st);
+      applyWindowTheme(surfaceKeyRef.current, st.theme, st.appearance);
+    };
+    return () => { delete (window as any).__applyAppSettings; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  /* 翻译页/字幕页切换时按当前界面重新应用外观 */
+  useEffect(() => {
+    if (appr) applyWindowTheme(surfaceKey, appr.theme, appr.appearance);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, appr]);
 
   useEffect(() => {
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
@@ -1430,7 +1944,7 @@ function FloatingWindow() {
 
   return (
     <div className="floating-root">
-      <div className="floating-card" style={{ opacity }}>
+      <div className="floating-card">
         <div className="floating-bar" onMouseDown={() => appWindow.startDragging()}>
           <span className="floating-title">{mode === "subtitle" ? "字幕" : "翻译"}</span>
           <div className="floating-actions">
@@ -1470,7 +1984,7 @@ function FloatingWindow() {
           <div className="floating-settings">
             <label>
               透明度
-              <input type="range" min="30" max="100" value={Math.round(opacity * 100)} onChange={(e) => setOpacity(Number(e.target.value) / 100)} />
+              <input type="range" min="0" max="100" value={Math.round(currentAppr.opacity)} onChange={(e) => setSurfaceOpacity(Number(e.target.value))} />
             </label>
           </div>
         )}
@@ -1505,6 +2019,7 @@ function FloatingWindow() {
             </div>
           )}
         </div>
+        <div className="floating-resize-zone" onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); invoke("floating_resize_begin", { kind: "floating" }).catch(() => {}); }} title="拖动右下角调整窗口大小" />
       </div>
     </div>
   );
@@ -1518,10 +2033,42 @@ function AudioFloatingWindow() {
   const isMic = source === "mic";
   const [trans, setTrans] = useState<{ text: string; src: string; tgt: string; result: string } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const [opacity, setOpacity] = useState(0.88);
   const [showSettings, setShowSettings] = useState(false);
   // 断句灵敏度(共享):语言 → 秒
   const [sens, setSens] = useState<Record<string, number>>({});
+
+  /* Wave 9 外观:电脑音频窗用 audio 外观,麦克风窗用 audioMic 外观 */
+  const [appr, setAppr] = useState<{ theme: string; appearance: Record<SurfaceKey, AppearanceItem> } | null>(null);
+  const surfaceKey: SurfaceKey = isMic ? "audioMic" : "audio";
+  const currentAppr = appr?.appearance[surfaceKey] ?? DEFAULT_APPEARANCE[surfaceKey];
+  const setSurfaceOpacity = (v: number) => {
+    const base = appr ?? { theme: "light", appearance: DEFAULT_APPEARANCE };
+    const next = { theme: base.theme, appearance: { ...base.appearance, [surfaceKey]: { ...base.appearance[surfaceKey], opacity: v } } };
+    setAppr(next);
+    applyWindowTheme(surfaceKey, next.theme, next.appearance);
+    invoke("update_appearance", { surface: surfaceKey, patch: { opacity: v } }).catch(() => {});
+  };
+
+  /* 加载配置应用本窗外观;接收设置中心广播即时更新 */
+  useEffect(() => {
+    invoke<any>("load_app_config").then((cfg) => {
+      const s = cfg?.settings ?? {};
+      const st = { theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light", appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance) };
+      setAppr(st);
+      applyWindowTheme(surfaceKey, st.theme, st.appearance);
+    }).catch(() => {});
+    (window as any).__applyAppSettings = (s: any) => {
+      const st = { theme: s?.theme === "dark" || s?.theme === "system" ? s.theme : "light", appearance: mergeAppearance(DEFAULT_APPEARANCE, s?.appearance) };
+      setAppr(st);
+      applyWindowTheme(surfaceKey, st.theme, st.appearance);
+    };
+    return () => { delete (window as any).__applyAppSettings; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (appr) applyWindowTheme(surfaceKey, appr.theme, appr.appearance);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appr]);
 
   useEffect(() => {
     invoke<Record<string, number>>("audio_get_sensitivities").then((s) => setSens(s)).catch(() => {});
@@ -1590,7 +2137,7 @@ function AudioFloatingWindow() {
 
   return (
     <div className="floating-root">
-      <div className="floating-card" style={{ opacity }}>
+      <div className="floating-card">
         <div className="floating-bar" onMouseDown={(e) => { if (!(e.target as HTMLElement).closest(".floating-actions")) { e.preventDefault(); invoke("audio_floating_drag_begin", { source }).catch(() => {}); } }}>
           <span className="floating-title">{isMic ? "🎤 麦克风" : "🎙️ 电脑音频"}</span>
           <div className="floating-actions">
@@ -1611,7 +2158,7 @@ function AudioFloatingWindow() {
           <div className="floating-settings">
             <label>
               透明度
-              <input type="range" min="30" max="100" value={Math.round(opacity * 100)} onChange={(e) => setOpacity(Number(e.target.value) / 100)} />
+              <input type="range" min="0" max="100" value={Math.round(currentAppr.opacity)} onChange={(e) => setSurfaceOpacity(Number(e.target.value))} />
             </label>
             {/* 断句灵敏度:按语言独立,与主界面共享 */}
             {[
@@ -1648,6 +2195,7 @@ function AudioFloatingWindow() {
             </div>
           )}
         </div>
+        <div className="floating-resize-zone" onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); invoke("floating_resize_begin", { kind: isMic ? "audioMic" : "audio" }).catch(() => {}); }} title="拖动右下角调整窗口大小" />
       </div>
     </div>
   );
@@ -1817,4 +2365,3 @@ export default function App() {
   if (label === "screenshot-overlay") return <ScreenshotOverlay />;
   return <MainWindow />;
 }
-
