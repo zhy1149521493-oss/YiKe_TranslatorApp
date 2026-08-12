@@ -136,6 +136,162 @@ async function fetchOllamaFull(
   return data.response?.trim() ?? "(空响应)";
 }
 
+/* ============ 外接 API(第 8 波:OpenAI 兼容翻译后端) ============ */
+type ProviderCfg = {
+  id: string;
+  alias: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  models: string[];
+};
+type EngineMode = "local" | "api" | "auto";
+
+/* 快捷预设:新建供应商时一键填 Base URL + 常见模型(仍可手改) */
+const PROVIDER_PRESETS: { name: string; baseUrl: string; models: string[] }[] = [
+  { name: "DeepSeek", baseUrl: "https://api.deepseek.com/v1", models: ["deepseek-chat", "deepseek-reasoner"] },
+  { name: "通义千问", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", models: ["qwen-plus", "qwen-turbo", "qwen-max"] },
+  { name: "Kimi/Moonshot", baseUrl: "https://api.moonshot.cn/v1", models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"] },
+  { name: "智谱 GLM", baseUrl: "https://open.bigmodel.cn/api/paas/v4", models: ["glm-4-flash", "glm-4-plus", "glm-4-air"] },
+  { name: "OpenAI", baseUrl: "https://api.openai.com/v1", models: ["gpt-4o-mini", "gpt-4o"] },
+];
+
+/* 当前引擎配置镜像:MainWindow 每次渲染同步,供模块级路由函数读取 */
+let engineCfg: { mode: EngineMode; providers: ProviderCfg[]; activeProviderId: string } = {
+  mode: "local",
+  providers: [],
+  activeProviderId: "",
+};
+
+function activeProvider(): ProviderCfg | null {
+  return engineCfg.providers.find((p) => p.id === engineCfg.activeProviderId) ?? null;
+}
+
+/* 发起请求前选引擎:api=必须外接(未配置报错);auto=有有效外接配置用外接,否则本地。
+   请求失败一律直接报错,绝不中途回退本地(避免朋友机器无模型/显卡内存爆掉) */
+function resolveEngine(): { kind: "local" } | { kind: "api"; provider: ProviderCfg } {
+  const provider = activeProvider();
+  const valid = !!provider && !!provider.baseUrl.trim() && !!provider.apiKey.trim() && !!provider.model.trim();
+  if (engineCfg.mode === "api") {
+    if (!valid) throw new Error("外接 API 未配置完整,请填写 Base URL / API Key / 模型");
+    return { kind: "api", provider: provider! };
+  }
+  if (engineCfg.mode === "auto" && valid) return { kind: "api", provider: provider! };
+  return { kind: "local" };
+}
+
+function apiBase(provider: ProviderCfg): string {
+  return provider.baseUrl.trim().replace(/\/+$/, "");
+}
+
+async function apiErrorText(resp: Response): Promise<string> {
+  try {
+    const data = await resp.json();
+    const msg = data?.error?.message || data?.message;
+    if (msg) return `API ${resp.status}: ${msg}`;
+  } catch {
+    /* 非 JSON 响应 */
+  }
+  return `API ${resp.status}`;
+}
+
+/* OpenAI 兼容 /chat/completions 流式(SSE) */
+async function fetchApiStream(
+  provider: ProviderCfg,
+  source: string,
+  target: string,
+  text: string,
+  onToken: (t: string) => void,
+  signal?: AbortSignal
+) {
+  const resp = await fetch(`${apiBase(provider)}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.apiKey.trim()}` },
+    body: JSON.stringify({
+      model: provider.model.trim(),
+      messages: [{ role: "user", content: buildPrompt(source, target, text) }],
+      stream: true,
+      temperature: 0.1,
+    }),
+    signal,
+  });
+  if (!resp.ok) throw new Error(await apiErrorText(resp));
+  const reader = resp.body!.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() || "";
+    for (const line of lines) {
+      const s = line.trim();
+      if (!s.startsWith("data:")) continue;
+      const payload = s.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const data = JSON.parse(payload);
+        const delta = data.choices?.[0]?.delta?.content;
+        if (delta) onToken(delta);
+      } catch {
+        /* 跳过坏行 */
+      }
+    }
+  }
+}
+
+/* OpenAI 兼容 /chat/completions 一次性输出 */
+async function fetchApiFull(provider: ProviderCfg, source: string, target: string, text: string): Promise<string> {
+  const resp = await fetch(`${apiBase(provider)}/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.apiKey.trim()}` },
+    body: JSON.stringify({
+      model: provider.model.trim(),
+      messages: [{ role: "user", content: buildPrompt(source, target, text) }],
+      stream: false,
+      temperature: 0.1,
+    }),
+  });
+  if (!resp.ok) throw new Error(await apiErrorText(resp));
+  const data = await resp.json();
+  const content = data.choices?.[0]?.message?.content;
+  return (content ?? "").trim() || "(空响应)";
+}
+
+/* 检测模型:GET {Base URL}/models → 模型 id 列表 */
+async function fetchApiModels(provider: ProviderCfg): Promise<string[]> {
+  const resp = await fetch(`${apiBase(provider)}/models`, {
+    headers: { Authorization: `Bearer ${provider.apiKey.trim()}` },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!resp.ok) throw new Error(await apiErrorText(resp));
+  const data = await resp.json();
+  if (!Array.isArray(data.data)) throw new Error("响应中没有模型列表(data 字段缺失)");
+  return data.data.map((m: any) => (typeof m === "string" ? m : m?.id)).filter(Boolean);
+}
+
+/* ============ 统一翻译路由(本地 Ollama / 外接 API) ============ */
+async function translateStream(
+  model: string,
+  source: string,
+  target: string,
+  text: string,
+  numCtx: number,
+  onToken: (t: string) => void,
+  signal?: AbortSignal
+) {
+  const eng = resolveEngine();
+  if (eng.kind === "api") return fetchApiStream(eng.provider, source, target, text, onToken, signal);
+  return fetchOllamaStream(model, source, target, text, numCtx, onToken, signal);
+}
+
+async function translateFull(model: string, source: string, target: string, text: string, numCtx: number): Promise<string> {
+  const eng = resolveEngine();
+  if (eng.kind === "api") return fetchApiFull(eng.provider, source, target, text);
+  return fetchOllamaFull(model, source, target, text, numCtx);
+}
+
 /* ============ 主窗口 ============ */
 function MainWindow() {
   const [floatingOpen, setFloatingOpen] = useState(false);
@@ -149,6 +305,42 @@ function MainWindow() {
   const [streamOn, setStreamOn] = useState(true);
   const [conflict, setConflict] = useState(false);
   const [clipAuto, setClipAuto] = useState(false); // true=复制即开,false=仅悬浮窗打开时翻译
+
+  /* ===== 翻译引擎(第 8 波:本地 Ollama / 外接 API / 自动) ===== */
+  const [engineMode, setEngineMode] = useState<EngineMode>("local");
+  const [providers, setProviders] = useState<ProviderCfg[]>([]);
+  const [activeProviderId, setActiveProviderId] = useState("");
+  const [enginePanelOpen, setEnginePanelOpen] = useState(false);
+  const [engineStatus, setEngineStatus] = useState("");
+  const configLoadedRef = useRef(false);
+  // 渲染时同步模块级镜像,供 translateStream/translateFull 路由读取
+  engineCfg = { mode: engineMode, providers, activeProviderId };
+
+  /* 启动时加载引擎配置(config.json) */
+  useEffect(() => {
+    invoke<{ engineMode?: EngineMode; activeProviderId?: string; providers?: ProviderCfg[] }>("load_app_config")
+      .then((cfg) => {
+        configLoadedRef.current = true;
+        if (!cfg) return;
+        if (cfg.engineMode) setEngineMode(cfg.engineMode);
+        if (Array.isArray(cfg.providers)) {
+          setProviders(cfg.providers.filter((p) => p && typeof p.id === "string"));
+          if (cfg.activeProviderId && cfg.providers.some((p) => p.id === cfg.activeProviderId)) {
+            setActiveProviderId(cfg.activeProviderId);
+          }
+        }
+      })
+      .catch(() => { configLoadedRef.current = true; });
+  }, []);
+
+  /* 配置变更防抖保存(400ms,避免每次击键都写盘) */
+  useEffect(() => {
+    if (!configLoadedRef.current) return;
+    const t = setTimeout(() => {
+      invoke("save_app_config", { config: { engineMode, activeProviderId, providers } }).catch((e) => console.error("保存配置失败", e));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [engineMode, activeProviderId, providers]);
 
   const abortRef = useRef<AbortController | null>(null);
   const busyRef = useRef(false);
@@ -272,7 +464,7 @@ function MainWindow() {
         setSubCurrent(first);
       }
       let result = "";
-      await fetchOllamaStream(model, src, tgt, text, numCtx, (tok) => {
+      await translateStream(model, src, tgt, text, numCtx, (tok) => {
         result += tok;
         const p = { text, result };
         appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
@@ -336,7 +528,7 @@ function MainWindow() {
           setAudioStatus((prev) => ({ ...prev, [source]: `❌ 转发失败: ${JSON.stringify(e)}` }));
         });
       await send("");
-      let result = await fetchOllamaFull(model, src, tgt, text, numCtx);
+      let result = await translateFull(model, src, tgt, text, numCtx);
       if (!result.trim()) result = "(空响应)";
       await send(result);
       setAudioStatus((prev) => ({ ...prev, [source]: "" }));
@@ -607,7 +799,7 @@ function MainWindow() {
       if (streamOn) {
         setOutput("");
         try {
-          await fetchOllamaStream(model, src, tgt, text, numCtx, (token) =>
+          await translateStream(model, src, tgt, text, numCtx, (token) =>
             setOutput((prev) => prev + token),
             ctrl.signal
           );
@@ -621,7 +813,7 @@ function MainWindow() {
       } else {
         setOutput("⏳ 翻译中...");
         try {
-          const result = await fetchOllamaFull(model, src, tgt, text, numCtx);
+          const result = await translateFull(model, src, tgt, text, numCtx);
           if (!ctrl.signal.aborted) setOutput(result);
         } catch (e: any) {
           setOutput("❌ 翻译失败:" + e.message);
@@ -744,7 +936,7 @@ function MainWindow() {
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
       showStatus("⏳ 正在翻译…");
       try {
-        const result = await fetchOllamaFull(model, src, tgt, ocrText, numCtx);
+        const result = await translateFull(model, src, tgt, ocrText, numCtx);
         if (source === "floating") {
           await appWindow.emitTo("floating", "show-translation", { text: ocrText, src, tgt, result }).catch(() => {});
         } else {
@@ -787,7 +979,7 @@ function MainWindow() {
         // 模式检查:手动模式下悬浮窗未开则跳过
         if (!clipAuto && !floatingRef.current) return;
         try { await invoke("open_floating_window"); setFloatingOpen(true); } catch { /* ok */ }
-        const result = await fetchOllamaFull(model, src, tgt, text, 1024);
+        const result = await translateFull(model, src, tgt, text, 1024);
         await appWindow.emitTo("floating", "show-translation", { text, src, tgt, result });
       } catch {
         /* ignore */
@@ -797,6 +989,65 @@ function MainWindow() {
     }, 600);
     return () => clearInterval(timer);
   }, [sourceLang, targetLang, model, clipAuto]);
+
+  /* ---- 外接 API 供应商管理(第 8 波) ---- */
+  const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;
+  const addProvider = (presetIndex?: number) => {
+    const preset = presetIndex !== undefined ? PROVIDER_PRESETS[presetIndex] : undefined;
+    const p: ProviderCfg = {
+      id: `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      alias: preset?.name ?? "新供应商",
+      baseUrl: preset?.baseUrl ?? "",
+      apiKey: "",
+      model: preset?.models[0] ?? "",
+      models: preset?.models ? [...preset.models] : [],
+    };
+    setProviders((prev) => [...prev, p]);
+    setActiveProviderId(p.id);
+    setEngineStatus(preset ? `已按预设创建「${p.alias}」,请填写 API Key` : "");
+  };
+  const removeProvider = (id: string) => {
+    setProviders((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      if (activeProviderId === id) setActiveProviderId(next[0]?.id ?? "");
+      return next;
+    });
+  };
+  const updateProvider = (id: string, patch: Partial<ProviderCfg>) => {
+    setProviders((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  };
+  const probeModels = async (id: string) => {
+    const p = providers.find((x) => x.id === id);
+    if (!p) return;
+    if (!p.baseUrl.trim() || !p.apiKey.trim()) {
+      setEngineStatus("⚠️ 请先填写 Base URL 和 API Key 再检测模型");
+      return;
+    }
+    setEngineStatus("⏳ 正在检测模型…");
+    try {
+      const models = await fetchApiModels(p);
+      if (!models.length) throw new Error("模型列表为空(可手动输入模型名)");
+      updateProvider(id, { models, model: p.model || models[0] });
+      setEngineStatus(`✅ 检测到 ${models.length} 个模型`);
+    } catch (e: any) {
+      setEngineStatus(`❌ 检测失败: ${e?.message ?? e}`);
+    }
+  };
+  const testProvider = async (id: string) => {
+    const p = providers.find((x) => x.id === id);
+    if (!p) return;
+    if (!p.baseUrl.trim() || !p.apiKey.trim() || !p.model.trim()) {
+      setEngineStatus("⚠️ 请完整填写 Base URL / API Key / 模型");
+      return;
+    }
+    setEngineStatus("⏳ 正在测试连接…");
+    try {
+      const result = await fetchApiFull(p, "en", "zh", "hello");
+      setEngineStatus(`✅ 连接成功: ${result.slice(0, 60)}`);
+    } catch (e: any) {
+      setEngineStatus(`❌ 测试失败: ${e?.message ?? e}`);
+    }
+  };
 
   /* ---- UI ---- */
   return (
@@ -832,6 +1083,59 @@ function MainWindow() {
       </header>
 
       <main className="app-body">
+        {/* 翻译引擎配置(第8波:外接 API) */}
+        <div className={`subtitle-panel${enginePanelOpen ? " on" : ""}`}>
+          <div className="subtitle-panel-row">
+            <span className="subtitle-label">⚙️ 翻译引擎</span>
+            <select className="tool-select" value={engineMode} onChange={(e) => setEngineMode(e.target.value as EngineMode)} title="本地=Ollama(默认);外接=OpenAI兼容API;自动=已配置外接则用外接,否则本地。请求失败直接报错,不自动回退">
+              <option value="local">本地 Ollama</option>
+              <option value="api">外接 API</option>
+              <option value="auto">自动</option>
+            </select>
+            <button className="btn-float" onClick={() => setEnginePanelOpen(!enginePanelOpen)} title="配置外接 API 供应商(Base URL / Key / 模型)">
+              {enginePanelOpen ? "收起供应商" : "配置供应商"}
+            </button>
+            {engineStatus && <em className="subtitle-msg">· {engineStatus}</em>}
+          </div>
+          {enginePanelOpen && (
+            <div className="engine-panel">
+              <div className="subtitle-panel-row">
+                <select className="tool-select" value={activeProviderId} onChange={(e) => setActiveProviderId(e.target.value)} title="当前生效的供应商(外接/自动模式使用)">
+                  {providers.length === 0 && <option value="">未配置供应商</option>}
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>{p.alias || p.baseUrl || "(未命名)"}{p.model ? ` · ${p.model}` : ""}</option>
+                  ))}
+                </select>
+                <select className="tool-select" defaultValue="" onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v !== "") addProvider(Number(v)); }} title="按预设新建供应商,自动填 Base URL 和常见模型">
+                  <option value="">➕ 按预设新建…</option>
+                  {PROVIDER_PRESETS.map((pr, i) => <option key={pr.name} value={i}>{pr.name}</option>)}
+                </select>
+                <button className="btn-float" onClick={() => addProvider()} title="手动新增空供应商">➕ 新增</button>
+                {activeProvider && (
+                  <button className="btn-float" onClick={() => removeProvider(activeProvider.id)} title="删除当前供应商">🗑 删除</button>
+                )}
+              </div>
+              {activeProvider && (
+                <div className="engine-fields">
+                  <div className="subtitle-panel-row">
+                    <input className="engine-input" style={{ flex: 0.8 }} placeholder="别名(如 DeepSeek)" value={activeProvider.alias} onChange={(e) => updateProvider(activeProvider.id, { alias: e.target.value })} />
+                    <input className="engine-input" placeholder="Base URL(如 https://api.deepseek.com/v1)" value={activeProvider.baseUrl} onChange={(e) => updateProvider(activeProvider.id, { baseUrl: e.target.value })} spellCheck={false} />
+                  </div>
+                  <div className="subtitle-panel-row">
+                    <input className="engine-input" type="password" placeholder="API Key" value={activeProvider.apiKey} onChange={(e) => updateProvider(activeProvider.id, { apiKey: e.target.value })} autoComplete="off" spellCheck={false} />
+                    <input className="engine-input" list="engine-model-list" placeholder="模型名(可手输,或点检测模型)" value={activeProvider.model} onChange={(e) => updateProvider(activeProvider.id, { model: e.target.value })} spellCheck={false} />
+                    <datalist id="engine-model-list">
+                      {activeProvider.models.map((m) => <option key={m} value={m} />)}
+                    </datalist>
+                    <button className="btn-float" onClick={() => probeModels(activeProvider.id)} title="GET {Base URL}/models 拉取模型列表">🔍 检测模型</button>
+                    <button className="btn-float" onClick={() => testProvider(activeProvider.id)} title="发一个小翻译请求验证连通性">🧪 测试连接</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* 音频实时字幕控制面板(第7波) */}
         <div className={`subtitle-panel${sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? " on" : ""}`}>
           <div className="subtitle-panel-row">

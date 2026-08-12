@@ -72,6 +72,43 @@ fn ping() -> String {
     "pong".to_string()
 }
 
+// ============ 第8波:应用配置持久化(外接 API 供应商/引擎模式) ============
+// 配置存 exe 同目录 config.json:绿色便携包拷贝到任何位置都自带配置,
+// 符合"相对路径、随目录迁移"的硬性要求。Key 明文存储(个人工具,朋友自填自己的 Key)。
+fn config_path() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("config.json")
+}
+
+/// 读取应用配置(引擎模式 + 供应商列表);文件不存在或损坏时返回空对象
+#[tauri::command]
+fn load_app_config() -> serde_json::Value {
+    let path = config_path();
+    match std::fs::read_to_string(&path) {
+        Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+            eprintln!("[config] parse failed: {e}");
+            serde_json::json!({})
+        }),
+        Err(_) => serde_json::json!({}),
+    }
+}
+
+/// 保存应用配置:先写临时文件再改名,避免写入中途崩溃留下半个文件
+#[tauri::command]
+fn save_app_config(config: serde_json::Value) -> Result<(), String> {
+    let path = config_path();
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建配置目录失败: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    let data = serde_json::to_string_pretty(&config).map_err(|e| format!("序列化配置失败: {e}"))?;
+    std::fs::write(&tmp, data).map_err(|e| format!("写入配置失败: {e}"))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("保存配置失败: {e}"))?;
+    Ok(())
+}
+
 // ============ 第7波:音频实时翻译 commands ============
 
 /// 启动音频实时识别(source: "system"=电脑音频 / "mic"=麦克风)
@@ -534,7 +571,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, load_app_config, save_app_config, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");

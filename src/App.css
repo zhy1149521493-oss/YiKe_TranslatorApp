@@ -454,6 +454,29 @@ body,
 .subtitle-panel.on {
   border-color: rgba(0, 122, 255, 0.4);
 }
+.engine-panel {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed rgba(0, 0, 0, 0.08);
+}
+.engine-fields {
+  margin-top: 4px;
+}
+.engine-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.75);
+  font-size: 13px;
+  color: var(--ios-text, #1c1c1e);
+  outline: none;
+}
+.engine-input:focus {
+  border-color: var(--ios-blue, #007aff);
+  background: #fff;
+}
 .subtitle-panel-row {
   display: flex;
   align-items: center;
