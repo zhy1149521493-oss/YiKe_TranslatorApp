@@ -499,6 +499,16 @@ body,
   font-style: normal;
   color: var(--ios-secondary, #8e8e93);
 }
+.thinking-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  color: var(--ios-secondary, #8e8e93);
+  animation: pulse-soft 1.2s ease-in-out infinite;
+}
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
 .subtitle-fps {
   display: flex;
   align-items: center;

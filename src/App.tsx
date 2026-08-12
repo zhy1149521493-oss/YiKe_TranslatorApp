@@ -145,6 +145,7 @@ type ProviderCfg = {
   model: string;
   models: string[];
   temperature: string; // 留空=不发送(用模型默认);部分模型只接受特定值(如 Kimi 只允许 1)
+  noThinking: string;  // "1"=发送 thinking:disabled(推理模型秒出译文,不支持该参数的供应商会报错)
 };
 type EngineMode = "local" | "api" | "auto";
 
@@ -209,10 +210,19 @@ async function fetchApiStream(
   target: string,
   text: string,
   onToken: (t: string) => void,
-  _signal?: AbortSignal
+  _signal?: AbortSignal,
+  onReasoning?: (r: string) => void
 ) {
   const ch = new Channel<string>();
-  ch.onmessage = (t) => onToken(t);
+  ch.onmessage = (t) => {
+    try {
+      const m = JSON.parse(t);
+      if (m && typeof m.c === "string") onToken(m.c);
+      else if (m && typeof m.r === "string") onReasoning?.(m.r);
+    } catch {
+      onToken(t); // 兼容纯文本帧
+    }
+  };
   await withTimeout(
     invoke<string>("api_chat", {
       baseUrl: provider.baseUrl,
@@ -220,6 +230,7 @@ async function fetchApiStream(
       model: provider.model,
       messages: [{ role: "user", content: buildPrompt(source, target, text) }],
       temperature: parseTemperature(provider),
+      noThinking: provider.noThinking === "1",
       stream: true,
       onToken: ch,
     }),
@@ -237,6 +248,7 @@ async function fetchApiFull(provider: ProviderCfg, source: string, target: strin
       model: provider.model,
       messages: [{ role: "user", content: buildPrompt(source, target, text) }],
       temperature: parseTemperature(provider),
+      noThinking: provider.noThinking === "1",
     }),
     65000,
     "外接 API 翻译"
@@ -261,10 +273,11 @@ async function translateStream(
   text: string,
   numCtx: number,
   onToken: (t: string) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onReasoning?: (r: string) => void
 ) {
   const eng = resolveEngine();
-  if (eng.kind === "api") return fetchApiStream(eng.provider, source, target, text, onToken, signal);
+  if (eng.kind === "api") return fetchApiStream(eng.provider, source, target, text, onToken, signal, onReasoning);
   return fetchOllamaStream(model, source, target, text, numCtx, onToken, signal);
 }
 
@@ -282,6 +295,7 @@ function MainWindow() {
   const [targetLang, setTargetLang] = useState("en");
   const [output, setOutput] = useState("");
   const [translating, setTranslating] = useState(false);
+  const [apiThinking, setApiThinking] = useState(false); // 外接推理模型"思考中"提示
   const [model, setModel] = useState("maternion/hy-mt2:1.8b");
   const [numCtx, setNumCtx] = useState(1024);
   const [streamOn, setStreamOn] = useState(true);
@@ -309,7 +323,7 @@ function MainWindow() {
           setProviders(
             cfg.providers
               .filter((p) => p && typeof p.id === "string")
-              .map((p) => ({ ...p, temperature: p.temperature ?? "" }))
+              .map((p) => ({ ...p, temperature: p.temperature ?? "", noThinking: p.noThinking ?? "" }))
           );
           if (cfg.activeProviderId && cfg.providers.some((p) => p.id === cfg.activeProviderId)) {
             setActiveProviderId(cfg.activeProviderId);
@@ -803,14 +817,17 @@ function MainWindow() {
           await translateStream(model, src, tgt, text, numCtx, (token) => {
             // 外接 API 走 Rust invoke 无法中途中止:过期流的 token 直接丢弃
             if (ctrl.signal.aborted) return;
+            setApiThinking(false);
             setOutput((prev) => prev + token);
           },
-            ctrl.signal
+            ctrl.signal,
+            () => { if (!ctrl.signal.aborted) setApiThinking(true); } // 推理帧 → "思考中"提示
           );
         } catch (e: any) {
           if (e.name !== "AbortError")
             setOutput((prev) => prev + "\n\n❌ " + e.message);
         } finally {
+          setApiThinking(false);
           busyRef.current = false;
           setTranslating(false);
           if (pendingTextRef.current) {
@@ -827,6 +844,7 @@ function MainWindow() {
         } catch (e: any) {
           setOutput("❌ 翻译失败:" + e.message);
         } finally {
+          setApiThinking(false);
           busyRef.current = false;
           setTranslating(false);
           if (pendingTextRef.current) {
@@ -1020,6 +1038,7 @@ function MainWindow() {
       model: preset?.models[0] ?? "",
       models: preset?.models ? [...preset.models] : [],
       temperature: "",
+      noThinking: "",
     };
     setProviders((prev) => [...prev, p]);
     setActiveProviderId(p.id);
@@ -1143,6 +1162,10 @@ function MainWindow() {
                   <div className="subtitle-panel-row">
                     <input className="engine-input" type="password" placeholder="API Key" value={activeProvider.apiKey} onChange={(e) => updateProvider(activeProvider.id, { apiKey: e.target.value })} autoComplete="off" spellCheck={false} />
                     <input className="engine-input" style={{ maxWidth: 110 }} type="number" step="0.1" min="0" max="2" placeholder="温度(空=默认)" value={activeProvider.temperature} onChange={(e) => updateProvider(activeProvider.id, { temperature: e.target.value })} title="留空=不发送(用模型默认);Kimi 等模型只允许 1,DeepSeek 想要稳定可填 0.1" />
+                    <label className="subtitle-mode" title="推理模型(如 kimi-k2.5 / deepseek 思考版)先输出思维链,首字很慢;勾选后发送 thinking:disabled 跳过思考。若供应商不支持该参数会报错,取消勾选即可">
+                      <input type="checkbox" checked={activeProvider.noThinking === "1"} onChange={(e) => updateProvider(activeProvider.id, { noThinking: e.target.checked ? "1" : "" })} />
+                      禁用思考
+                    </label>
                     <button className="btn-float" onClick={() => probeModels(activeProvider.id)} title="GET {Base URL}/models 拉取模型列表">🔍 检测模型</button>
                     <button className="btn-float" onClick={() => testProvider(activeProvider.id)} title="发一个小翻译请求验证连通性">🧪 测试连接</button>
                   </div>
@@ -1299,7 +1322,7 @@ function MainWindow() {
           </div>
         )}
         <div className="trans-output">
-          <div className="output-label">译文 {translating && <span className="pulse">●</span>}</div>
+          <div className="output-label">译文 {translating && <span className="pulse">●</span>}{apiThinking && <span className="thinking-hint">🧠 模型思考中…</span>}</div>
           <div className="output-text">{output || (translating ? "" : "输入后自动翻译...")}</div>
         </div>
       </main>

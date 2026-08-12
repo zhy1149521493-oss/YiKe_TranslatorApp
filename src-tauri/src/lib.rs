@@ -120,15 +120,20 @@ async fn api_chat(
     model: String,
     messages: serde_json::Value,
     temperature: Option<f64>,
+    no_thinking: bool,
     stream: bool,
     on_token: tauri::ipc::Channel<String>,
 ) -> Result<String, String> {
     use futures_util::StreamExt;
-    eprintln!("[api_chat] start url={base_url} model={model} stream={stream}");
+    let started = std::time::Instant::now();
+    eprintln!("[api_chat] start url={base_url} model={model} stream={stream} no_thinking={no_thinking}");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+        .map_err(|e| {
+            eprintln!("[api_chat] client build error: {e}");
+            format!("创建 HTTP 客户端失败: {e}")
+        })?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({
         "model": model.trim(),
@@ -138,13 +143,20 @@ async fn api_chat(
     if let Some(t) = temperature {
         body["temperature"] = serde_json::json!(t);
     }
+    if no_thinking {
+        // 推理模型(如 kimi-k2.5 / deepseek 思考版)首字极慢;支持方(如 Moonshot)接受 thinking:disabled
+        body["thinking"] = serde_json::json!({ "type": "disabled" });
+    }
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", api_key.trim()))
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("请求失败: {e}"))?;
+        .map_err(|e| {
+            eprintln!("[api_chat] network error after {}ms: {e}", started.elapsed().as_millis());
+            format!("请求失败: {e}")
+        })?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -156,9 +168,12 @@ async fn api_chat(
         return Err(format!("API {}: {}", status.as_u16(), msg));
     }
     if !stream {
-        let data: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
+        let data: serde_json::Value = resp.json().await.map_err(|e| {
+            eprintln!("[api_chat] json error: {e}");
+            format!("解析响应失败: {e}")
+        })?;
         let out = data["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
-        eprintln!("[api_chat] done stream=false out_len={}", out.chars().count());
+        eprintln!("[api_chat] done stream=false out_len={} elapsed_ms={}", out.chars().count(), started.elapsed().as_millis());
         return Ok(out);
     }
     // SSE 流式解析:逐行 data: {…},choices[0].delta.content 通过 Channel 推给前端
@@ -177,15 +192,22 @@ async fn api_chat(
                 continue;
             }
             let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else { continue };
-            if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
-                if !delta.is_empty() {
-                    full.push_str(delta);
-                    let _ = on_token.send(delta.to_string());
+            let delta = &v["choices"][0]["delta"];
+            if let Some(c) = delta["content"].as_str() {
+                if !c.is_empty() {
+                    full.push_str(c);
+                    // 内容帧:前端追加到译文
+                    let _ = on_token.send(serde_json::json!({ "c": c }).to_string());
+                }
+            } else if let Some(r) = delta["reasoning_content"].as_str() {
+                if !r.is_empty() {
+                    // 推理帧:前端显示"思考中"进度(不进入译文)
+                    let _ = on_token.send(serde_json::json!({ "r": r }).to_string());
                 }
             }
         }
     }
-    eprintln!("[api_chat] done stream=true out_len={}", full.chars().count());
+    eprintln!("[api_chat] done stream=true out_len={} elapsed_ms={}", full.chars().count(), started.elapsed().as_millis());
     Ok(full)
 }
 
@@ -198,12 +220,17 @@ async fn api_chat_full(
     model: String,
     messages: serde_json::Value,
     temperature: Option<f64>,
+    no_thinking: bool,
 ) -> Result<String, String> {
-    eprintln!("[api_chat_full] start url={base_url} model={model}");
+    let started = std::time::Instant::now();
+    eprintln!("[api_chat_full] start url={base_url} model={model} no_thinking={no_thinking}");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+        .map_err(|e| {
+            eprintln!("[api_chat_full] client build error: {e}");
+            format!("创建 HTTP 客户端失败: {e}")
+        })?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let mut body = serde_json::json!({
         "model": model.trim(),
@@ -213,13 +240,19 @@ async fn api_chat_full(
     if let Some(t) = temperature {
         body["temperature"] = serde_json::json!(t);
     }
+    if no_thinking {
+        body["thinking"] = serde_json::json!({ "type": "disabled" });
+    }
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", api_key.trim()))
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("请求失败: {e}"))?;
+        .map_err(|e| {
+            eprintln!("[api_chat_full] network error after {}ms: {e}", started.elapsed().as_millis());
+            format!("请求失败: {e}")
+        })?;
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -230,9 +263,12 @@ async fn api_chat_full(
         eprintln!("[api_chat_full] error status={status} msg={msg}");
         return Err(format!("API {}: {}", status.as_u16(), msg));
     }
-    let data: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
+    let data: serde_json::Value = resp.json().await.map_err(|e| {
+        eprintln!("[api_chat_full] json error: {e}");
+        format!("解析响应失败: {e}")
+    })?;
     let out = data["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
-    eprintln!("[api_chat_full] done out_len={}", out.chars().count());
+    eprintln!("[api_chat_full] done out_len={} elapsed_ms={}", out.chars().count(), started.elapsed().as_millis());
     Ok(out)
 }
 
