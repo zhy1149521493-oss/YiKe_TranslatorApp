@@ -5,7 +5,7 @@
 This project is split across TWO folders - keep them straight:
 
 1. Dev source (this repo): the frontend/backend source code.
-   On this machine: C:/Users/11495/AppData/Roaming/reasonix/global-workspace/translator-app
+   On this machine: E:/TranslatorApp-dev (migrated here 2026-08-12)
 2. Runtime folder: the built, portable app + models + project memory (docs/, REASONIX.md, pianhuabiao.txt).
    On this machine: E:/TranslatorApp - portable: copy the whole folder to any drive and it runs.
 
