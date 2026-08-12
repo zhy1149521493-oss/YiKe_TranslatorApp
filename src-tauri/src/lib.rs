@@ -955,12 +955,23 @@ pub fn run() {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     eprintln!("[win] {} CloseRequested", window.label());
-                    // 驻留模式:主窗口 ✕ 只隐藏到后台(托盘仍在,可随时恢复/退出);
-                    // 否则主窗销毁后没有任何窗口,后台功能全停且无法再打开主窗。
                     if window.label() == "main" {
+                        // 主窗口 ✕ 行为由 config.json 的 mainClose 决定(Wave 9 设置面板提供 UI):
+                        //   hide = 隐藏到托盘(默认,驻留模式:后台功能继续,托盘可恢复/退出)
+                        //   quit = 直接退出整个应用(含清理 Ollama 子进程)
+                        let main_close = std::fs::read_to_string(config_path())
+                            .ok()
+                            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                            .and_then(|v| v.get("mainClose").and_then(|m| m.as_str()).map(|s| s.to_string()))
+                            .unwrap_or_else(|| "hide".to_string());
                         api.prevent_close();
-                        let _ = window.hide();
-                        eprintln!("[main] hidden to tray (resident mode)");
+                        if main_close == "quit" {
+                            eprintln!("[main] CloseRequested → quit app (mainClose=quit)");
+                            let _ = window.app_handle().exit(0);
+                        } else {
+                            let _ = window.hide();
+                            eprintln!("[main] hidden to tray (resident mode, mainClose=hide)");
+                        }
                     }
                 }
                 tauri::WindowEvent::Destroyed => eprintln!("[win] {} Destroyed", window.label()),

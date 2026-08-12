@@ -309,17 +309,19 @@ function MainWindow() {
   const [enginePanelOpen, setEnginePanelOpen] = useState(false);
   const [engineStatus, setEngineStatus] = useState("");
   const [detectPicker, setDetectPicker] = useState<{ providerId: string; models: string[]; query: string } | null>(null);
+  const [mainClose, setMainClose] = useState<"hide" | "quit">("hide"); // 主窗口 ✕ 行为(Wave 9 设置面板提供 UI,默认隐藏到托盘)
   const configLoadedRef = useRef(false);
   // 渲染时同步模块级镜像,供 translateStream/translateFull 路由读取
   engineCfg = { mode: engineMode, providers, activeProviderId };
 
   /* 启动时加载引擎配置(config.json) */
   useEffect(() => {
-    invoke<{ configVersion?: number; engineMode?: EngineMode; activeProviderId?: string; providers?: ProviderCfg[] }>("load_app_config")
+    invoke<{ configVersion?: number; mainClose?: "hide" | "quit"; engineMode?: EngineMode; activeProviderId?: string; providers?: ProviderCfg[] }>("load_app_config")
       .then((cfg) => {
         configLoadedRef.current = true;
         if (!cfg) return;
         if (cfg.engineMode) setEngineMode(cfg.engineMode);
+        if (cfg.mainClose === "quit") setMainClose("quit");
         if (Array.isArray(cfg.providers)) {
           let list = cfg.providers
             .filter((p) => p && typeof p.id === "string")
@@ -329,7 +331,7 @@ function MainWindow() {
           if (cfg.configVersion !== 2) {
             list = list.map((p) => ({ ...p, models: p.model && p.model.trim() ? [p.model] : [] }));
             invoke("save_app_config", {
-              config: { configVersion: 2, engineMode: cfg.engineMode, activeProviderId: cfg.activeProviderId, providers: list },
+              config: { configVersion: 2, mainClose: cfg.mainClose ?? "hide", engineMode: cfg.engineMode, activeProviderId: cfg.activeProviderId, providers: list },
             }).catch(() => {});
           }
           setProviders(list);
@@ -345,7 +347,7 @@ function MainWindow() {
   useEffect(() => {
     if (!configLoadedRef.current) return;
     const t = setTimeout(() => {
-      invoke("save_app_config", { config: { configVersion: 2, engineMode, activeProviderId, providers } }).catch((e) => console.error("保存配置失败", e));
+      invoke("save_app_config", { config: { configVersion: 2, mainClose, engineMode, activeProviderId, providers } }).catch((e) => console.error("保存配置失败", e));
     }, 400);
     return () => clearTimeout(t);
   }, [engineMode, activeProviderId, providers]);
@@ -1150,9 +1152,6 @@ function MainWindow() {
           </button>
           <button className="btn-float" onClick={openFloating} title="打开翻译悬浮窗">
             {floatingOpen ? "📍 已开" : "🔲 悬浮窗"}
-          </button>
-          <button className="btn-float" onClick={() => invoke("quit_app").catch((e) => console.error("退出失败", e))} title="退出程序(也可用系统托盘图标退出)">
-            ⏻ 退出
           </button>
         </div>
       </header>
