@@ -11,7 +11,7 @@ This repository holds the **dev source code**. Read `AGENTS.md` for the project 
 | **this repo** (`translator-app`) | dev source: `src/`, `src-tauri/`, build config | No — on a new machine you must `npm install` and rebuild |
 | **runtime folder** | the built, ready-to-run app (exe + dlls + models + `docs/`) | Yes — copy the whole folder to any drive and it runs; delete it and it is uninstalled |
 
-On this machine the runtime folder is `E:\TranslatorApp`. On any other machine it can live anywhere — nothing in this repo hard-codes that path.
+On this machine the runtime folder is `E:\TranslatorApp`. On any other machine it can live anywhere — but note that during development some paths are still hard-coded as absolute (`E:\TranslatorApp\asr` in `src-tauri/src/audio.rs`, `E:\TranslatorApp\ollama` in `src-tauri/src/lib.rs`); converting them to relative paths is scheduled for Wave 10.
 
 ## Layout
 

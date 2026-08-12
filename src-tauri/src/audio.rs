@@ -27,6 +27,24 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
 
+/// 诊断日志:同时输出到 stderr 与 E:\TranslatorApp\audio_diag.log
+/// (GUI 运行时没有控制台,文件日志是采集 stderr 的替代通道;排查完 ENG 问题后应移除)
+static DIAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn diag_log(msg: &str) {
+    eprintln!("{msg}");
+    let _g = DIAG_LOCK.lock().unwrap();
+    use std::io::Write;
+    let p = std::path::Path::new("E:\\TranslatorApp\\audio_diag.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let _ = writeln!(f, "[{ts:.3}] {msg}");
+    }
+}
+
 /// 全局音频引擎状态:按来源存(电脑音频 / 麦克风),None = 未启动
 static AUDIO_ENGINE: std::sync::OnceLock<Mutex<std::collections::HashMap<AudioSource, Arc<AudioEngineInner>>>> =
     std::sync::OnceLock::new();
@@ -253,13 +271,42 @@ pub fn start(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), Stri
     let run_app = app.clone();
     let inner2 = inner.clone();
     let handle = std::thread::spawn(move || {
-        eprintln!("[audio] thread start source={:?}, emitting loading...", source);
+        diag_log(&format!("[audio] thread start source={:?}, emitting loading...", source));
         let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "loading" }));
         // 后台线程:扫描模型 + 加载识别器
         let loaded = (|| -> Result<OnlineRecognizer, String> {
-            eprintln!("[audio] scanning model files...");
+            diag_log("[audio] scanning model files...");
             let (encoder, decoder, joiner, tokens) = scan_model_files(&model_dir)?;
-            eprintln!("[audio] model files OK");
+            diag_log(&format!(
+                "[audio] model source={:?} lang={} dir={}",
+                source,
+                lang,
+                model_dir.display()
+            ));
+            diag_log(&format!(
+                "[audio] selected model files: encoder={encoder} | decoder={decoder} | joiner={joiner} | tokens={tokens}"
+            ));
+            // tokens.txt 分析:确认 "ENG" 是否就是词表里的一个 token(如语言标签)
+            match std::fs::read_to_string(&tokens) {
+                Ok(txt) => {
+                    let lines: Vec<&str> = txt.lines().collect();
+                    let n = lines.len();
+                    let eng_entries: Vec<&str> =
+                        lines.iter().filter(|t| t.contains("ENG")).take(10).cloned().collect();
+                    let langtags: Vec<&str> = lines
+                        .iter()
+                        .filter(|t| t.trim().starts_with('<') && t.trim().ends_with('>'))
+                        .take(20)
+                        .cloned()
+                        .collect();
+                    let head: Vec<&str> = lines.iter().take(10).cloned().collect();
+                    let tail: Vec<&str> = lines.iter().rev().take(5).cloned().collect();
+                    diag_log(&format!(
+                        "[audio] tokens.txt lines={n} ENG_entries={eng_entries:?} langtag_entries={langtags:?} head={head:?} tail={tail:?}"
+                    ));
+                }
+                Err(e) => diag_log(&format!("[audio] WARN: read tokens.txt failed: {e}")),
+            }
             let mut cfg = OnlineRecognizerConfig::default();
             cfg.model_config.transducer.encoder = Some(encoder);
             cfg.model_config.transducer.decoder = Some(decoder);
@@ -273,31 +320,33 @@ pub fn start(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), Stri
             cfg.rule1_min_trailing_silence = 2.4;   // 长停顿必断
             cfg.rule2_min_trailing_silence = get_sensitivity(&lang); // 断句灵敏度(用户可调)
             cfg.rule3_min_utterance_length = 0.0;
-            eprintln!("[audio] creating OnlineRecognizer (loading model)...");
+            diag_log("[audio] creating OnlineRecognizer (loading model)...");
             let r = OnlineRecognizer::create(&cfg);
-            eprintln!("[audio] OnlineRecognizer::create returned");
+            diag_log("[audio] OnlineRecognizer::create returned");
             r.ok_or_else(|| "初始化流式识别器失败(模型加载失败)".to_string())
         })();
 
         let recognizer = match loaded {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[audio] model load error: {e}");
+                diag_log(&format!("[audio] model load error: {e}"));
                 inner2.running.store(false, Ordering::SeqCst);
                 let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": format!("error:{e}") }));
                 return;
             }
         };
+        diag_log(&format!("[audio] source={:?} recognizer READY", source));
         let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "ready" }));
         // 捕获循环(内部含 ASR 喂数据)
         let result = capture_loop(source, &inner2, &recognizer, &run_app);
         inner2.running.store(false, Ordering::SeqCst);
         match result {
             Ok(()) => {
+                diag_log(&format!("[audio] source={:?} capture loop ended (stopped)", source));
                 let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "stopped" }));
             }
             Err(e) => {
-                eprintln!("[audio] capture error: {e}");
+                diag_log(&format!("[audio] capture error: {e}"));
                 let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": format!("error:{e}") }));
             }
         }
@@ -353,6 +402,93 @@ unsafe fn parse_format(pwf: *const WAVEFORMATEX) -> (u16, u32, u16, bool) {
     }
 }
 
+/// 写 44 字节标准 PCM WAV 头(mono 16kHz 16-bit);data_len 为样本数据字节数
+/// 用于麦克风信号诊断转储(与 ASR 实际输入一致)
+fn wav_write_header(f: &mut std::fs::File, data_len: u32) -> std::io::Result<()> {
+    use std::io::{Seek, Write};
+    f.seek(std::io::SeekFrom::Start(0))?;
+    f.write_all(b"RIFF")?;
+    f.write_all(&(36u32 + data_len).to_le_bytes())?;
+    f.write_all(b"WAVE")?;
+    f.write_all(b"fmt ")?;
+    f.write_all(&16u32.to_le_bytes())?;
+    f.write_all(&1u16.to_le_bytes())?; // PCM
+    f.write_all(&1u16.to_le_bytes())?; // mono
+    f.write_all(&16000u32.to_le_bytes())?;
+    f.write_all(&32000u32.to_le_bytes())?; // byte rate = 16000 * 2
+    f.write_all(&2u16.to_le_bytes())?; // block align
+    f.write_all(&16u16.to_le_bytes())?; // bits per sample
+    f.write_all(b"data")?;
+    f.write_all(&data_len.to_le_bytes())?;
+    f.flush()
+}
+
+/// 打印 WAVEFORMATEX 细节(含 EXTENSIBLE 的有效位深),用于诊断设备返回格式与数据是否一致
+unsafe fn log_format_details(pwf: *const WAVEFORMATEX, source: AudioSource) {
+    let wf = &*pwf;
+    // packed 结构:字段必须复制到局部变量再使用,不能取引用(否则 E0793 unaligned)
+    let tag = wf.wFormatTag;
+    let channels = wf.nChannels;
+    let rate = wf.nSamplesPerSec;
+    let bits = wf.wBitsPerSample;
+    let align = wf.nBlockAlign;
+    if tag == 65534 {
+        let ext = &*(pwf as *const WAVEFORMATEXTENSIBLE);
+        let valid_bits = ext.Samples.wValidBitsPerSample;
+        let mask = ext.dwChannelMask;
+        let sub = ext.SubFormat;
+        diag_log(&format!(
+            "[audio] fmt details({:?}): EXTENSIBLE valid_bits={} channels={} rate={} bits={} block_align={} mask=0x{:08X} sub={:?}",
+            source,
+            valid_bits,
+            channels,
+            rate,
+            bits,
+            align,
+            mask,
+            sub,
+        ));
+    } else {
+        diag_log(&format!(
+            "[audio] fmt details({:?}): tag={} channels={} rate={} bits={} block_align={}",
+            source, tag, channels, rate, bits, align,
+        ));
+    }
+}
+
+/// 鲁棒归一化:估计直流偏置并减去;若去直流后峰值显著超过 float 归一化范围则整体缩放。
+/// 部分设备(尤其 Realtek/虚拟声卡)返回未归一化或带直流偏置的 float32 样本,
+/// 直接喂 ASR 会得到畸形特征(表现为稳定输出 "ENG" 等退化结果)。
+/// 返回 (直流偏置, 去直流后峰值, 是否触发了缩放)
+fn normalize_mono(mono: &mut [f32]) -> (f32, f32, bool) {
+    let n = mono.len();
+    if n == 0 {
+        return (0.0, 0.0, false);
+    }
+    let dc = mono.iter().sum::<f32>() / n as f32;
+    if dc.abs() > 1e-4 {
+        for s in mono.iter_mut() {
+            *s -= dc;
+        }
+    }
+    let mut peak = 0.0f32;
+    for &s in mono.iter() {
+        let a = s.abs();
+        if a > peak {
+            peak = a;
+        }
+    }
+    if peak > 1.2 {
+        let gain = 1.0 / peak;
+        for s in mono.iter_mut() {
+            *s *= gain;
+        }
+        (dc, peak, true)
+    } else {
+        (dc, peak, false)
+    }
+}
+
 /// WASAPI 捕获循环(电脑内部音频 loopback / 麦克风)→ 喂给识别器
 fn capture_loop(
     source: AudioSource,
@@ -397,9 +533,11 @@ fn capture_loop(
             .GetMixFormat()
             .map_err(|e| format!("GetMixFormat 失败: {e}"))?;
         let (channels, sample_rate, bits, is_float) = parse_format(mix_format);
-        eprintln!(
-            "[audio] mix format: {channels}ch {sample_rate}Hz {bits}bit float={is_float}"
-        );
+        diag_log(&format!(
+            "[audio] mix format: {channels}ch {sample_rate}Hz {bits}bit float={is_float} (source={:?})",
+            source
+        ));
+        log_format_details(mix_format, source);
 
         // 初始化共享模式:电脑音频带 LOOPBACK 回录标志;麦克风普通捕获
         let stream_flags = match source {
@@ -432,13 +570,33 @@ fn capture_loop(
         let mut last_level = Instant::now();   // 音量事件节流
 
         audio_client.Start().map_err(|e| format!("Start 失败: {e}"))?;
-        eprintln!("[audio] loopback capture started");
+        diag_log(&format!("[audio] capture started (source={:?})", source));
 
         let block_align = (bits / 8) as usize * channels as usize;
 
+        // 麦克风诊断:把重采样后(16k 单声道)前 10 秒写入 WAV,便于离线分析信号质量
+        // (与 ASR 实际输入一致;文件在 E:\TranslatorApp\mic_diag.wav,每次启动覆盖)
+        let mut wav: Option<(std::fs::File, u32)> = if source == AudioSource::Mic {
+            match std::fs::File::create("E:\\TranslatorApp\\mic_diag.wav") {
+                Ok(mut f) => {
+                    if wav_write_header(&mut f, 0).is_err() {
+                        diag_log("[audio] WARN: mic_diag.wav header write failed");
+                    }
+                    Some((f, 0))
+                }
+                Err(e) => {
+                    diag_log(&format!("[audio] WARN: mic_diag.wav create failed: {e}"));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         let mut diag_frames: u64 = 0;   // 诊断:累计捕获帧数
         let mut diag_last = Instant::now();
-        let mut mic_diag_last = Instant::now(); // 麦克风样本诊断计时
+        let mut sample_diag_last = Instant::now(); // 样本诊断计时(所有来源)
+        let mut normalize_diag_last = Instant::now(); // 归一化日志节流(5s)
 
         while inner.running.load(Ordering::SeqCst) {
             let mut data_ptr: *mut u8 = std::ptr::null_mut();
@@ -524,17 +682,9 @@ fn capture_loop(
 
             capture.ReleaseBuffer(num_frames).ok();
 
-            // 计算帧能量(RMS):用于音量显示(所有来源)
-            let energy: f32 = mono.iter().map(|s| s * s).sum::<f32>() / mono.len().max(1) as f32;
-            let level_db = (energy + 1e-10).log10() * 10.0; // dB 尺度,静音约 -100dB
-            // 音量事件:节流 ~100ms,供前端显示实时音量条(方便调试/确认有声音进来)
-            if last_level.elapsed() >= Duration::from_millis(100) {
-                last_level = Instant::now();
-                let _ = app.emit_to("main", "audio-level", serde_json::json!({ "source": source.as_str(), "level": level_db }));
-            }
-            // 诊断(仅麦克风,节流 1s):打印样本范围/均值,判断是静音/直流/正常语音
-            if source == AudioSource::Mic && mic_diag_last.elapsed() >= Duration::from_secs(1) {
-                mic_diag_last = Instant::now();
+            // 原始样本统计(所有来源,节流 1s):判断是静音/直流/正常语音/超范围
+            if sample_diag_last.elapsed() >= Duration::from_secs(1) {
+                sample_diag_last = Instant::now();
                 let mut min_s = f32::MAX;
                 let mut max_s = f32::MIN;
                 let mut mean_s = 0.0f32;
@@ -544,7 +694,30 @@ fn capture_loop(
                     mean_s += s;
                 }
                 mean_s /= mono.len().max(1) as f32;
-                eprintln!("[audio] mic diag: energy={energy:.2e} rms_db={level_db:.1} min={min_s:.4} max={max_s:.4} mean={mean_s:.4} n={}", mono.len());
+                diag_log(&format!(
+                    "[audio] raw({:?}): min={min_s:.4} max={max_s:.4} mean={mean_s:.4} n={}",
+                    source,
+                    mono.len()
+                ));
+            }
+
+            // 鲁棒归一化:去直流 + 峰值缩放(修复设备返回未归一化/带直流偏置的样本)
+            let (dc, peak, scaled) = normalize_mono(&mut mono);
+            if scaled && normalize_diag_last.elapsed() >= Duration::from_secs(5) {
+                normalize_diag_last = Instant::now();
+                diag_log(&format!(
+                    "[audio] normalize({:?}): dc={dc:.3} peak={peak:.3} -> scaled to [-1,1]",
+                    source
+                ));
+            }
+
+            // 计算帧能量(RMS):用于音量显示(所有来源,基于归一化后信号)
+            let energy: f32 = mono.iter().map(|s| s * s).sum::<f32>() / mono.len().max(1) as f32;
+            let level_db = (energy + 1e-10).log10() * 10.0; // dB 尺度,静音约 -100dB
+            // 音量事件:节流 ~100ms,供前端显示实时音量条(方便调试/确认有声音进来)
+            if last_level.elapsed() >= Duration::from_millis(100) {
+                last_level = Instant::now();
+                let _ = app.emit_to("main", "audio-level", serde_json::json!({ "source": source.as_str(), "level": level_db }));
             }
             // 注:不做 VAD 跳帧——跳过静音帧会把音频切成碎片,破坏流式 ASR 连续性
             // (麦克风曾因此识别出乱码碎片)。静音断句交给端点检测(rule2)处理。
@@ -554,6 +727,28 @@ fn capture_loop(
             if resampled.is_empty() {
                 continue;
             }
+
+            // WAV 诊断:写前 10 秒(重采样后,即 ASR 实际输入)
+            if let Some((f, n)) = wav.as_mut() {
+                use std::io::Write;
+                const MAX_SAMPLES: u32 = 16000 * 10;
+                let remaining = MAX_SAMPLES.saturating_sub(*n);
+                if remaining > 0 {
+                    let take = (resampled.len() as u32).min(remaining);
+                    let mut buf = Vec::with_capacity(take as usize * 2);
+                    for &s in resampled.iter().take(take as usize) {
+                        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+                        buf.extend_from_slice(&v.to_le_bytes());
+                    }
+                    if let Err(e) = f.write_all(&buf) {
+                        diag_log(&format!("[audio] WARN: mic_diag.wav write failed: {e}"));
+                        wav = None;
+                    } else {
+                        *n += take;
+                    }
+                }
+            }
+
             stream.accept_waveform(16000, &resampled);
 
             // 增量解码
@@ -568,21 +763,29 @@ fn capture_loop(
                     {
                         partial_last = text.clone();
                         last_emit = Instant::now();
-                        eprintln!("[audio] partial({:?}): {text}", source);
+                        diag_log(&format!(
+                            "[audio] partial({}) text={text:?} tokens={:?}",
+                            source.as_str(),
+                            result.tokens
+                        ));
                         let r = app.emit_to("main", "audio-partial", serde_json::json!({ "source": source.as_str(), "text": text }));
-                        if let Err(e) = &r { eprintln!("[audio] emit audio-partial FAILED: {e}"); }
+                        if let Err(e) = &r { diag_log(&format!("[audio] emit audio-partial FAILED: {e}")); }
                     }
                     if recognizer.is_endpoint(&stream) {
                         // 端点:定稿整句
                         let final_text = result.text.trim().to_string();
                         if !final_text.is_empty() {
-                            eprintln!("[audio] final({:?}): {final_text}", source);
+                            diag_log(&format!(
+                                "[audio] final({}) text={final_text:?} tokens={:?}",
+                                source.as_str(),
+                                result.tokens
+                            ));
                             let r = app.emit_to(
                                 "main",
                                 "audio-final",
                                 serde_json::json!({ "source": source.as_str(), "text": final_text }),
                             );
-                            if let Err(e) = &r { eprintln!("[audio] emit audio-final FAILED: {e}"); }
+                            if let Err(e) = &r { diag_log(&format!("[audio] emit audio-final FAILED: {e}")); }
                         }
                         recognizer.reset(&stream);
                         partial_last.clear();
@@ -591,8 +794,17 @@ fn capture_loop(
             }
         }
 
+        // 收尾:补全 WAV 头中的样本数
+        if let Some((mut f, n)) = wav {
+            let _ = wav_write_header(&mut f, n * 2);
+            diag_log(&format!(
+                "[audio] mic_diag.wav done: {n} samples ({:.1}s @16k mono)",
+                n as f32 / 16000.0
+            ));
+        }
+
         let _ = audio_client.Stop();
-        eprintln!("[audio] capture loop stopped");
+        diag_log(&format!("[audio] capture loop stopped (source={:?})", source));
     }
     Ok(())
 }
