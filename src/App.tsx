@@ -144,6 +144,7 @@ type ProviderCfg = {
   apiKey: string;
   model: string;
   models: string[];
+  temperature: string; // 留空=不发送(用模型默认);部分模型只接受特定值(如 Kimi 只允许 1)
 };
 type EngineMode = "local" | "api" | "auto";
 
@@ -165,6 +166,25 @@ let engineCfg: { mode: EngineMode; providers: ProviderCfg[]; activeProviderId: s
 
 function activeProvider(): ProviderCfg | null {
   return engineCfg.providers.find((p) => p.id === engineCfg.activeProviderId) ?? null;
+}
+
+/* 温度输入 → 数字或 null(留空则不发送该参数) */
+function parseTemperature(p: ProviderCfg): number | null {
+  const s = p.temperature?.trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/* API 调用超时竞速:invoke 无法中止,超时后先报错让管线继续(后台请求仍会自然结束) */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label}超时(${Math.round(ms / 1000)}s)`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); }
+    );
+  });
 }
 
 /* 发起请求前选引擎:api=必须外接(未配置报错);auto=有有效外接配置用外接,否则本地。
@@ -193,34 +213,44 @@ async function fetchApiStream(
 ) {
   const ch = new Channel<string>();
   ch.onmessage = (t) => onToken(t);
-  await invoke<string>("api_chat", {
-    baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey,
-    model: provider.model,
-    messages: [{ role: "user", content: buildPrompt(source, target, text) }],
-    stream: true,
-    onToken: ch,
-  });
+  await withTimeout(
+    invoke<string>("api_chat", {
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model: provider.model,
+      messages: [{ role: "user", content: buildPrompt(source, target, text) }],
+      temperature: parseTemperature(provider),
+      stream: true,
+      onToken: ch,
+    }),
+    65000,
+    "外接 API 翻译"
+  );
 }
 
-/* OpenAI 兼容 /chat/completions 一次性输出(走 Rust 代理) */
+/* OpenAI 兼容 /chat/completions 一次性输出(走 Rust 代理;独立命令不带 Channel) */
 async function fetchApiFull(provider: ProviderCfg, source: string, target: string, text: string): Promise<string> {
-  const ch = new Channel<string>(); // 非流式时 Rust 不会发 token,占位即可
-  ch.onmessage = () => {};
-  const result = await invoke<string>("api_chat", {
-    baseUrl: provider.baseUrl,
-    apiKey: provider.apiKey,
-    model: provider.model,
-    messages: [{ role: "user", content: buildPrompt(source, target, text) }],
-    stream: false,
-    onToken: ch,
-  });
+  const result = await withTimeout(
+    invoke<string>("api_chat_full", {
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model: provider.model,
+      messages: [{ role: "user", content: buildPrompt(source, target, text) }],
+      temperature: parseTemperature(provider),
+    }),
+    65000,
+    "外接 API 翻译"
+  );
   return result.trim() || "(空响应)";
 }
 
 /* 检测模型:GET {Base URL}/models → 模型 id 列表(走 Rust 代理,20s 超时) */
 async function fetchApiModels(provider: ProviderCfg): Promise<string[]> {
-  return invoke<string[]>("api_list_models", { baseUrl: provider.baseUrl, apiKey: provider.apiKey });
+  return withTimeout(
+    invoke<string[]>("api_list_models", { baseUrl: provider.baseUrl, apiKey: provider.apiKey }),
+    30000,
+    "检测模型"
+  );
 }
 
 /* ============ 统一翻译路由(本地 Ollama / 外接 API) ============ */
@@ -276,7 +306,11 @@ function MainWindow() {
         if (!cfg) return;
         if (cfg.engineMode) setEngineMode(cfg.engineMode);
         if (Array.isArray(cfg.providers)) {
-          setProviders(cfg.providers.filter((p) => p && typeof p.id === "string"));
+          setProviders(
+            cfg.providers
+              .filter((p) => p && typeof p.id === "string")
+              .map((p) => ({ ...p, temperature: p.temperature ?? "" }))
+          );
           if (cfg.activeProviderId && cfg.providers.some((p) => p.id === cfg.activeProviderId)) {
             setActiveProviderId(cfg.activeProviderId);
           }
@@ -357,6 +391,7 @@ function MainWindow() {
   }, []);
   const audioTranslatingRef = useRef<Record<string, boolean>>({});  // 各来源翻译串行标志
   const audioPendingRef = useRef<Record<string, string>>({});       // 各来源待翻译的最新文本
+  const audioTranslateStartRef = useRef<Record<string, number>>({}); // 各来源当前翻译开始时间(看门狗)
   const audioFinalRef = useRef<Record<string, string>>({});         // 各来源当前定稿句
   const lastAudioTranslatedRef = useRef<Record<string, string>>({}); // 各来源去重
 
@@ -466,8 +501,20 @@ function MainWindow() {
      增量时 result="" 只更新原文;译文完成时 result 非空整体替换 */
   const submitAudioSubtitle = useCallback(async (source: string, text: string) => {
     if (!text.trim()) return;
-    if (audioTranslatingRef.current[source]) { audioPendingRef.current[source] = text; return; }
+    if (audioTranslatingRef.current[source]) {
+      // 看门狗:同一句翻译超过 65s 未完成 → 强制放锁,让后续句子继续(防外接 API 卡住后"无响应")
+      const started = audioTranslateStartRef.current[source] ?? 0;
+      if (Date.now() - started > 65000) {
+        audioTranslatingRef.current[source] = false;
+        audioTranslateStartRef.current[source] = 0;
+        setAudioStatus((prev) => ({ ...prev, [source]: "⚠️ 上句翻译超时,已跳过" }));
+      } else {
+        audioPendingRef.current[source] = text;
+        return;
+      }
+    }
     audioTranslatingRef.current[source] = true;
+    audioTranslateStartRef.current[source] = Date.now();
     try {
       let src = sourceLang;
       let tgt = targetLang;
@@ -488,6 +535,7 @@ function MainWindow() {
       setAudioStatus((prev) => ({ ...prev, [source]: `❌ 翻译失败: ${e}` }));
     } finally {
       audioTranslatingRef.current[source] = false;
+      audioTranslateStartRef.current[source] = 0;
       // 翻译期间来了新字:立刻翻译最新的(最新优先,跳过中间态)
       if (audioPendingRef.current[source]) {
         const t = audioPendingRef.current[source];
@@ -971,6 +1019,7 @@ function MainWindow() {
       apiKey: "",
       model: preset?.models[0] ?? "",
       models: preset?.models ? [...preset.models] : [],
+      temperature: "",
     };
     setProviders((prev) => [...prev, p]);
     setActiveProviderId(p.id);
@@ -1094,13 +1143,16 @@ function MainWindow() {
                   </div>
                   <div className="subtitle-panel-row">
                     <input className="engine-input" type="password" placeholder="API Key" value={activeProvider.apiKey} onChange={(e) => updateProvider(activeProvider.id, { apiKey: e.target.value })} autoComplete="off" spellCheck={false} />
+                    <input className="engine-input" style={{ maxWidth: 110 }} type="number" step="0.1" min="0" max="2" placeholder="温度(空=默认)" value={activeProvider.temperature} onChange={(e) => updateProvider(activeProvider.id, { temperature: e.target.value })} title="留空=不发送(用模型默认);Kimi 等模型只允许 1,DeepSeek 想要稳定可填 0.1" />
+                    <button className="btn-float" onClick={() => probeModels(activeProvider.id)} title="GET {Base URL}/models 拉取模型列表">🔍 检测模型</button>
+                    <button className="btn-float" onClick={() => testProvider(activeProvider.id)} title="发一个小翻译请求验证连通性">🧪 测试连接</button>
+                  </div>
+                  <div className="subtitle-panel-row">
                     <select className="engine-input" value={activeProvider.models.includes(activeProvider.model) ? activeProvider.model : "__custom__"} onChange={(e) => { const v = e.target.value; if (v !== "__custom__") updateProvider(activeProvider.id, { model: v }); }} title="检测到的模型列表;选「自定义…」可手动输入">
                       {activeProvider.models.length === 0 && <option value="">暂无检测结果</option>}
                       {activeProvider.models.map((m) => <option key={m} value={m}>{m}</option>)}
                       <option value="__custom__">✏️ 自定义…</option>
                     </select>
-                    <button className="btn-float" onClick={() => probeModels(activeProvider.id)} title="GET {Base URL}/models 拉取模型列表">🔍 检测模型</button>
-                    <button className="btn-float" onClick={() => testProvider(activeProvider.id)} title="发一个小翻译请求验证连通性">🧪 测试连接</button>
                   </div>
                   {!activeProvider.models.includes(activeProvider.model) && (
                     <div className="subtitle-panel-row">

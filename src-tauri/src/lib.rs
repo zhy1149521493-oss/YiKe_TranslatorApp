@@ -119,21 +119,25 @@ async fn api_chat(
     api_key: String,
     model: String,
     messages: serde_json::Value,
+    temperature: Option<f64>,
     stream: bool,
     on_token: tauri::ipc::Channel<String>,
 ) -> Result<String, String> {
     use futures_util::StreamExt;
+    eprintln!("[api_chat] start url={base_url} model={model} stream={stream}");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model.trim(),
         "messages": messages,
-        "temperature": 0.1,
         "stream": stream,
     });
+    if let Some(t) = temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", api_key.trim()))
@@ -148,11 +152,14 @@ async fn api_chat(
             .ok()
             .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
             .unwrap_or_else(|| text.chars().take(200).collect());
+        eprintln!("[api_chat] error status={status} msg={msg}");
         return Err(format!("API {}: {}", status.as_u16(), msg));
     }
     if !stream {
         let data: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
-        return Ok(data["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string());
+        let out = data["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
+        eprintln!("[api_chat] done stream=false out_len={}", out.chars().count());
+        return Ok(out);
     }
     // SSE 流式解析:逐行 data: {…},choices[0].delta.content 通过 Channel 推给前端
     let mut full = String::new();
@@ -178,7 +185,55 @@ async fn api_chat(
             }
         }
     }
+    eprintln!("[api_chat] done stream=true out_len={}", full.chars().count());
     Ok(full)
+}
+
+/// 非流式外接 API 请求:与 api_chat 共用逻辑,但不带 Channel。
+/// 音频字幕/截图/划词等一次性翻译都走这里(避免 Channel 相关的 IPC 复杂度)。
+#[tauri::command]
+async fn api_chat_full(
+    base_url: String,
+    api_key: String,
+    model: String,
+    messages: serde_json::Value,
+    temperature: Option<f64>,
+) -> Result<String, String> {
+    eprintln!("[api_chat_full] start url={base_url} model={model}");
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let mut body = serde_json::json!({
+        "model": model.trim(),
+        "messages": messages,
+        "stream": false,
+    });
+    if let Some(t) = temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key.trim()))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| text.chars().take(200).collect());
+        eprintln!("[api_chat_full] error status={status} msg={msg}");
+        return Err(format!("API {}: {}", status.as_u16(), msg));
+    }
+    let data: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
+    let out = data["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string();
+    eprintln!("[api_chat_full] done out_len={}", out.chars().count());
+    Ok(out)
 }
 
 /// 检测模型:GET {Base URL}/models → 模型 id 列表(走 Rust 代理,绕 CORS)
@@ -681,7 +736,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, load_app_config, save_app_config, api_chat, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, load_app_config, save_app_config, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");
