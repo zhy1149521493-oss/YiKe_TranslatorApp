@@ -27,7 +27,15 @@ use windows::Win32::Media::Audio::{
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED};
 
-/// 诊断日志:同时输出到 stderr 与 E:\TranslatorApp\audio_diag.log
+/// 便携定位:exe 所在目录(asr 模型 / 诊断文件都相对它,支持整目录拷贝到任意路径)
+fn app_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// 诊断日志:同时输出到 stderr 与 exe 同目录 audio_diag.log
 /// (GUI 运行时没有控制台,文件日志是采集 stderr 的替代通道;排查完 ENG 问题后应移除)
 static DIAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -35,7 +43,7 @@ fn diag_log(msg: &str) {
     eprintln!("{msg}");
     let _g = DIAG_LOCK.lock().unwrap();
     use std::io::Write;
-    let p = std::path::Path::new("E:\\TranslatorApp\\audio_diag.log");
+    let p = app_dir().join("audio_diag.log");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -149,9 +157,9 @@ pub fn all_sensitivities() -> std::collections::HashMap<String, f32> {
     sensitivity_map().clone()
 }
 
-/// ASR 模型目录(E:\TranslatorApp\asr\)
+/// ASR 模型目录(exe 同目录 asr\)
 fn asr_base_dir() -> PathBuf {
-    PathBuf::from("E:\\TranslatorApp\\asr")
+    app_dir().join("asr")
 }
 
 /// 语言 → 模型子目录名
@@ -575,9 +583,9 @@ fn capture_loop(
         let block_align = (bits / 8) as usize * channels as usize;
 
         // 麦克风诊断:把重采样后(16k 单声道)前 10 秒写入 WAV,便于离线分析信号质量
-        // (与 ASR 实际输入一致;文件在 E:\TranslatorApp\mic_diag.wav,每次启动覆盖)
+        // (与 ASR 实际输入一致;文件在 exe 同目录 mic_diag.wav,每次启动覆盖)
         let mut wav: Option<(std::fs::File, u32)> = if source == AudioSource::Mic {
-            match std::fs::File::create("E:\\TranslatorApp\\mic_diag.wav") {
+            match std::fs::File::create(app_dir().join("mic_diag.wav")) {
                 Ok(mut f) => {
                     if wav_write_header(&mut f, 0).is_err() {
                         diag_log("[audio] WARN: mic_diag.wav header write failed");

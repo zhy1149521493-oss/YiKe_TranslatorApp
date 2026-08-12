@@ -75,12 +75,17 @@ fn ping() -> String {
 // ============ 第8波:应用配置持久化(外接 API 供应商/引擎模式) ============
 // 配置存 exe 同目录 config.json:绿色便携包拷贝到任何位置都自带配置,
 // 符合"相对路径、随目录迁移"的硬性要求。Key 明文存储(个人工具,朋友自填自己的 Key)。
-fn config_path() -> std::path::PathBuf {
+/// 便携定位:exe 所在目录。所有资源(ollama/models/ocr/asr/诊断文件)都相对它定位,
+/// 整个文件夹拷贝到任意盘符/路径都能运行(Wave 10 硬性要求 #1)。
+fn app_dir() -> std::path::PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("config.json")
+}
+
+fn config_path() -> std::path::PathBuf {
+    app_dir().join("config.json")
 }
 
 /// 读取应用配置(引擎模式 + 供应商列表);文件不存在或损坏时返回空对象
@@ -434,7 +439,7 @@ fn ocr_instance() -> Result<std::sync::MutexGuard<'static, Option<RapidOcr>>, St
     let mut guard = lock.lock().map_err(|_| "OCR 锁获取失败".to_string())?;
     if guard.is_none() {
         let model_set = model_set_by_name("ppocrv6-small").ok_or_else(|| "模型集不存在".to_string())?;
-        let cache = ModelCache::new(r"E:\TranslatorApp\ocr");
+        let cache = ModelCache::new(app_dir().join("ocr"));
         cache.ensure_model_set_for_pipeline(model_set, PipelineConfig::without_cls(), ModelDownloadMode::Missing).map_err(|e| format!("模型: {e}"))?;
         let cfg = cache.config_for(model_set).with_pipeline(PipelineConfig::without_cls()).with_inference_options(InferenceOptions::default());
         let ocr = RapidOcr::from_config(cfg).map_err(|e| format!("OCR初始化: {e}"))?;
@@ -539,7 +544,7 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Resu
         eprintln!("[screenshot] ocr start coords=({x},{y},{w},{h})");
         let result: String = (|| {
             let cropped = capture_region(x, y, w, h)?;
-            let _ = cropped.save(r"E:\TranslatorApp\last_screenshot.png");
+            let _ = cropped.save(app_dir().join("last_screenshot.png"));
             ocr_image(&cropped)
         })().unwrap_or_else(|e| format!("ERROR: {e}"));
         let preview: String = result.chars().take(120).collect();
@@ -1002,32 +1007,35 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
-            // 清理可能残留的旧 ollama 进程,避免端口冲突
-            eprintln!("[ollama] cleaning up old processes...");
-            let _ = StdCommand::new("taskkill")
-                .args(["/f", "/t", "/im", "ollama.exe"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .creation_flags(0x08000000)
-                .output(); // 同步等待完成
-            let _ = StdCommand::new("taskkill")
-                .args(["/f", "/t", "/im", "llama-server.exe"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .creation_flags(0x08000000)
-                .output();
-            std::thread::sleep(std::time::Duration::from_secs(2));
-
-            eprintln!("[ollama] starting serve...");
+            // 【Ollama 启动(Wave 10 便携版)】
+            // 不再无条件 taskkill 系统中的 ollama.exe —— 那会误杀朋友机器上已有的 Ollama。
+            // 策略:先探测 127.0.0.1:11434;已被占用(已有 Ollama 在跑)→ 弹窗提示,不启动自带引擎;
+            // 未被占用 → 启动本目录 ollama\ollama.exe serve(OLLAMA_MODELS = 本目录 models)。
+            eprintln!("[ollama] probing 127.0.0.1:11434...");
+            let port_busy = std::net::TcpStream::connect("127.0.0.1:11434").is_ok();
             let mgr = OllamaManager::new();
-            if let Err(e) = mgr.start(
-                "E:\\TranslatorApp\\ollama\\ollama.exe",
-                "E:\\TranslatorApp\\models",
-            ) {
-                eprintln!("[ollama] start failed: {e}");
-                // 不阻塞应用,翻译功能暂时不可用
+            if port_busy {
+                eprintln!("[ollama] port 11434 already in use — skipping bundled ollama");
+                use windows::core::HSTRING;
+                use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
+                let text = HSTRING::from("检测到 11434 端口已被占用(可能已有 Ollama 正在运行)。\n\n请先关闭已有的 Ollama,再重新打开本应用。\n否则本地翻译不可用。");
+                let title = HSTRING::from("翻译助手");
+                let _ = unsafe { MessageBoxW(None, &text, &title, MB_OK | MB_ICONWARNING) };
             } else {
-                eprintln!("[ollama] serve started OK");
+                let base = app_dir();
+                let ollama_exe = base.join("ollama").join("ollama.exe");
+                let models_dir = base.join("models");
+                eprintln!(
+                    "[ollama] starting serve: {} models={}",
+                    ollama_exe.display(),
+                    models_dir.display()
+                );
+                if let Err(e) = mgr.start(&ollama_exe.to_string_lossy(), &models_dir.to_string_lossy()) {
+                    eprintln!("[ollama] start failed: {e}");
+                    // 不阻塞应用,翻译功能暂时不可用
+                } else {
+                    eprintln!("[ollama] serve started OK");
+                }
             }
             app.manage(mgr);
 
