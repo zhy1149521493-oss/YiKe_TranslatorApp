@@ -109,6 +109,116 @@ fn save_app_config(config: serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+// ============ 第8波:外接 API Rust 代理(绕过浏览器 CORS) ============
+// 中转站/中继服务(如 tokenhub)不返回 CORS 允许头,WebView fetch 会被浏览器拦截;
+// Rust 侧 reqwest 直连无此限制,同时统一处理超时(chat 60s / 模型列表 20s)。
+// 消息格式与 OpenAI 兼容:{"role":"user","content":...}
+#[tauri::command]
+async fn api_chat(
+    base_url: String,
+    api_key: String,
+    model: String,
+    messages: serde_json::Value,
+    stream: bool,
+    on_token: tauri::ipc::Channel<String>,
+) -> Result<String, String> {
+    use futures_util::StreamExt;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": model.trim(),
+        "messages": messages,
+        "temperature": 0.1,
+        "stream": stream,
+    });
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key.trim()))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| text.chars().take(200).collect());
+        return Err(format!("API {}: {}", status.as_u16(), msg));
+    }
+    if !stream {
+        let data: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
+        return Ok(data["choices"][0]["message"]["content"].as_str().unwrap_or("").trim().to_string());
+    }
+    // SSE 流式解析:逐行 data: {…},choices[0].delta.content 通过 Channel 推给前端
+    let mut full = String::new();
+    let mut buf = String::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("读取流失败: {e}"))?;
+        buf.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(pos) = buf.find('\n') {
+            let line = buf[..pos].trim().to_string();
+            buf.drain(..=pos);
+            let Some(payload) = line.strip_prefix("data:") else { continue };
+            let payload = payload.trim();
+            if payload.is_empty() || payload == "[DONE]" {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else { continue };
+            if let Some(delta) = v["choices"][0]["delta"]["content"].as_str() {
+                if !delta.is_empty() {
+                    full.push_str(delta);
+                    let _ = on_token.send(delta.to_string());
+                }
+            }
+        }
+    }
+    Ok(full)
+}
+
+/// 检测模型:GET {Base URL}/models → 模型 id 列表(走 Rust 代理,绕 CORS)
+#[tauri::command]
+async fn api_list_models(base_url: String, api_key: String) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_key.trim()))
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {e}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v["error"]["message"].as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| text.chars().take(200).collect());
+        return Err(format!("API {}: {}", status.as_u16(), msg));
+    }
+    let data: serde_json::Value = resp.json().await.map_err(|e| format!("解析响应失败: {e}"))?;
+    let mut models: Vec<String> = Vec::new();
+    if let Some(arr) = data["data"].as_array() {
+        for m in arr {
+            if let Some(id) = m["id"].as_str() {
+                let id = id.trim().to_string();
+                if !id.is_empty() && !models.contains(&id) {
+                    models.push(id);
+                }
+            }
+        }
+    }
+    Ok(models)
+}
+
 // ============ 第7波:音频实时翻译 commands ============
 
 /// 启动音频实时识别(source: "system"=电脑音频 / "mic"=麦克风)
@@ -571,7 +681,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, load_app_config, save_app_config, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, load_app_config, save_app_config, api_chat, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");

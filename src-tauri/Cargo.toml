@@ -46,4 +46,7 @@ windows = { version = "0.62", features = [
 ] }
 # 第7波:流式语音识别 ASR(sherpa-onnx 官方预编译库自动下载,静态链接)
 sherpa-onnx = "1.13.5"
-
+# 第8波:外接 API 走 Rust 代理(reqwest)——中转站/中继服务普遍不做浏览器 CORS,
+# 前端 fetch 会被拦;Rust 侧无 CORS 限制,同时统一处理超时
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"

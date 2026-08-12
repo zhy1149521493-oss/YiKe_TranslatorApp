@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import "./App.css";
@@ -180,95 +180,47 @@ function resolveEngine(): { kind: "local" } | { kind: "api"; provider: ProviderC
   return { kind: "local" };
 }
 
-function apiBase(provider: ProviderCfg): string {
-  return provider.baseUrl.trim().replace(/\/+$/, "");
-}
-
-async function apiErrorText(resp: Response): Promise<string> {
-  try {
-    const data = await resp.json();
-    const msg = data?.error?.message || data?.message;
-    if (msg) return `API ${resp.status}: ${msg}`;
-  } catch {
-    /* 非 JSON 响应 */
-  }
-  return `API ${resp.status}`;
-}
-
-/* OpenAI 兼容 /chat/completions 流式(SSE) */
+/* OpenAI 兼容 /chat/completions 流式(SSE):走 Rust 代理。
+   Rust 侧无 CORS 限制(支持 tokenhub 这类不做浏览器 CORS 的中转站),统一 60s 超时;
+   invoke 无法中途中止,调用方需在 onToken 里自行丢弃过期流的 token */
 async function fetchApiStream(
   provider: ProviderCfg,
   source: string,
   target: string,
   text: string,
   onToken: (t: string) => void,
-  signal?: AbortSignal
+  _signal?: AbortSignal
 ) {
-  const resp = await fetch(`${apiBase(provider)}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.apiKey.trim()}` },
-    body: JSON.stringify({
-      model: provider.model.trim(),
-      messages: [{ role: "user", content: buildPrompt(source, target, text) }],
-      stream: true,
-      temperature: 0.1,
-    }),
-    signal,
+  const ch = new Channel<string>();
+  ch.onmessage = (t) => onToken(t);
+  await invoke<string>("api_chat", {
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    model: provider.model,
+    messages: [{ role: "user", content: buildPrompt(source, target, text) }],
+    stream: true,
+    onToken: ch,
   });
-  if (!resp.ok) throw new Error(await apiErrorText(resp));
-  const reader = resp.body!.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split("\n");
-    buf = lines.pop() || "";
-    for (const line of lines) {
-      const s = line.trim();
-      if (!s.startsWith("data:")) continue;
-      const payload = s.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
-      try {
-        const data = JSON.parse(payload);
-        const delta = data.choices?.[0]?.delta?.content;
-        if (delta) onToken(delta);
-      } catch {
-        /* 跳过坏行 */
-      }
-    }
-  }
 }
 
-/* OpenAI 兼容 /chat/completions 一次性输出 */
+/* OpenAI 兼容 /chat/completions 一次性输出(走 Rust 代理) */
 async function fetchApiFull(provider: ProviderCfg, source: string, target: string, text: string): Promise<string> {
-  const resp = await fetch(`${apiBase(provider)}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${provider.apiKey.trim()}` },
-    body: JSON.stringify({
-      model: provider.model.trim(),
-      messages: [{ role: "user", content: buildPrompt(source, target, text) }],
-      stream: false,
-      temperature: 0.1,
-    }),
+  const ch = new Channel<string>(); // 非流式时 Rust 不会发 token,占位即可
+  ch.onmessage = () => {};
+  const result = await invoke<string>("api_chat", {
+    baseUrl: provider.baseUrl,
+    apiKey: provider.apiKey,
+    model: provider.model,
+    messages: [{ role: "user", content: buildPrompt(source, target, text) }],
+    stream: false,
+    onToken: ch,
   });
-  if (!resp.ok) throw new Error(await apiErrorText(resp));
-  const data = await resp.json();
-  const content = data.choices?.[0]?.message?.content;
-  return (content ?? "").trim() || "(空响应)";
+  return result.trim() || "(空响应)";
 }
 
-/* 检测模型:GET {Base URL}/models → 模型 id 列表 */
+/* 检测模型:GET {Base URL}/models → 模型 id 列表(走 Rust 代理,20s 超时) */
 async function fetchApiModels(provider: ProviderCfg): Promise<string[]> {
-  const resp = await fetch(`${apiBase(provider)}/models`, {
-    headers: { Authorization: `Bearer ${provider.apiKey.trim()}` },
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!resp.ok) throw new Error(await apiErrorText(resp));
-  const data = await resp.json();
-  if (!Array.isArray(data.data)) throw new Error("响应中没有模型列表(data 字段缺失)");
-  return data.data.map((m: any) => (typeof m === "string" ? m : m?.id)).filter(Boolean);
+  return invoke<string[]>("api_list_models", { baseUrl: provider.baseUrl, apiKey: provider.apiKey });
 }
 
 /* ============ 统一翻译路由(本地 Ollama / 外接 API) ============ */
@@ -765,12 +717,13 @@ function MainWindow() {
   };
 
   /* ---- 翻译核心 ---- */
+  const pendingTextRef = useRef("");
   const runTranslation = useCallback(
     async (text: string) => {
-      if (!text.trim() || busyRef.current) {
-        if (!text.trim()) setOutput("");
-        return;
-      }
+      const trimmed = text.trim();
+      if (!trimmed) { setOutput(""); return; }
+      // 单飞 + 排队:上一轮还没结束就来新输入 → 记住最新文本,结束后立刻翻
+      if (busyRef.current) { pendingTextRef.current = trimmed; return; }
       busyRef.current = true;
       abortRef.current?.abort();
       const ctrl = new AbortController();
@@ -799,8 +752,11 @@ function MainWindow() {
       if (streamOn) {
         setOutput("");
         try {
-          await translateStream(model, src, tgt, text, numCtx, (token) =>
-            setOutput((prev) => prev + token),
+          await translateStream(model, src, tgt, text, numCtx, (token) => {
+            // 外接 API 走 Rust invoke 无法中途中止:过期流的 token 直接丢弃
+            if (ctrl.signal.aborted) return;
+            setOutput((prev) => prev + token);
+          },
             ctrl.signal
           );
         } catch (e: any) {
@@ -809,6 +765,11 @@ function MainWindow() {
         } finally {
           busyRef.current = false;
           setTranslating(false);
+          if (pendingTextRef.current) {
+            const t = pendingTextRef.current;
+            pendingTextRef.current = "";
+            runTranslation(t);
+          }
         }
       } else {
         setOutput("⏳ 翻译中...");
@@ -820,6 +781,11 @@ function MainWindow() {
         } finally {
           busyRef.current = false;
           setTranslating(false);
+          if (pendingTextRef.current) {
+            const t = pendingTextRef.current;
+            pendingTextRef.current = "";
+            runTranslation(t);
+          }
         }
       }
     },
@@ -992,6 +958,10 @@ function MainWindow() {
 
   /* ---- 外接 API 供应商管理(第 8 波) ---- */
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;
+  /* 顶部模型下拉与引擎联动:外接/自动模式下有有效供应商 → 显示外接选项 */
+  const effApi = (engineMode === "api" || engineMode === "auto") &&
+    !!activeProvider && !!activeProvider.baseUrl.trim() && !!activeProvider.apiKey.trim() && !!activeProvider.model.trim();
+  const headerEngineValue = effApi && activeProvider ? `api:${activeProvider.id}` : model;
   const addProvider = (presetIndex?: number) => {
     const preset = presetIndex !== undefined ? PROVIDER_PRESETS[presetIndex] : undefined;
     const p: ProviderCfg = {
@@ -1055,10 +1025,11 @@ function MainWindow() {
       <header className="app-header">
         <h1>本地翻译助手</h1>
         <div className="toolbar-right">
-          <select className="tool-select" value={model} onChange={(e) => setModel(e.target.value)} title="选择翻译模型">
-            <option value="maternion/hy-mt2:1.8b">HY-MT2-1.8B (翻译专用)</option>
+          <select className="tool-select" value={headerEngineValue} onChange={(e) => { const v = e.target.value; if (v.startsWith("api:")) { setActiveProviderId(v.slice(4)); setEngineMode("api"); } else { setModel(v); setEngineMode("local"); } }} title="翻译引擎:选本地模型=本地Ollama;选「外接」=外接API(供应商在⚙️翻译引擎面板配置)">
+            <option value="maternion/hy-mt2:1.8b">HY-MT2-1.8B (本地)</option>
             <option value="gemma3:4b">gemma3:4b (本地)</option>
             <option value="qwen3:4b">qwen3:4b (本地)</option>
+            {effApi && activeProvider && <option value={`api:${activeProvider.id}`}>🌐 {activeProvider.alias || activeProvider.baseUrl}{activeProvider.model ? ` · ${activeProvider.model}` : ""}</option>}
           </select>
           <select className="tool-select" value={numCtx} onChange={(e) => setNumCtx(Number(e.target.value))} title="上下文窗口">
             {CTX_OPTIONS.map((n) => <option key={n} value={n}>上下文 {n}</option>)}
@@ -1123,13 +1094,19 @@ function MainWindow() {
                   </div>
                   <div className="subtitle-panel-row">
                     <input className="engine-input" type="password" placeholder="API Key" value={activeProvider.apiKey} onChange={(e) => updateProvider(activeProvider.id, { apiKey: e.target.value })} autoComplete="off" spellCheck={false} />
-                    <input className="engine-input" list="engine-model-list" placeholder="模型名(可手输,或点检测模型)" value={activeProvider.model} onChange={(e) => updateProvider(activeProvider.id, { model: e.target.value })} spellCheck={false} />
-                    <datalist id="engine-model-list">
-                      {activeProvider.models.map((m) => <option key={m} value={m} />)}
-                    </datalist>
+                    <select className="engine-input" value={activeProvider.models.includes(activeProvider.model) ? activeProvider.model : "__custom__"} onChange={(e) => { const v = e.target.value; if (v !== "__custom__") updateProvider(activeProvider.id, { model: v }); }} title="检测到的模型列表;选「自定义…」可手动输入">
+                      {activeProvider.models.length === 0 && <option value="">暂无检测结果</option>}
+                      {activeProvider.models.map((m) => <option key={m} value={m}>{m}</option>)}
+                      <option value="__custom__">✏️ 自定义…</option>
+                    </select>
                     <button className="btn-float" onClick={() => probeModels(activeProvider.id)} title="GET {Base URL}/models 拉取模型列表">🔍 检测模型</button>
                     <button className="btn-float" onClick={() => testProvider(activeProvider.id)} title="发一个小翻译请求验证连通性">🧪 测试连接</button>
                   </div>
+                  {!activeProvider.models.includes(activeProvider.model) && (
+                    <div className="subtitle-panel-row">
+                      <input className="engine-input" placeholder="手动输入模型名(如 hy-mt2-pro)" value={activeProvider.model} onChange={(e) => updateProvider(activeProvider.id, { model: e.target.value })} spellCheck={false} />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
