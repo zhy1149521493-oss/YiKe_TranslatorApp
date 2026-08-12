@@ -878,15 +878,13 @@ fn apply_shortcuts(shortcuts: std::collections::HashMap<String, String>, app: ta
 // 命名互斥体检测重复实例;二次启动时通过命名事件通知已有实例把主窗口带到前台,然后本实例退出。
 // 放在 run() 最前面:重复实例不会执行 ollama 清理/启动逻辑,不会误杀已有实例的子进程。
 const INSTANCE_MUTEX_NAME: &str = "Local\\TranslatorAssistant_SingleInstance";
-const INSTANCE_SHOW_EVENT: &str = "Local\\TranslatorAssistant_ShowEvent";
 static INSTANCE_MUTEX: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-static SHOW_EVENT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
 fn acquire_single_instance() -> bool {
     use windows::core::HSTRING;
     use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
-    use windows::Win32::System::Threading::{CreateEventW, CreateMutexW, ResetEvent, SetEvent, WaitForSingleObject};
+    use windows::Win32::System::Threading::CreateMutexW;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONINFORMATION, MB_OK};
     unsafe {
         let mutex_name = HSTRING::from(INSTANCE_MUTEX_NAME);
         let m = match CreateMutexW(None, true, &mutex_name) {
@@ -898,41 +896,13 @@ fn acquire_single_instance() -> bool {
         };
         let already = GetLastError() == ERROR_ALREADY_EXISTS;
         if already {
-            // 通知已有实例显示主窗口;先授予前台权限,确保它的 SetForegroundWindow 不被系统拒绝
-            use windows::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow;
-            let _ = AllowSetForegroundWindow(windows::Win32::UI::WindowsAndMessaging::ASFW_ANY);
-            let ev_name = HSTRING::from(INSTANCE_SHOW_EVENT);
-            if let Ok(ev) = CreateEventW(None, true, false, &ev_name) {
-                if !ev.is_invalid() {
-                    let _ = SetEvent(ev);
-                }
-            }
+            // 已有实例:弹提示后退出(用户决定不做"显示到顶层",只保证单实例)
+            let text = HSTRING::from("该应用正在运行");
+            let title = HSTRING::from("翻译助手");
+            let _ = MessageBoxW(None, &text, &title, MB_OK | MB_ICONINFORMATION);
             return false;
         }
         let _ = INSTANCE_MUTEX.set(m.0 as usize);
-        let ev_name = HSTRING::from(INSTANCE_SHOW_EVENT);
-        if let Ok(ev) = CreateEventW(None, true, false, &ev_name) {
-            if !ev.is_invalid() {
-                let _ = SHOW_EVENT.set(ev.0 as usize);
-            }
-        }
-        // 等待"显示主窗口"通知:等 AppHandle 就绪后进入永久监听循环。
-        // 注意:之前用 WaitForSingleObject(10s) 超时后线程退出,导致启动 10 秒后
-        // 再双击 exe 时无人监听 → 置顶 99% 失灵。现在 INFINITE 等待 + ResetEvent 复位。
-        std::thread::spawn(|| {
-            for _ in 0..100 {
-                if APP_HANDLE.get().is_some() { break; }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            if let (Some(handle), Some(ev)) = (APP_HANDLE.get(), SHOW_EVENT.get()) {
-                let h = windows::Win32::Foundation::HANDLE(*ev as *mut core::ffi::c_void);
-                loop {
-                    let _ = WaitForSingleObject(h, u32::MAX); // INFINITE
-                    show_main_window(handle);
-                    let _ = ResetEvent(h);
-                }
-            }
-        });
         true
     }
 }
@@ -949,6 +919,26 @@ fn minimize_main_window(app: tauri::AppHandle) -> Result<(), String> {
             let _ = ShowWindow(hwnd, SW_MINIMIZE);
         }
         eprintln!("[main] minimized via ShowWindow");
+    }
+    Ok(())
+}
+
+/// 最大化/还原主窗口(JS toggleMaximize 曾失效,直接走系统 ShowWindow)
+#[tauri::command]
+fn toggle_maximize_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager as _;
+    if let Some(w) = app.get_webview_window("main") {
+        let hwnd0 = w.hwnd().map_err(|e| format!("获取窗口句柄失败: {e}"))?;
+        let hwnd = windows::Win32::Foundation::HWND(hwnd0.0 as usize as *mut core::ffi::c_void);
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{IsZoomed, ShowWindow, SW_MAXIMIZE, SW_RESTORE};
+            if IsZoomed(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            } else {
+                let _ = ShowWindow(hwnd, SW_MAXIMIZE);
+            }
+        }
+        eprintln!("[main] toggle maximize via ShowWindow");
     }
     Ok(())
 }
@@ -1010,10 +1000,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
-            // 单实例:记录 AppHandle 供"二次启动显示主窗口"线程使用
-            let _ = APP_HANDLE.set(app.handle().clone());
             // 清理可能残留的旧 ollama 进程,避免端口冲突
             eprintln!("[ollama] cleaning up old processes...");
             let _ = StdCommand::new("taskkill")

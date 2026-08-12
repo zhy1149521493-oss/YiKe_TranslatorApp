@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type CSSProperties } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
@@ -122,6 +122,51 @@ function keyEventToAccelerator(e: KeyboardEvent): { ok: boolean; combo: string; 
   const reserved = ["Alt+F4", "Ctrl+Alt+Del", "Ctrl+Shift+Esc", "Alt+Tab", "Ctrl+Esc", "Alt+Space", "Alt+F2", "Alt+F7", "Alt+F8", "Alt+F10", "Alt+F11", "Alt+F12"];
   if (reserved.includes(combo)) return { ok: false, combo: "", reason: "该组合为系统保留,换一个" };
   return { ok: true, combo };
+}
+
+/* ============ SVG 图标集(替代 emoji;手写 stroke 风格,可随 currentColor 变色) ============ */
+type IconName =
+  | "pen" | "mic" | "film" | "camera" | "clipboard" | "settings" | "globe" | "dot"
+  | "clock" | "sparkle" | "search" | "flask" | "trash" | "plus" | "up" | "down"
+  | "check" | "warn" | "error" | "minimize" | "maximize" | "restore" | "close"
+  | "windows" | "target" | "volume" | "chevron" | "swap";
+
+function Icon({ name, size = 16, className, style }: { name: IconName; size?: number; className?: string; style?: CSSProperties }) {
+  const p: Record<IconName, React.ReactNode> = {
+    pen: (<><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></>),
+    mic: (<><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0" /><path d="M12 19v3" /></>),
+    film: (<><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M7 5v14M17 5v14M2 9h5M2 15h5M17 9h5M17 15h5" /></>),
+    camera: (<><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" /><circle cx="12" cy="13" r="4" /></>),
+    clipboard: (<><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /></>),
+    settings: (<><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></>),
+    globe: (<><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></>),
+    dot: (<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none" />),
+    clock: (<><circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" /></>),
+    sparkle: (<path d="M12 3l1.9 5.7L20 11l-6.1 2.3L12 19l-1.9-5.7L4 11l6.1-2.3L12 3z" />),
+    search: (<><circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" /></>),
+    flask: (<><path d="M10 2v6L4.5 18a2 2 0 0 0 1.8 3h11.4a2 2 0 0 0 1.8-3L14 8V2" /><path d="M8.5 2h7" /><path d="M7 16h10" /></>),
+    trash: (<><path d="M3 6h18" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" /><path d="M10 11v6M14 11v6" /></>),
+    plus: (<path d="M12 5v14M5 12h14" />),
+    up: (<path d="M12 19V5M5 12l7-7 7 7" />),
+    down: (<path d="M12 5v14M19 12l-7 7-7-7" />),
+    check: (<path d="M20 6L9 17l-5-5" />),
+    warn: (<><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4" /><path d="M12 17h.01" /></>),
+    error: (<path d="M18 6L6 18M6 6l12 12" />),
+    minimize: (<path d="M5 12h14" />),
+    maximize: (<rect x="4" y="4" width="16" height="16" rx="1" />),
+    restore: (<><rect x="4" y="4" width="12" height="12" rx="1" /><path d="M8 8h12v12" /></>),
+    close: (<path d="M18 6L6 18M6 6l12 12" />),
+    windows: (<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18" /></>),
+    target: (<><circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" /></>),
+    volume: (<><path d="M11 5L6 9H2v6h4l5 4V5z" /><path d="M15.5 8.5a5 5 0 0 1 0 7" /></>),
+    chevron: (<path d="M6 9l6 6 6-6" />),
+    swap: (<><path d="M7 4v13M3 13l4 4 4-4" /><path d="M17 20V7M13 11l4-4 4 4" /></>),
+  };
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className} style={style} aria-hidden="true">
+      {p[name]}
+    </svg>
+  );
 }
 
 /* ============ 常量 ============ */
@@ -410,7 +455,7 @@ function MainWindow() {
   const [floatingOpen, setFloatingOpen] = useState(false);
   const [input, setInput] = useState("");
   const [sourceLang, setSourceLang] = useState("auto");
-  const [targetLang, setTargetLang] = useState("en");
+  const [targetLang, setTargetLang] = useState("zh");
   const [output, setOutput] = useState("");
   const [translating, setTranslating] = useState(false);
   const [apiThinking, setApiThinking] = useState(false); // 外接推理模型"思考中"提示
@@ -432,7 +477,33 @@ function MainWindow() {
   /* Wave 9: 设置中心 / 主题 / 外观 / 快捷键 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<string>("general");
+  const [activeMode, setActiveMode] = useState<"text" | "audio" | "subtitle" | "screenshot" | "selection">("text");
   const [engineMenuOpen, setEngineMenuOpen] = useState(false);
+  const [maximized, setMaximized] = useState(false);
+  /* 跟踪最大化状态(标题栏 □/❐ 按钮图标切换) */
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    appWindow.isMaximized().then((m) => setMaximized(m)).catch(() => {});
+    appWindow.onResized(() => {
+      appWindow.isMaximized().then((m) => setMaximized(m)).catch(() => {});
+    }).then((f) => { un = f; }).catch(() => {});
+    return () => { un?.(); };
+  }, []);
+  /* 引擎下拉:点击任意位置关闭(用 document 监听而非 fixed 遮罩——
+     header 的 backdrop-filter 会让遮罩的包含块变成顶栏,导致只盖住顶栏) */
+  useEffect(() => {
+    if (!engineMenuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest(".engine-menu-wrap")) setEngineMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setEngineMenuOpen(false); };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [engineMenuOpen]);
   const [theme, setTheme] = useState<"light" | "dark" | "system">("light");
   const [appearance, setAppearance] = useState<Record<SurfaceKey, AppearanceItem>>(DEFAULT_APPEARANCE);
   const [shortcuts, setShortcuts] = useState<Record<ShortcutAction, string>>(DEFAULT_SHORTCUTS);
@@ -484,7 +555,7 @@ function MainWindow() {
                   shortcuts: { ...DEFAULT_SHORTCUTS, ...(s.shortcuts ?? {}) },
                   translate: {
                     sourceLang: s.translate?.sourceLang ?? "auto",
-                    targetLang: s.translate?.targetLang ?? "en",
+                    targetLang: s.translate?.targetLang ?? "zh",
                     streamOn: s.translate?.streamOn ?? true,
                     numCtx: s.translate?.numCtx ?? 1024,
                     conflictHint: s.translate?.conflictHint !== false,
@@ -656,7 +727,7 @@ function MainWindow() {
   useEffect(() => {
     if (!subtitleOn) return;
     ensureSubRegion();
-    setSubStatus("🟢 字幕运行中,区域: " + (subRegionRef.current ? `(${subRegionRef.current.x},${subRegionRef.current.y} ${subRegionRef.current.w}x${subRegionRef.current.h})` : "未设置"));
+    setSubStatus("字幕运行中,区域: " + (subRegionRef.current ? `(${subRegionRef.current.x},${subRegionRef.current.y} ${subRegionRef.current.w}x${subRegionRef.current.h})` : "未设置"));
     subTimerRef.current = setInterval(() => {
       const r = subRegionRef.current;
       if (!r || ocrInFlightRef.current) return;
@@ -697,7 +768,7 @@ function MainWindow() {
       setSubCurrent(p);
       setSubStatus("");
     } catch (e: any) {
-      setSubStatus(`❌ 翻译失败: ${e}`);
+      setSubStatus(`翻译失败: ${e}`);
     } finally {
       subTranslatingRef.current = false;
       // 翻译期间来了新句子:翻译最新的(跳过中间态)
@@ -712,7 +783,7 @@ function MainWindow() {
   /* 字幕 OCR 结果:去重 → 句子稳定(500ms 去抖)→ 提交翻译 */
   const handleSubtitleOcr = useCallback((text: string) => {
     if (!text.trim() || text.startsWith("ERROR:")) {
-      if (text.startsWith("ERROR:")) setSubStatus(`⚠️ 字幕OCR: ${text.slice(7, 150)}`); // 错误可见,不再静默
+      if (text.startsWith("ERROR:")) setSubStatus(`字幕OCR: ${text.slice(7, 150)}`); // 错误可见,不再静默
       return;
     }
     if (similarity(text, lastSubOcrRef.current) >= 0.95) return;   // 同一句连续帧/OCR抖动,跳过(0.95 防闪烁)
@@ -741,7 +812,7 @@ function MainWindow() {
       if (Date.now() - started > 65000) {
         audioTranslatingRef.current[source] = false;
         audioTranslateStartRef.current[source] = 0;
-        setAudioStatus((prev) => ({ ...prev, [source]: "⚠️ 上句翻译超时,已跳过" }));
+        setAudioStatus((prev) => ({ ...prev, [source]: "上句翻译超时,已跳过" }));
       } else {
         audioPendingRef.current[source] = text;
         return;
@@ -758,7 +829,7 @@ function MainWindow() {
       // 只更新原文(保留旧译文),译文完成后再整体替换
       const send = (result: string) =>
         invoke("audio_forward_to_floating", { source, text, src, tgt, result }).catch((e) => {
-          setAudioStatus((prev) => ({ ...prev, [source]: `❌ 转发失败: ${JSON.stringify(e)}` }));
+          setAudioStatus((prev) => ({ ...prev, [source]: `转发失败: ${JSON.stringify(e)}` }));
         });
       await send("");
       let result = await translateFull(model, src, tgt, text, numCtx);
@@ -766,7 +837,7 @@ function MainWindow() {
       await send(result);
       setAudioStatus((prev) => ({ ...prev, [source]: "" }));
     } catch (e: any) {
-      setAudioStatus((prev) => ({ ...prev, [source]: `❌ 翻译失败: ${e}` }));
+      setAudioStatus((prev) => ({ ...prev, [source]: `翻译失败: ${e}` }));
     } finally {
       audioTranslatingRef.current[source] = false;
       audioTranslateStartRef.current[source] = 0;
@@ -791,16 +862,17 @@ function MainWindow() {
     if (!anyOn) {
       // 启动当前模式的所有来源
       setSubtitleOn(false);
+      setActiveMode("audio");
       appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
       const asrLang = sourceLang === "auto" ? "auto" : sourceLang;
       for (const src of sourcesForMode(audioMode)) {
-        setAudioStatus((prev) => ({ ...prev, [src]: "⏳ 正在加载 ASR 模型…" }));
+        setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
         try {
           await invoke("audio_subtitle_start", { source: src, lang: asrLang });
           setAudioSubOn((prev) => ({ ...prev, [src]: true }));
           await invoke("open_audio_floating_window", { source: src }).catch(() => {});
         } catch (e: any) {
-          setAudioStatus((prev) => ({ ...prev, [src]: `❌ 启动失败: ${e}` }));
+          setAudioStatus((prev) => ({ ...prev, [src]: `启动失败: ${e}` }));
           setAudioSubOn((prev) => ({ ...prev, [src]: false }));
         }
       }
@@ -840,13 +912,13 @@ function MainWindow() {
     const asrLang = sourceLang === "auto" ? "auto" : sourceLang;
     for (const src of newSrcs) {
       if (!oldSrcs.includes(src)) {
-        setAudioStatus((prev) => ({ ...prev, [src]: "⏳ 正在加载 ASR 模型…" }));
+        setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
         try {
           await invoke("audio_subtitle_start", { source: src, lang: asrLang });
           setAudioSubOn((prev) => ({ ...prev, [src]: true }));
           await invoke("open_audio_floating_window", { source: src }).catch(() => {});
         } catch (e: any) {
-          setAudioStatus((prev) => ({ ...prev, [src]: `❌ 启动失败: ${e}` }));
+          setAudioStatus((prev) => ({ ...prev, [src]: `启动失败: ${e}` }));
           setAudioSubOn((prev) => ({ ...prev, [src]: false }));
         }
       }
@@ -922,6 +994,7 @@ function MainWindow() {
       if (next) {
         // 互斥:开视频字幕自动关音频字幕
         stopAllAudio();
+        setActiveMode("subtitle");
         ensureSubRegion();
         invoke("open_floating_window").catch(() => {});
         setFloatingOpen(true);
@@ -942,6 +1015,7 @@ function MainWindow() {
       if (on) return on;   // 已运行,幂等
       // 互斥:开视频字幕自动关音频字幕
       stopAllAudio();
+      setActiveMode("subtitle");
       ensureSubRegion();
       invoke("open_floating_window").catch(() => {});
       setFloatingOpen(true);
@@ -966,14 +1040,14 @@ function MainWindow() {
 
   /* Windows 系统 OCR PoC 测试:截全屏 → 系统 OCR → 显示结果 */
   const testWinOcr = async () => {
-    setSubStatus("⏳ 系统 OCR 测试中…");
+    setSubStatus("系统 OCR 测试中…");
     try {
       const b64 = await invoke<string>("capture_fullscreen");
       const text = await invoke<string>("win_ocr_b64", { b64 });
-      setSubStatus(`🧪 系统 OCR 成功: ${text.slice(0, 120) || "(无文字)"}`);
+      setSubStatus(`系统 OCR 成功: ${text.slice(0, 120) || "(无文字)"}`);
     } catch (e: any) {
       const msg = typeof e === "string" ? e : JSON.stringify(e);
-      setSubStatus(`🧪 系统 OCR 失败: ${msg}`);
+      setSubStatus(`系统 OCR 失败: ${msg}`);
     }
   };
 
@@ -1021,12 +1095,13 @@ function MainWindow() {
   /* 自绘标题栏:按住空白处拖动窗口(按钮/输入框不触发);双击最大化/还原 */
   const onHeaderMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest("button, select, input, label, .toolbar-right")) return;
+    if ((e.target as HTMLElement).closest("button, select, input, label, .toolbar-right, .engine-menu-backdrop")) return;
     appWindow.startDragging().catch(() => {});
   };
   const onHeaderDoubleClick = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest("button, select, input, label")) return;
-    appWindow.toggleMaximize().catch(() => {});
+    invoke("toggle_maximize_main_window").catch(() => {});
+    setTimeout(() => { appWindow.isMaximized().then((m) => setMaximized(m)).catch(() => {}); }, 300);
   };
 
   /* ---- 翻译核心 ---- */
@@ -1076,7 +1151,7 @@ function MainWindow() {
           );
         } catch (e: any) {
           if (e.name !== "AbortError")
-            setOutput((prev) => prev + "\n\n❌ " + e.message);
+            setOutput((prev) => prev + "\n\n" + e.message);
         } finally {
           setApiThinking(false);
           busyRef.current = false;
@@ -1088,12 +1163,12 @@ function MainWindow() {
           }
         }
       } else {
-        setOutput("⏳ 翻译中...");
+        setOutput("翻译中...");
         try {
           const result = await translateFull(model, src, tgt, text, numCtx);
           if (!ctrl.signal.aborted) setOutput(result);
         } catch (e: any) {
-          setOutput("❌ 翻译失败:" + e.message);
+          setOutput("翻译失败:" + e.message);
         } finally {
           setApiThinking(false);
           busyRef.current = false;
@@ -1171,14 +1246,14 @@ function MainWindow() {
           };
           subRegionRef.current = region;
           setSubRegion(region);
-          setSubStatus(`🎯 字幕区域已更新 (${region.x},${region.y} ${region.w}x${region.h})`);
+          setSubStatus(`字幕区域已更新 (${region.x},${region.y} ${region.w}x${region.h})`);
           return;
         }
         // 状态提示按来源路由:悬浮窗截图 → 悬浮窗显示;桌面端截图 → 主窗口显示
         if (source === "floating") {
-          appWindow.emitTo("floating", "screenshot-status", "⏳ 正在 OCR 识别…").catch(() => {});
+          appWindow.emitTo("floating", "screenshot-status", "正在 OCR 识别…").catch(() => {});
         } else {
-          setOutput("⏳ 正在 OCR 识别…");
+          setOutput("正在 OCR 识别…");
         }
         // 优先用 overlay 从缓存背景图裁剪的选区(b64,不二次截屏,避免残影);否则回退截屏
         if (e.payload.b64) {
@@ -1188,9 +1263,9 @@ function MainWindow() {
               const msg = typeof err === "string" ? err : JSON.stringify(err);
               console.error("ocr_image_b64 失败:", err);
               if (source === "floating") {
-                appWindow.emitTo("floating", "screenshot-status", `❌ OCR 失败: ${msg}`).catch(() => {});
+                appWindow.emitTo("floating", "screenshot-status", `OCR 失败: ${msg}`).catch(() => {});
               } else {
-                setOutput(`❌ OCR 失败: ${msg}`);
+                setOutput(`OCR 失败: ${msg}`);
               }
             });
         } else {
@@ -1209,15 +1284,15 @@ function MainWindow() {
         }
       };
       if (!ocrText || ocrText.startsWith("ERROR:")) {
-        showStatus("⚠️ " + (ocrText || "未识别到文字"));
+        showStatus(ocrText || "未识别到文字");
         return;
       }
-      if (!ocrText.trim()) { showStatus("⚠️ 未识别到文字"); return; }
+      if (!ocrText.trim()) { showStatus("未识别到文字"); return; }
       let src = sourceLang;
       let tgt = targetLang;
       if (src === "auto") { src = detectLang(ocrText); }
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
-      showStatus("⏳ 正在翻译…");
+      showStatus("正在翻译…");
       try {
         const result = await translateFull(model, src, tgt, ocrText, numCtx);
         if (source === "floating") {
@@ -1226,7 +1301,7 @@ function MainWindow() {
           setOutput(`[OCR]\n${ocrText}\n\n[翻译]\n${result}`);
         }
       } catch (e: any) {
-        showStatus(`❌ 翻译失败: ${e}`);
+        showStatus(`翻译失败: ${e}`);
       }
     };
     const o = appWindow.listen<string>(
@@ -1288,18 +1363,18 @@ function MainWindow() {
         const key = `${p.id}::${m}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        apiModelOptions.push({ providerId: p.id, model: m, label: `🌐 ${p.alias || p.baseUrl} · ${m}` });
+        apiModelOptions.push({ providerId: p.id, model: m, label: `${p.alias || p.baseUrl} · ${m}` });
       }
     }
   }
   const activeApiModel = (engineMode === "api" || engineMode === "auto") && activeProvider && activeProvider.model.trim()
     ? { providerId: activeProvider.id, model: activeProvider.model }
     : null;
-  const engineLabel = (() => {
-    if (activeApiModel && activeProvider) return `🌐 ${activeProvider.alias || "API"} · ${activeApiModel.model}`;
-    if (model === "maternion/hy-mt2:1.8b") return "● HY-MT2 · 本地";
-    if (model === "gemma3:4b") return "● gemma3 · 本地";
-    return `● ${model} · 本地`;
+  const engineLabelText = (() => {
+    if (activeApiModel && activeProvider) return `${activeProvider.alias || "API"} · ${activeApiModel.model}`;
+    if (model === "maternion/hy-mt2:1.8b") return "HY-MT2 · 本地";
+    if (model === "gemma3:4b") return "gemma3 · 本地";
+    return `${model} · 本地`;
   })();
   const headerEngineValue = activeApiModel ? `api:${activeApiModel.providerId}::${activeApiModel.model}` : model;
   const addProvider = (presetIndex?: number) => {
@@ -1354,17 +1429,17 @@ function MainWindow() {
     const p = providers.find((x) => x.id === id);
     if (!p) return;
     if (!p.baseUrl.trim() || !p.apiKey.trim()) {
-      setEngineStatus("⚠️ 请先填写 Base URL 和 API Key 再检测模型");
+      setEngineStatus("请先填写 Base URL 和 API Key 再检测模型");
       return;
     }
-    setEngineStatus("⏳ 正在检测模型…");
+    setEngineStatus("正在检测模型…");
     try {
       const models = await fetchApiModels(p);
       if (!models.length) throw new Error("模型列表为空(可手动输入模型名)");
       setDetectPicker({ providerId: id, models, query: "" });
-      setEngineStatus(`✅ 检测到 ${models.length} 个模型,点选要添加的(只添加你选的)`);
+      setEngineStatus(`已检测到 ${models.length} 个模型,点选要添加的(只添加你选的)`);
     } catch (e: any) {
-      setEngineStatus(`❌ 检测失败: ${e?.message ?? e}`);
+      setEngineStatus(`检测失败: ${e?.message ?? e}`);
     }
   };
   /* 从选择器添加一个模型(仅这一个进入该供应商的模型列表并设为当前模型) */
@@ -1373,21 +1448,21 @@ function MainWindow() {
     if (!p) return;
     const models = p.models.includes(m) ? p.models : [...p.models, m];
     updateProvider(id, { models, model: m });
-    setEngineStatus(`✅ 已添加并选择: ${m}`);
+    setEngineStatus(`已添加并选择: ${m}`);
   };
   const testProvider = async (id: string) => {
     const p = providers.find((x) => x.id === id);
     if (!p) return;
     if (!p.baseUrl.trim() || !p.apiKey.trim() || !p.model.trim()) {
-      setEngineStatus("⚠️ 请完整填写 Base URL / API Key / 模型");
+      setEngineStatus("请完整填写 Base URL / API Key / 模型");
       return;
     }
-    setEngineStatus("⏳ 正在测试连接…");
+    setEngineStatus("正在测试连接…");
     try {
       const result = await fetchApiFull(p, "en", "zh", "hello");
-      setEngineStatus(`✅ 连接成功: ${result.slice(0, 60)}`);
+      setEngineStatus(`连接成功: ${result.slice(0, 60)}`);
     } catch (e: any) {
-      setEngineStatus(`❌ 测试失败: ${e?.message ?? e}`);
+      setEngineStatus(`测试失败: ${e?.message ?? e}`);
     }
   };
 
@@ -1412,6 +1487,27 @@ function MainWindow() {
     return () => window.removeEventListener("keydown", onKey);
   }, [recordingAction, shortcuts]);
 
+  /* 工作台:当前任务标题 + 统一状态胶囊 */
+  const taskTitle = (() => {
+    switch (activeMode) {
+      case "audio": return "音频翻译";
+      case "subtitle": return "视频字幕";
+      case "screenshot": return "截图翻译";
+      case "selection": return "划词翻译";
+      default: return "文本翻译";
+    }
+  })();
+  const taskIcon: IconName = activeMode === "audio" ? "mic" : activeMode === "subtitle" ? "film" : activeMode === "screenshot" ? "camera" : activeMode === "selection" ? "clipboard" : "pen";
+  const statusInfo = (() => {
+    if (sourcesForMode(audioMode).some((s) => isSrcOn(s))) {
+      const st = sourcesForMode(audioMode).map((s) => srcStatus(s)).filter(Boolean)[0] ?? "";
+      return { text: "正在监听" + (st ? " · " + st : ""), tone: "live", icon: "dot" as IconName };
+    }
+    if (subtitleOn) return { text: "字幕运行中", tone: "live", icon: "dot" as IconName };
+    if (translating) return { text: apiThinking ? "模型思考中…" : "翻译中…", tone: "work", icon: (apiThinking ? "sparkle" : "clock") as IconName };
+    return { text: "就绪", tone: "idle", icon: "dot" as IconName };
+  })();
+
   /* ---- UI ---- */
   return (
     <div className="app-main">
@@ -1420,28 +1516,27 @@ function MainWindow() {
           <h1>翻译助手</h1>
           <div className="engine-menu-wrap">
             <button className="engine-pill" onClick={() => setEngineMenuOpen(!engineMenuOpen)} title="切换翻译引擎 / 模型">
-              {engineLabel} <span className="engine-pill-caret">▾</span>
+              <Icon name={activeApiModel ? "globe" : "dot"} size={13} /> {engineLabelText} <Icon name="chevron" size={11} className="engine-pill-caret" />
             </button>
             {engineMenuOpen && (
               <>
-                <div className="engine-menu-backdrop" onClick={() => setEngineMenuOpen(false)} />
                 <div className="engine-menu">
                   <div className="engine-menu-title">翻译引擎</div>
                   <button className={`engine-menu-item${headerEngineValue === "maternion/hy-mt2:1.8b" ? " active" : ""}`} onClick={() => selectHeaderEngine("maternion/hy-mt2:1.8b")}>
-                    {headerEngineValue === "maternion/hy-mt2:1.8b" ? "✓ " : ""}HY-MT2-1.8B (本地 · 推荐)
+                    {headerEngineValue === "maternion/hy-mt2:1.8b" ? <Icon name="check" size={13} /> : <Icon name="dot" size={13} />} HY-MT2-1.8B (本地 · 推荐)
                   </button>
                   <button className={`engine-menu-item${headerEngineValue === "gemma3:4b" ? " active" : ""}`} onClick={() => selectHeaderEngine("gemma3:4b")}>
-                    {headerEngineValue === "gemma3:4b" ? "✓ " : ""}gemma3:4b (本地)
+                    {headerEngineValue === "gemma3:4b" ? <Icon name="check" size={13} /> : <Icon name="dot" size={13} />} gemma3:4b (本地)
                   </button>
                   {apiModelOptions.length > 0 && <div className="engine-menu-divider" />}
                   {apiModelOptions.map((o) => (
                     <button key={`${o.providerId}::${o.model}`} className={`engine-menu-item${headerEngineValue === `api:${o.providerId}::${o.model}` ? " active" : ""}`} onClick={() => selectHeaderEngine(`api:${o.providerId}::${o.model}`)}>
-                      {headerEngineValue === `api:${o.providerId}::${o.model}` ? "✓ " : ""}{o.label}
+                      {headerEngineValue === `api:${o.providerId}::${o.model}` ? <Icon name="check" size={13} /> : <Icon name="globe" size={13} />} {o.label}
                     </button>
                   ))}
                   <div className="engine-menu-divider" />
                   <button className="engine-menu-item manage" onClick={() => { setEngineMenuOpen(false); setSettingsOpen(true); setSettingsPage("providers"); }}>
-                    ⚙ 管理翻译服务
+                    <Icon name="settings" size={13} /> 管理翻译服务
                   </button>
                 </div>
               </>
@@ -1450,20 +1545,21 @@ function MainWindow() {
         </div>
         <div className="toolbar-right">
           <button className="icon-btn" title="截图翻译 (Ctrl+Shift+S)" onClick={startScreenshot}>
-            📷
+            <Icon name="camera" size={16} />
           </button>
           <button className={`icon-btn${subtitleOn ? " active" : ""}`} onClick={toggleSubtitle} title="视频实时字幕 (Ctrl+Shift+U)">
-            🎬
+            <Icon name="film" size={16} />
           </button>
           <button className={`icon-btn${floatingOpen ? " active" : ""}`} onClick={toggleFloating} title={floatingOpen ? "关闭翻译悬浮窗" : "打开翻译悬浮窗"}>
-            🪟
+            <Icon name="windows" size={16} />
           </button>
           <button className={`icon-btn${settingsOpen ? " active" : ""}`} onClick={() => setSettingsOpen(!settingsOpen)} title="设置中心">
-            ⚙
+            <Icon name="settings" size={16} />
           </button>
           <span className="win-divider" />
-          <button className="icon-btn win-btn" title="最小化" onMouseDown={(e) => e.stopPropagation()} onClick={() => { appWindow.minimize().catch(() => {}); invoke("minimize_main_window").catch(() => {}); }}>─</button>
-          <button className="icon-btn win-btn win-close" title="关闭(行为见 设置-常规)" onMouseDown={(e) => e.stopPropagation()} onClick={() => { appWindow.close().catch(() => {}); }}>✕</button>
+          <button className="icon-btn win-btn" title="最小化" onMouseDown={(e) => e.stopPropagation()} onClick={() => { appWindow.minimize().catch(() => {}); invoke("minimize_main_window").catch(() => {}); }}><Icon name="minimize" size={14} /></button>
+          <button className="icon-btn win-btn" title={maximized ? "还原" : "最大化"} onMouseDown={(e) => e.stopPropagation()} onClick={() => { invoke("toggle_maximize_main_window").catch(() => {}); setTimeout(() => { appWindow.isMaximized().then((m) => setMaximized(m)).catch(() => {}); }, 300); }}><Icon name={maximized ? "restore" : "maximize"} size={13} /></button>
+          <button className="icon-btn win-btn win-close" title="关闭(行为见 设置-常规)" onMouseDown={(e) => e.stopPropagation()} onClick={() => { appWindow.close().catch(() => {}); }}><Icon name="close" size={13} /></button>
         </div>
       </header>
 
@@ -1471,7 +1567,7 @@ function MainWindow() {
         <main className="app-body settings-body">
           <div className="settings-center">
             <nav className="settings-nav">
-              <div className="settings-nav-head">⚙ 设置</div>
+              <div className="settings-nav-head"><Icon name="settings" size={14} /> 设置</div>
               {SETTINGS_NAV.map(([key, label]) => (
                 <button key={key} className={`settings-nav-item${settingsPage === key ? " active" : ""}`} onClick={() => setSettingsPage(key)}>
                   {label}
@@ -1639,10 +1735,10 @@ function MainWindow() {
                       {providers.map((p) => <option key={p.id} value={p.id}>{p.alias || p.baseUrl || "(未命名)"}{p.model ? ` · ${p.model}` : ""}</option>)}
                     </select>
                     <select className="tool-select" defaultValue="" onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v !== "") addProvider(Number(v)); }} title="按预设新建供应商,自动填 Base URL 和常见模型">
-                      <option value="">➕ 按预设新建…</option>
+                      <option value="">按预设新建…</option>
                       {PROVIDER_PRESETS.map((pr, i) => <option key={pr.name} value={i}>{pr.name}</option>)}
                     </select>
-                    <button className="btn-float" onClick={() => addProvider()} title="手动新增空供应商">➕ 新增</button>
+                    <button className="btn-float" onClick={() => addProvider()} title="手动新增空供应商"><Icon name="plus" size={13} /> 新增</button>
                   </div>
                   {engineStatus && <p className="settings-note">{engineStatus}</p>}
                   <div className="provider-list">
@@ -1651,13 +1747,13 @@ function MainWindow() {
                       return (
                         <div className={`provider-card${isActive ? " active" : ""}`} key={p.id}>
                           <div className="provider-card-head">
-                            <span className="provider-name">{isActive ? "🟢" : "⚪"} {p.alias || p.baseUrl || "(未命名)"}</span>
+                            <span className="provider-name"><Icon name="dot" size={12} style={{ color: isActive ? "#34c759" : "#c7c7cc" }} /> {p.alias || p.baseUrl || "(未命名)"}</span>
                             <span className="provider-model">{p.model || "未选模型"}</span>
                             <div className="provider-actions">
-                              <button className="btn-float" disabled={idx === 0} onClick={() => moveProvider(p.id, -1)} title="上移">↑</button>
-                              <button className="btn-float" disabled={idx === providers.length - 1} onClick={() => moveProvider(p.id, 1)} title="下移">↓</button>
+                              <button className="btn-float" disabled={idx === 0} onClick={() => moveProvider(p.id, -1)} title="上移"><Icon name="up" size={13} /></button>
+                              <button className="btn-float" disabled={idx === providers.length - 1} onClick={() => moveProvider(p.id, 1)} title="下移"><Icon name="down" size={13} /></button>
                               <button className={`btn-float${isActive ? " active" : ""}`} onClick={() => setActiveProviderId(p.id)} title="设为当前生效供应商">使用</button>
-                              <button className="btn-float" onClick={() => removeProvider(p.id)} title="删除该供应商">🗑</button>
+                              <button className="btn-float" onClick={() => removeProvider(p.id)} title="删除该供应商"><Icon name="trash" size={13} /></button>
                             </div>
                           </div>
                           <div className="provider-fields">
@@ -1671,8 +1767,8 @@ function MainWindow() {
                               <input type="checkbox" checked={p.noThinking === "1"} onChange={(e) => updateProvider(p.id, { noThinking: e.target.checked ? "1" : "" })} />
                               禁用思考
                             </label>
-                            <button className="btn-float" onClick={() => openModelPicker(p.id)} title="GET /models 拉取模型列表,点选要添加的(只添加你选的)">🔍 检测/选择模型</button>
-                            <button className="btn-float" onClick={() => testProvider(p.id)} title="发一个小翻译请求验证连通性">🧪 测试连接</button>
+                            <button className="btn-float" onClick={() => openModelPicker(p.id)} title="GET /models 拉取模型列表,点选要添加的(只添加你选的)"><Icon name="search" size={13} /> 检测/选择模型</button>
+                            <button className="btn-float" onClick={() => testProvider(p.id)} title="发一个小翻译请求验证连通性"><Icon name="flask" size={13} /> 测试连接</button>
                           </div>
                           <div className="provider-models">
                             <span className="settings-note">已添加模型(点 × 移除):</span>
@@ -1694,7 +1790,7 @@ function MainWindow() {
                               <div className="detect-picker-list">
                                 {detectPicker.models.filter((m) => m.toLowerCase().includes(detectPicker.query.trim().toLowerCase())).map((m) => (
                                   <button key={m} className={`detect-picker-item${p.models.includes(m) ? " added" : ""}`} onClick={() => pickModel(p.id, m)} title={p.models.includes(m) ? "已添加,点击切换为该模型" : "点击添加该模型并选中"}>
-                                    {p.models.includes(m) ? "✓ " : "+ "}{m}
+                                {p.models.includes(m) ? <Icon name="check" size={13} /> : <Icon name="plus" size={13} />} {m}
                                   </button>
                                 ))}
                               </div>
@@ -1703,7 +1799,7 @@ function MainWindow() {
                         </div>
                       );
                     })}
-                    {providers.length === 0 && <p className="settings-note">还没有供应商:用上方「按预设新建」或「➕ 新增」添加。</p>}
+                    {providers.length === 0 && <p className="settings-note">还没有供应商:用上方「按预设新建」或「新增」添加。</p>}
                   </div>
                 </div>
               )}
@@ -1740,118 +1836,173 @@ function MainWindow() {
                   <h2>关于</h2>
                   <p>翻译助手 v0.1.0(Wave 9 设置中心)</p>
                   <p>本地优先的桌面实时翻译工作台:文本 / 划词 / 截图 / 视频字幕 / 音频字幕,支持本地 Ollama 与外接 API 双引擎。</p>
-                  <p>⚠️ 杀软(如火绒)可能拦截未签名程序:请加入白名单或信任后再使用;个别老式程序(如 DirectUI、游戏内文本)划词捕获不到。</p>
+                  <p>杀软(如火绒)可能拦截未签名程序:请加入白名单或信任后再使用;个别老式程序(如 DirectUI、游戏内文本)划词捕获不到。</p>
                 </div>
               )}
             </div>
           </div>
         </main>
       ) : (
-      <main className="app-body">
-        {/* 音频实时字幕控制面板(第7波) */}
-        <div className={`subtitle-panel${sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? " on" : ""}`}>
-          <div className="subtitle-panel-row">
-            <span className="subtitle-label">🎙️ 音频字幕</span>
-            <span className={`subtitle-status${sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? " live" : ""}`}>
-              {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "● 运行中" : "○ 已停止"}
-              {sourcesForMode(audioMode).map((s) => srcStatus(s)).filter(Boolean).map((st, i) => <em key={i} className="subtitle-msg">· {st}</em>)}
-            </span>
-            <button className="btn-float" onClick={toggleAudioSubtitle} title="开关音频实时识别(识别→翻译→独立语音窗显示;与视频字幕互斥)">
-              {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "停止" : "开始"}
-            </button>
-            <label className="subtitle-mode">
-              <span>音频来源</span>
-              <select value={audioMode} onChange={(e) => changeAudioMode(e.target.value as "system" | "mic" | "both")} title="电脑音频=抓系统播放的声音;麦克风=抓麦克风;同时=两个都抓。运行中切换自动换来源,不停止">
-                <option value="system">电脑音频</option>
-                <option value="mic">麦克风</option>
-                <option value="both">电脑音频+麦克风</option>
-              </select>
-            </label>
-            <span className="subtitle-region">识别语言:跟随主面板({LANGS.find((l) => l.code === sourceLang)?.label ?? sourceLang})</span>
-          </div>
-          {/* 实时音量条(调试用:确认来源有声音进来;dB -100~0) */}
-          {sourcesForMode(audioMode).filter((s) => isSrcOn(s)).map((s) => (
-            <div key={`lvl-${s}`} className="subtitle-panel-row" style={{ alignItems: "center", gap: 8 }}>
-              <span className="subtitle-label" style={{ fontSize: 11 }}>{s === "mic" ? "🎤" : "🎙️"}音量</span>
-              <div style={{ flex: 1, height: 8, background: "var(--ios-separator)", borderRadius: 4, overflow: "hidden" }}>
-                <div style={{
-                  height: "100%", width: `${Math.max(0, Math.min(100, ((srcLevel(s) + 100) / 100) * 100))}%`,
-                  background: srcLevel(s) > -40 ? "var(--ios-blue)" : "var(--ios-green)",
-                  transition: "width 80ms linear",
-                }} />
-              </div>
-              <b style={{ fontSize: 11, minWidth: 44 }}>{srcLevel(s).toFixed(1)}dB</b>
-            </div>
-          ))}
-          {sourcesForMode(audioMode).filter((s) => srcPartial(s)).map((s) => (
-            <div key={s} className="subtitle-current">
-              <div className="subtitle-current-src">{s === "mic" ? "🎤" : "🎙️"} {srcPartial(s)}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* 视频实时字幕控制面板 */}
-        <div className={`subtitle-panel${subtitleOn ? " on" : ""}`}>
-          <div className="subtitle-panel-row">
-            <span className="subtitle-label">🎬 视频字幕</span>
-            <span className={`subtitle-status${subtitleOn ? " live" : ""}`}>
-              {subtitleOn ? "● 运行中" : "○ 已停止"} {subStatus && <em className="subtitle-msg">· {subStatus}</em>}
-            </span>
-            <button className="btn-float" onClick={toggleSubtitle} title="开关视频字幕 (Ctrl+Shift+U)">
-              {subtitleOn ? "停止" : "开始"}
-            </button>
-            <button className="btn-float" onClick={() => invoke("open_screenshot_overlay", { from: "subtitle" }).catch(() => {})} title="框选字幕识别区域(默认屏幕底部 1/4)">
-              🎯 调整区域
-            </button>
-            <button className="btn-float" onClick={testWinOcr} title="测试 Windows 系统 OCR(独立引擎,不影响 RapidOCR)">
-              🧪 系统OCR测试
-            </button>
-          </div>
-          {subRegion && <div className="subtitle-panel-row"><span className="subtitle-region">字幕区域: ({subRegion.x},{subRegion.y} {subRegion.w}×{subRegion.h}),参数在 ⚙ 设置-视频字幕</span></div>}
-          {subCurrent && (
-            <div className="subtitle-current">
-              <div className="subtitle-current-src">{subCurrent.text}</div>
-              {subCurrent.result && <div className="subtitle-current-result">{subCurrent.result}</div>}
-            </div>
-          )}
-        </div>
-
-        {/* 语言选择: 源 → 目标 */}
-        <div className="lang-bar">
-          <select className="lang-sel" value={sourceLang} onChange={(e) => setSourceLang(e.target.value)}>
-            {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-          </select>
-          <span className="lang-arrow" onClick={swapLangs} title="交换语言方向">⇄</span>
-          <select className="lang-sel" value={targetLang} onChange={(e) => setTargetLang(e.target.value)}>
-            {LANGS.filter((l) => l.code !== "auto").map((l) => (
-              <option key={l.code} value={l.code}>{l.label}</option>
-            ))}
-          </select>
-          <span className="realtime-hint">{translating ? "⏳" : "✓"} 实时翻译</span>
-          <button className="btn-primary" onClick={() => runTranslation(input)} disabled={translating || !input.trim()} title="强制手动重译">
-            重译
+      <main className="app-body workbench">
+        {/* 翻译方式(工作台模式卡片) */}
+        <div className="mode-grid">
+          <button className={`mode-card${activeMode === "text" ? " active" : ""}`} onClick={() => setActiveMode("text")}>
+            <span className="mode-icon"><Icon name="pen" size={22} /></span>
+            <b>文本翻译</b>
+            <span className="mode-desc">输入文字,自动实时翻译</span>
+          </button>
+          <button className={`mode-card${activeMode === "audio" ? " active" : ""}`} onClick={() => setActiveMode("audio")}>
+            <span className="mode-icon"><Icon name="mic" size={22} /></span>
+            <b>音频翻译</b>
+            <span className="mode-desc">识别电脑声音 / 麦克风并实时翻译</span>
+          </button>
+          <button className={`mode-card${activeMode === "subtitle" ? " active" : ""}`} onClick={() => setActiveMode("subtitle")}>
+            <span className="mode-icon"><Icon name="film" size={22} /></span>
+            <b>视频字幕</b>
+            <span className="mode-desc">识别屏幕区域字幕并实时翻译</span>
+          </button>
+          <button className="mode-card" onClick={() => { setActiveMode("screenshot"); startScreenshot(); }} title="框选屏幕区域,OCR 翻译">
+            <span className="mode-icon"><Icon name="camera" size={22} /></span>
+            <b>截图翻译</b>
+            <span className="mode-desc">框选屏幕区域,OCR 翻译</span>
+          </button>
+          <button className={`mode-card${activeMode === "selection" ? " active" : ""}`} onClick={() => { setActiveMode("selection"); toggleFloating(); }} title="复制任意文字自动翻译 (Ctrl+Shift+D)">
+            <span className="mode-icon"><Icon name="clipboard" size={22} /></span>
+            <b>划词翻译</b>
+            <span className="mode-desc">复制任意文字自动翻译</span>
           </button>
         </div>
 
-        <textarea
-          ref={textareaElRef}
-          className="trans-input"
-          placeholder="输入文字,自动翻译..."
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          rows={1}
-        />
-
-        {conflictHint && conflict && !translating && output && (
-          <div className="conflict-bar">
-            <span>检测到原文已是目标语言,需要交换翻译方向吗?</span>
-            <button className="btn-conflict" onClick={() => { setConflict(false); swapLangs(); }}>交换</button>
-            <button className="btn-conflict-dismiss" onClick={() => setConflict(false)}>忽略</button>
+        {/* 当前任务卡 */}
+        <div className="task-card">
+          <div className="task-head">
+            <span className="task-title"><Icon name={taskIcon} size={18} /> {taskTitle}</span>
+            <span className={`status-pill ${statusInfo.tone}`}><Icon name={statusInfo.icon} size={11} /> {statusInfo.text}</span>
           </div>
-        )}
-        <div className="trans-output">
-          <div className="output-label">译文 {translating && <span className="pulse">●</span>}{apiThinking && <span className="thinking-hint">🧠 模型思考中…</span>}</div>
-          <div className="output-text">{output || (translating ? "" : "输入后自动翻译...")}</div>
+
+          {/* 文本翻译(默认模式) */}
+          {activeMode === "text" && (
+            <div className="task-text">
+              <div className="lang-center">
+                <select className="lang-sel" value={sourceLang} onChange={(e) => setSourceLang(e.target.value)} title="源语言(自动检测=自动识别输入语言)">
+                  {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
+                </select>
+                <button className="lang-swap" onClick={swapLangs} title="交换语言方向"><Icon name="swap" size={15} /></button>
+                <select className="lang-sel" value={targetLang} onChange={(e) => setTargetLang(e.target.value)} title="目标语言">
+                  {LANGS.filter((l) => l.code !== "auto").map((l) => (
+                    <option key={l.code} value={l.code}>{l.label}</option>
+                  ))}
+                </select>
+                <button className="btn-primary" onClick={() => runTranslation(input)} disabled={translating || !input.trim()} title="强制手动重译">
+                  重译
+                </button>
+              </div>
+              <textarea
+                ref={textareaElRef}
+                className="trans-input"
+                placeholder="输入文字,自动翻译..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                rows={1}
+              />
+              {conflictHint && conflict && !translating && output && (
+                <div className="conflict-bar">
+                  <span>检测到原文已是目标语言,需要交换翻译方向吗?</span>
+                  <button className="btn-conflict" onClick={() => { setConflict(false); swapLangs(); }}>交换</button>
+                  <button className="btn-conflict-dismiss" onClick={() => setConflict(false)}>忽略</button>
+                </div>
+              )}
+              <div className="trans-output">
+                <div className="output-label">译文 {translating && <span className="pulse"><Icon name="dot" size={10} /></span>}{apiThinking && <span className="thinking-hint"><Icon name="sparkle" size={11} /> 模型思考中…</span>}</div>
+                <div className="output-text">{output || (translating ? "" : "输入后自动翻译...")}</div>
+              </div>
+            </div>
+          )}
+
+          {/* 音频翻译模式 */}
+          {activeMode === "audio" && (
+            <div className="task-mode-panel">
+              <div className="subtitle-panel-row">
+                <span className="subtitle-label"><Icon name="mic" size={15} /> 音频翻译</span>
+                <span className={`subtitle-status${sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? " live" : ""}`}>
+                  {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? <Icon name="dot" size={10} style={{ color: "#34c759" }} /> : <Icon name="dot" size={10} style={{ color: "#c7c7cc" }} />} {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "运行中" : "已停止"}
+                  {sourcesForMode(audioMode).map((s) => srcStatus(s)).filter(Boolean).map((st, i) => <em key={i} className="subtitle-msg">· {st}</em>)}
+                </span>
+                <button className="btn-float" onClick={toggleAudioSubtitle} title="开关音频实时识别(识别→翻译→独立语音窗显示;与视频字幕互斥)">
+                  {sourcesForMode(audioMode).some((s) => isSrcOn(s)) ? "停止" : "开始"}
+                </button>
+                <label className="subtitle-mode">
+                  <span>音频来源</span>
+                  <select value={audioMode} onChange={(e) => changeAudioMode(e.target.value as "system" | "mic" | "both")} title="电脑音频=抓系统播放的声音;麦克风=抓麦克风;同时=两个都抓。运行中切换自动换来源,不停止">
+                    <option value="system">电脑音频</option>
+                    <option value="mic">麦克风</option>
+                    <option value="both">电脑音频+麦克风</option>
+                  </select>
+                </label>
+                <span className="subtitle-region">识别语言:跟随主面板({LANGS.find((l) => l.code === sourceLang)?.label ?? sourceLang});断句灵敏度在 设置-音频</span>
+              </div>
+              {sourcesForMode(audioMode).filter((s) => isSrcOn(s)).map((s) => (
+                <div key={`lvl-${s}`} className="subtitle-panel-row" style={{ alignItems: "center", gap: 8 }}>
+                  <span className="subtitle-label" style={{ fontSize: 11 }}><Icon name={s === "mic" ? "mic" : "volume"} size={13} /> 音量</span>
+                  <div style={{ flex: 1, height: 8, background: "var(--ios-separator)", borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{
+                      height: "100%", width: `${Math.max(0, Math.min(100, ((srcLevel(s) + 100) / 100) * 100))}%`,
+                      background: srcLevel(s) > -40 ? "var(--ios-blue)" : "var(--ios-green)",
+                      transition: "width 80ms linear",
+                    }} />
+                  </div>
+                  <b style={{ fontSize: 11, minWidth: 44 }}>{srcLevel(s).toFixed(1)}dB</b>
+                </div>
+              ))}
+              {sourcesForMode(audioMode).filter((s) => srcPartial(s)).map((s) => (
+                <div key={s} className="subtitle-current">
+                  <div className="subtitle-current-src"><Icon name={s === "mic" ? "mic" : "volume"} size={12} /> {srcPartial(s)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 视频字幕模式 */}
+          {activeMode === "subtitle" && (
+            <div className="task-mode-panel">
+              <div className="subtitle-panel-row">
+                <span className="subtitle-label"><Icon name="film" size={15} /> 视频字幕</span>
+                <span className={`subtitle-status${subtitleOn ? " live" : ""}`}>
+                  {subtitleOn ? <Icon name="dot" size={10} style={{ color: "#34c759" }} /> : <Icon name="dot" size={10} style={{ color: "#c7c7cc" }} />} {subtitleOn ? "运行中" : "已停止"} {subStatus && <em className="subtitle-msg">· {subStatus}</em>}
+                </span>
+                <button className="btn-float" onClick={toggleSubtitle} title="开关视频字幕 (Ctrl+Shift+U)">
+                  {subtitleOn ? "停止" : "开始"}
+                </button>
+                <button className="btn-float" onClick={() => invoke("open_screenshot_overlay", { from: "subtitle" }).catch(() => {})} title="框选字幕识别区域(默认屏幕底部 1/4)">
+                  <Icon name="target" size={13} /> 调整区域
+                </button>
+                <button className="btn-float" onClick={testWinOcr} title="测试 Windows 系统 OCR(独立引擎,不影响 RapidOCR)">
+                  <Icon name="flask" size={13} /> 系统OCR测试
+                </button>
+              </div>
+              {subRegion && <div className="subtitle-panel-row"><span className="subtitle-region">字幕区域: ({subRegion.x},{subRegion.y} {subRegion.w}×{subRegion.h});截帧频率/显示策略/OCR 引擎在 ⚙ 设置-视频字幕</span></div>}
+              {subCurrent && (
+                <div className="subtitle-current">
+                  <div className="subtitle-current-src">{subCurrent.text}</div>
+                  {subCurrent.result && <div className="subtitle-current-result">{subCurrent.result}</div>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 截图 / 划词模式:操作提示 */}
+          {activeMode === "screenshot" && (
+            <div className="task-mode-hint">
+              <p><Icon name="camera" size={18} /> 截图翻译</p>
+              <span>已触发框选:在屏幕上拖出需要翻译的区域(ESC / 右键取消)。悬浮窗发起的截图结果会显示在悬浮窗。</span>
+            </div>
+          )}
+          {activeMode === "selection" && (
+            <div className="task-mode-hint">
+              <p><Icon name="clipboard" size={18} /> 划词翻译</p>
+              <span>复制任意文字即自动弹出悬浮窗翻译;快捷键 Ctrl+Shift+D 开关悬浮窗。自动 / 手动模式在 设置-常规。</span>
+            </div>
+          )}
         </div>
       </main>
       )}
@@ -1958,15 +2109,15 @@ function FloatingWindow() {
                   appWindow.emitTo("main", "subtitle-start").catch(() => {});  // 显式开始
                 }
               }}>
-              🎬
+              <Icon name="film" size={13} />
             </button>
             <button className="floating-btn" title="调整字幕区域" onMouseDown={(e) => e.stopPropagation()}
               onClick={() => { invoke("open_screenshot_overlay", { from: "subtitle" }).catch(() => {}); }}>
-              🎯
+              <Icon name="target" size={13} />
             </button>
             <button className="floating-btn" title="截图翻译" onMouseDown={(e) => e.stopPropagation()}
               onClick={async () => { try { await invoke("open_screenshot_overlay", { from: "floating" }); } catch {} }}>
-              📷
+              <Icon name="camera" size={13} />
             </button>
             <button
               className="floating-btn"
@@ -1974,9 +2125,9 @@ function FloatingWindow() {
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => setShowSettings(!showSettings)}
             >
-              ⚙
+              <Icon name="settings" size={13} />
             </button>
-            <button className="floating-close" title="关闭" onMouseDown={(e) => e.stopPropagation()} onClick={closeFloating}>✕</button>
+            <button className="floating-close" title="关闭" onMouseDown={(e) => e.stopPropagation()} onClick={closeFloating}><Icon name="close" size={12} /></button>
           </div>
         </div>
 
@@ -2001,7 +2152,7 @@ function FloatingWindow() {
             ) : (
               <div className="floating-hint">
                 <p>视频字幕</p>
-                <span>在主窗口点击 🎬 开始字幕识别</span>
+                <span>在主窗口点击「视频字幕」开始字幕识别</span>
               </div>
             )
           ) : status ? (
@@ -2139,7 +2290,7 @@ function AudioFloatingWindow() {
     <div className="floating-root">
       <div className="floating-card">
         <div className="floating-bar" onMouseDown={(e) => { if (!(e.target as HTMLElement).closest(".floating-actions")) { e.preventDefault(); invoke("audio_floating_drag_begin", { source }).catch(() => {}); } }}>
-          <span className="floating-title">{isMic ? "🎤 麦克风" : "🎙️ 电脑音频"}</span>
+          <span className="floating-title"><Icon name="mic" size={13} /> {isMic ? "麦克风" : "电脑音频"}</span>
           <div className="floating-actions">
             <button
               className="floating-btn"
@@ -2147,10 +2298,10 @@ function AudioFloatingWindow() {
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => setShowSettings(!showSettings)}
             >
-              ⚙
+              <Icon name="settings" size={13} />
             </button>
             <button className="floating-close" title="关闭" onMouseDown={(e) => e.stopPropagation()}
-              onClick={closeAndStop}>✕</button>
+              onClick={closeAndStop}><Icon name="close" size={12} /></button>
           </div>
         </div>
 
@@ -2190,8 +2341,8 @@ function AudioFloatingWindow() {
             </div>
           ) : (
             <div className="floating-hint">
-              <p>🎙️ 音频识别</p>
-              <span>在主窗口点击 🎙️ 开始音频字幕</span>
+              <p><Icon name="mic" size={18} /> 音频识别</p>
+              <span>在主窗口点击「音频翻译」开始音频字幕</span>
             </div>
           )}
         </div>

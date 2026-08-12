@@ -61,6 +61,10 @@
   box-sizing: border-box;
 }
 
+svg {
+  vertical-align: -0.125em;
+}
+
 html,
 body,
 #root {
@@ -1089,4 +1093,143 @@ body,
   gap: 10px;
   font-size: 13px;
   color: var(--ios-blue);
+}
+
+/* ============ Wave 9: 工作台(GPT 设计方向) ============ */
+.workbench {
+  gap: 14px;
+}
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+}
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--ios-separator);
+  border-radius: var(--radius-md);
+  background: var(--ios-card);
+  color: var(--ios-text);
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  box-shadow: var(--shadow-card);
+  transition: border-color 0.15s, background 0.15s;
+}
+.mode-card:hover {
+  border-color: var(--ios-blue);
+}
+.mode-card.active {
+  border-color: var(--ios-blue);
+  background: rgba(0, 122, 255, 0.08);
+}
+.mode-icon {
+  font-size: 20px;
+  line-height: 1.2;
+}
+.mode-card b {
+  font-size: 13px;
+}
+.mode-desc {
+  font-size: 11px;
+  color: var(--ios-secondary);
+  line-height: 1.4;
+}
+
+.task-card {
+  background: var(--ios-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex-shrink: 0;
+}
+.task-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.task-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+.status-pill {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.status-pill.idle {
+  background: rgba(60, 60, 67, 0.08);
+  color: var(--ios-secondary);
+}
+.status-pill.live {
+  background: rgba(52, 199, 89, 0.15);
+  color: #1f9d4d;
+}
+.status-pill.work {
+  background: rgba(0, 122, 255, 0.12);
+  color: var(--ios-blue);
+}
+
+.task-text {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lang-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.lang-swap {
+  font-size: 18px;
+  color: var(--ios-blue);
+  background: rgba(0, 122, 255, 0.1);
+  border: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+.lang-swap:hover {
+  background: rgba(0, 122, 255, 0.2);
+}
+
+.task-mode-panel {
+  border: 1px solid var(--ios-separator);
+  border-radius: 14px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.task-mode-hint {
+  padding: 28px 20px;
+  text-align: center;
+  color: var(--ios-secondary);
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+.task-mode-hint p {
+  font-size: 18px;
+  font-weight: 680;
+  color: var(--ios-text);
 }
