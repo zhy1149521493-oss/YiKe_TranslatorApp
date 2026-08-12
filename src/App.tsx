@@ -1077,7 +1077,6 @@ function MainWindow() {
           <select className="tool-select" value={headerEngineValue} onChange={(e) => { const v = e.target.value; if (v.startsWith("api:")) { setActiveProviderId(v.slice(4)); setEngineMode("api"); } else { setModel(v); setEngineMode("local"); } }} title="翻译引擎:选本地模型=本地Ollama;选「外接」=外接API(供应商在⚙️翻译引擎面板配置)">
             <option value="maternion/hy-mt2:1.8b">HY-MT2-1.8B (本地)</option>
             <option value="gemma3:4b">gemma3:4b (本地)</option>
-            <option value="qwen3:4b">qwen3:4b (本地)</option>
             {effApi && activeProvider && <option value={`api:${activeProvider.id}`}>🌐 {activeProvider.alias || activeProvider.baseUrl}{activeProvider.model ? ` · ${activeProvider.model}` : ""}</option>}
           </select>
           <select className="tool-select" value={numCtx} onChange={(e) => setNumCtx(Number(e.target.value))} title="上下文窗口">
