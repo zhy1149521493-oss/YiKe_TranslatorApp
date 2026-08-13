@@ -2116,7 +2116,8 @@ function MainWindow() {
                   <b style={{ fontSize: 11, minWidth: 44 }}>{srcLevel(s).toFixed(1)}dB</b>
                 </div>
               ))}
-              {/* 主窗口音频四行显示(与语音窗一致):原文区(上一句+当前句)/译文区(上一句+当前句) */}
+              {/* 主窗口音频四行显示(与语音窗一致):有内容才显示,无灰色框 */}
+              {audioHist.some((x) => x.text || x.result) && (
               <div className="voice-panel-main">
                 <div className="voice-section voice-src-section">
                   <div className="voice-section-label">原文</div>
@@ -2142,6 +2143,7 @@ function MainWindow() {
                   )}
                 </div>
               </div>
+              )}
               </div>
             )}
 

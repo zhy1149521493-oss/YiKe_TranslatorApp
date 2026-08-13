@@ -611,9 +611,6 @@ body,
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border: 1px solid var(--ios-separator);
-  border-radius: 10px;
-  overflow: hidden;
 }
 .voice-section-label {
   font-size: 10px;
