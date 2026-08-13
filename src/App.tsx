@@ -942,21 +942,15 @@ function MainWindow() {
         invoke("audio_forward_to_floating", { source, text, src, tgt, result }).catch((e) => {
           setAudioStatus((prev) => ({ ...prev, [source]: `转发失败: ${JSON.stringify(e)}` }));
         });
-      // 仅定稿(final)才向语音窗滚动:partial 的原文已由 __audioPartial 实时更新,
+      // 仅定稿(final)才向语音窗滚动(压入上一句):partial 的原文已由 __audioPartial 实时更新,
       // 若每次增量都 send("") 会让语音窗每识别一个新词就滚动一次(第一句第二句重复/乱窜)。
       if (isFinal) await send("");
       let result = await translateFull(model, src, tgt, text, numCtx);
       if (!result.trim()) result = "(空响应)";
-      if (isFinal) await send(result);
-      // 主窗口 hist:final = 定稿(当前句滚为上一句,压入空当前句);partial = 译文匹配当前句
-      setAudioHist((h) => {
-        if (isFinal) {
-          const rest = h.slice(0, -1);
-          const finalized = { text, result };
-          return [...rest, finalized, { text: "", result: "" }].slice(-3);
-        }
-        return h.map((x) => (x.text === text ? { ...x, result } : x));
-      });
+      // partial/final 都向语音窗发译文:partial = 当前句边说边出, final = 定稿句(已滚为上一句)。
+      await send(result);
+      // 主窗口 hist:译文按 text 匹配补上(当前句或上一句均可);滚动由 audio-final 监听立即触发
+      setAudioHist((h) => h.map((x) => (x.text === text ? { ...x, result } : x)));
       setModeOutput((prev) => ({ ...prev, audio: result }));
       setAudioStatus((prev) => ({ ...prev, [source]: "" }));
     } catch (e: any) {
@@ -1082,6 +1076,14 @@ function MainWindow() {
       const trimmed = text.trim();
       if (!trimmed) return;
       audioFinalRef.current[source] = trimmed;
+      // 立即定稿滚动(不依赖翻译完成):当前句(用 final 完整文本)滚为上一句,压入空当前句。
+      // 译文完成后由 submitAudioSubtitle 按 text 匹配补回,保证上一句译文可靠显示。
+      setAudioHist((h) => {
+        const rest = h.slice(0, -1);
+        const cur = h[h.length - 1];
+        const finalized = { text: trimmed, result: cur && cur.text === trimmed ? cur.result : "" };
+        return [...rest, finalized, { text: "", result: "" }].slice(-3);
+      });
       submitAudioSubtitle(source, trimmed, true);
       // 保留最后一句显示(暂停/停顿不清空),新句子到来时自动替换
       setAudioPartial((prev) => ({ ...prev, [source]: trimmed }));
