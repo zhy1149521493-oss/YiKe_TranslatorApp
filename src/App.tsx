@@ -2493,32 +2493,42 @@ function AudioFloatingWindow() {
         <div className="floating-body">
           {status ? (
             <div className="floating-status">{status}</div>
+          ) : hist.length === 1 && !hist[0].text ? (
+            <div className="floating-hint">
+              <p><Icon name="mic" size={18} /> 音频识别</p>
+              <span>在主窗口点击「音频翻译」开始音频字幕</span>
+            </div>
           ) : (
             <>
-              {/* 上一句(定稿):key 变化时播放上滚动画 */}
+              {/* 原文区:上一句(已说过) + 当前句(正在说);key 变化时上一句播放上滚动画 */}
+              <div className="voice-section voice-src-section">
+                <div className="voice-section-label">原文</div>
               {hist.length >= 2 && hist[hist.length - 2].text && (
-                <div className="voice-slot voice-prev-slot">
-                  <div key={`${hist[hist.length - 2].text}|${hist[hist.length - 2].result}`} className="voice-prev">
-                    <div className="voice-text">{hist[hist.length - 2].text}</div>
-                    {hist[hist.length - 2].result && <div className="voice-result">{hist[hist.length - 2].result}</div>}
-                  </div>
+                <div key={`src-prev-${hist[hist.length - 2].text}`} className="voice-line voice-line-prev">
+                  {hist[hist.length - 2].text}
                 </div>
               )}
-              {/* 正在识别/生成的一句 */}
-              <div className="voice-slot voice-cur-slot">
                 {hist[hist.length - 1].text && (
-                  <div className="voice-cur">
-                    <div className="voice-text">{hist[hist.length - 1].text}</div>
-                    {hist[hist.length - 1].result && <div className="voice-result">{hist[hist.length - 1].result}</div>}
+                  <div className="voice-line voice-line-cur">
+                    {hist[hist.length - 1].text}
                   </div>
                 )}
               </div>
-              {hist.length === 1 && !hist[0].text && (
-                <div className="floating-hint">
-                  <p><Icon name="mic" size={18} /> 音频识别</p>
-                  <span>在主窗口点击「音频翻译」开始音频字幕</span>
-                </div>
-              )}
+              <div className="voice-divider" />
+              {/* 译文区:上一句(已说过) + 当前句(正在说);key 变化时上一句播放上滚动画 */}
+              <div className="voice-section voice-result-section">
+                <div className="voice-section-label">译文</div>
+                {hist.length >= 2 && hist[hist.length - 2].result && (
+                  <div key={`res-prev-${hist[hist.length - 2].result}`} className="voice-line voice-line-prev voice-line-result">
+                    {hist[hist.length - 2].result}
+                  </div>
+                )}
+                {hist[hist.length - 1].result && (
+                  <div className="voice-line voice-line-cur voice-line-result">
+                    {hist[hist.length - 1].result}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>

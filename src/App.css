@@ -589,66 +589,56 @@ body,
   gap: 8px;
   overflow: auto;
 }
-/* 语音窗两句显示:上一句(定稿) + 正在识别的一句 */
-.voice-lines {
+/* 语音窗四行显示:原文区(上一句+当前句) / 译文区(上一句+当前句),定稿时各自上滚 */
+.voice-panel {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 8px;
   overflow: hidden;
 }
-.voice-slot {
+.voice-section {
+  flex: 1 1 50%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 6px 9px;
   width: 100%;
   box-sizing: border-box;
-  border-radius: 10px;
   overflow: hidden;
 }
-.voice-prev-slot {
-  flex: 0 0 auto;
-  max-height: 42%;
-}
-.voice-cur-slot {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-.voice-prev {
-  animation: voice-up 0.26s ease-out;
-  width: 100%;
-  box-sizing: border-box;
-  font-size: 12px;
+.voice-section-label {
+  font-size: 10px;
   color: var(--ios-secondary);
-  line-height: 1.5;
-  padding: 7px 9px;
-  opacity: 0.75;
-  max-height: 100%;
-  overflow: auto;
+  opacity: 0.7;
 }
-.voice-cur {
+.voice-line {
   width: 100%;
   box-sizing: border-box;
   font-size: 13px;
-  color: var(--ios-text);
-  line-height: 1.55;
-  padding: 7px 9px;
-  height: 100%;
-  overflow: auto;
-}
-.voice-text {
-  width: 100%;
+  line-height: 1.5;
   word-break: break-word;
   white-space: pre-wrap;
-  color: var(--ios-secondary); /* 原文:次要色,避免被误认为译文 */
 }
-.voice-result {
-  width: 100%;
-  margin-top: 5px;
+.voice-line-prev {
+  animation: voice-up 0.26s ease-out;
   font-size: 12px;
-  color: var(--ios-text);
-  font-weight: 600; /* 译文:加粗醒目,一眼可辨 */
-  word-break: break-word;
-  white-space: pre-wrap;
+  color: var(--ios-secondary);
+  opacity: 0.75;
 }
-/* 定稿时:当前句从下方滚到上方(上一句槽位) */
+.voice-line-cur {
+  color: var(--ios-text);
+}
+.voice-line-result {
+  font-weight: 600; /* 译文:加粗醒目,一眼可辨 */
+}
+.voice-divider {
+  height: 1px;
+  background: var(--ios-separator);
+  margin: 0 9px;
+  flex-shrink: 0;
+}
+/* 定稿时:句子从下方滚到上方(上一句槽位) */
 @keyframes voice-up {
   from { transform: translateY(100%); opacity: 0.3; }
   to { transform: translateY(0); opacity: 0.75; }
