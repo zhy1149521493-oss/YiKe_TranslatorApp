@@ -266,6 +266,28 @@ function formatModelSize(bytes: number): string {
   return `${(mb / 1024).toFixed(2)} GB`;
 }
 
+/* 下载速度/剩余时间显示 */
+function formatSpeed(bps: number): string {
+  if (!bps || bps <= 0) return "";
+  if (bps >= 1024 * 1024 * 1024) return `${(bps / (1024 ** 3)).toFixed(2)} GB/s`;
+  if (bps >= 1024 * 1024) return `${(bps / (1024 ** 2)).toFixed(1)} MB/s`;
+  if (bps >= 1024) return `${Math.round(bps / 1024)} KB/s`;
+  return `${Math.round(bps)} B/s`;
+}
+function formatEta(sec: number): string {
+  if (sec < 60) return `${Math.round(sec)} 秒`;
+  if (sec < 3600) return `${Math.floor(sec / 60)} 分 ${Math.round(sec % 60)} 秒`;
+  return `${Math.floor(sec / 3600)} 时 ${Math.floor((sec % 3600) / 60)} 分`;
+}
+const PULL_STATUS_TEXT: Record<string, string> = {
+  "downloading": "下载中",
+  "pulling manifest": "获取清单…",
+  "verifying sha256 digest": "校验文件…",
+  "writing manifest": "写入清单…",
+  "removing any unused layers": "清理旧层…",
+  "success": "完成",
+};
+
 function buildPrompt(
   source: string,
   target: string,
@@ -372,6 +394,9 @@ let engineCfg: { mode: EngineMode; providers: ProviderCfg[]; activeProviderId: s
   providers: [],
   activeProviderId: "",
 };
+/* 本地模型列表镜像:MainWindow 渲染时同步,供 translateStream/translateFull 做“未配置模型”守卫 */
+let localModelStore: LocalModelInfo[] = [];
+let localModelsReady = false;
 
 function activeProvider(): ProviderCfg | null {
   return engineCfg.providers.find((p) => p.id === engineCfg.activeProviderId) ?? null;
@@ -486,12 +511,21 @@ async function translateStream(
 ) {
   const eng = resolveEngine();
   if (eng.kind === "api") return fetchApiStream(eng.provider, source, target, text, onToken, signal, onReasoning);
+  /* 无本地模型守卫:给友好提示而不是裸 API 报错(列表加载完才开始拦截,避免启动瞬间误报) */
+  if (localModelsReady) {
+    if (localModelStore.length === 0) throw new Error("尚未配置本地模型:请到「设置 → 模型」下载或导入模型后再翻译");
+    if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载或导入`);
+  }
   return fetchOllamaStream(model, source, target, text, numCtx, onToken, signal);
 }
 
 async function translateFull(model: string, source: string, target: string, text: string, numCtx: number): Promise<string> {
   const eng = resolveEngine();
   if (eng.kind === "api") return fetchApiFull(eng.provider, source, target, text);
+  if (localModelsReady) {
+    if (localModelStore.length === 0) throw new Error("尚未配置本地模型:请到「设置 → 模型」下载或导入模型后再翻译");
+    if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载或导入`);
+  }
   return fetchOllamaFull(model, source, target, text, numCtx);
 }
 
@@ -521,7 +555,9 @@ function MainWindow() {
   /* Wave 10.5: 本地模型管理(模型页:列表/下载/删除/导入 GGUF) */
   const [localModels, setLocalModels] = useState<LocalModelInfo[]>([]);
   const [localModelsLoaded, setLocalModelsLoaded] = useState(false);
-  const [pullJobs, setPullJobs] = useState<Record<string, { status: string; progress: number; total: number }>>({});
+  const [pullJobs, setPullJobs] = useState<Record<string, { status: string; progress: number; total: number; speed?: number }>>({});
+  /* 下载速度计算基准:按层记录 completed/时间戳,层切换时重置 */
+  const pullSpeedRef = useRef<Record<string, { lastCompleted: number; lastTime: number; lastSpeed: number; lastTotal: number }>>({});
   const [importName, setImportName] = useState("");
   const [importPath, setImportPath] = useState("");
   const [importBusy, setImportBusy] = useState(false);
@@ -620,6 +656,8 @@ function MainWindow() {
   };
   // 渲染时同步模块级镜像,供 translateStream/translateFull 路由读取
   engineCfg = { mode: engineMode, providers, activeProviderId };
+  localModelStore = localModels;
+  localModelsReady = localModelsLoaded;
 
   /* 监听 ollama 实际推理后端(Rust 解析 serve 日志后广播):cpu → 显示"无 GPU"提示条 */
   useEffect(() => {
@@ -1592,10 +1630,29 @@ function MainWindow() {
           if (d.status === "downloading") {
             const progress = d.completed || 0;
             const total = d.total || 0;
-            setPullJobs((prev) => ({ ...prev, [name]: { status: "downloading", progress, total } }));
+            /* 速度:同层内按 completed 增量/时间窗平滑计算;换层(层大小不同)重置基准 */
+            const now = Date.now();
+            const snap = pullSpeedRef.current[name];
+            let speed = snap?.lastSpeed ?? 0;
+            if (snap && total > 0) {
+              if (snap.lastTotal === total && progress > snap.lastCompleted) {
+                const dt = (now - snap.lastTime) / 1000;
+                if (dt > 0) {
+                  const inst = (progress - snap.lastCompleted) / dt;
+                  speed = snap.lastSpeed > 0 ? snap.lastSpeed * 0.7 + inst * 0.3 : inst;
+                }
+              } else if (snap.lastTotal !== total) {
+                speed = 0; // 新层开始,重新累计
+              }
+            }
+            pullSpeedRef.current[name] = { lastCompleted: progress, lastTime: now, lastSpeed: speed, lastTotal: total };
+            setPullJobs((prev) => ({ ...prev, [name]: { status: "downloading", progress, total, speed } }));
             if (total > 0) {
               const pct = Math.min(100, Math.round((progress / total) * 100));
-              if (pct !== lastPct) { lastPct = pct; setEngineStatus(`正在下载 ${name} … ${pct}%`); }
+              if (pct !== lastPct) {
+                lastPct = pct;
+                setEngineStatus(`正在下载 ${name} … ${pct}%${speed > 0 ? `, ${formatSpeed(speed)}` : ""}`);
+              }
             }
           } else if (d.status === "success") {
             setPullJobs((prev) => ({ ...prev, [name]: { status: "success", progress: 1, total: 1 } }));
@@ -1611,6 +1668,7 @@ function MainWindow() {
       setPullJobs((prev) => ({ ...prev, [name]: { status: `失败: ${e?.message ?? e}`, progress: 0, total: 0 } }));
       setEngineStatus(`下载 ${name} 失败: ${e?.message ?? e}`);
     } finally {
+      delete pullSpeedRef.current[name];
       /* 下载完成后 6 秒自动收起进度条 */
       setTimeout(() => {
         setPullJobs((prev) => { const n = { ...prev }; delete n[name]; return n; });
@@ -2135,14 +2193,37 @@ function MainWindow() {
                         <Icon name="download" size={13} /> gemma3 (4B)
                       </button>
                     </div>
+                    {/* 下载进度(独立于模型列表:首次下载的模型还没出现在列表里也能看到) */}
+                    {Object.keys(pullJobs).length > 0 && (
+                      <div className="pull-jobs">
+                        {Object.entries(pullJobs).map(([name, job]) => {
+                          const pct = job.total > 0 ? Math.min(100, Math.round((job.progress / job.total) * 100)) : 0;
+                          const speedText = job.speed && job.speed > 0 ? formatSpeed(job.speed) : "";
+                          const etaSec = job.speed && job.speed > 0 && job.total > job.progress ? Math.round((job.total - job.progress) / job.speed) : 0;
+                          const displayName = name === "maternion/hy-mt2:1.8b" ? "HY-MT2 (1.8B)" : name === "gemma3:4b" ? "gemma3 (4B)" : name;
+                          const statusText = job.status === "downloading"
+                            ? `${pct}%${speedText ? ` · ${speedText}` : ""}${etaSec > 0 ? ` · 剩余 ${formatEta(etaSec)}` : ""}`
+                            : (PULL_STATUS_TEXT[job.status] ?? job.status);
+                          return (
+                            <div className="pull-job" key={name}>
+                              <div className="pull-job-head">
+                                <span className="pull-job-name">{displayName}</span>
+                                <span className="pull-job-meta">{statusText}</span>
+                              </div>
+                              <div className="pull-progress-bar">
+                                <span className="pull-progress-fill" style={{ width: `${pct}%` }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                     <div className="local-model-list">
                       {localModels.length === 0 && (
                         <p className="settings-note">{localModelsLoaded ? "还没有本地模型:点上方按钮下载,或导入 GGUF 文件。" : "正在读取本地模型列表…"}</p>
                       )}
                       {localModels.map((m) => {
                         const isCurrent = model === m.name;
-                        const job = pullJobs[m.name];
-                        const pct = job && job.total > 0 ? Math.min(100, Math.round((job.progress / job.total) * 100)) : 0;
                         return (
                           <div className={`local-model-row${isCurrent ? " active" : ""}`} key={m.name}>
                             <span className="provider-name">
@@ -2150,12 +2231,6 @@ function MainWindow() {
                               {m.name === "maternion/hy-mt2:1.8b" ? "HY-MT2-1.8B" : m.name === "gemma3:4b" ? "gemma3:4b" : m.name}
                             </span>
                             <span className="local-model-size">{formatModelSize(m.size)}</span>
-                            {job && (
-                              <span className="pull-progress">
-                                <span className="pull-progress-bar"><span className="pull-progress-fill" style={{ width: `${pct}%` }} /></span>
-                                <span className="pull-status">{job.status === "downloading" ? (job.total > 0 ? `下载中 ${pct}%` : "下载中…") : job.status === "success" ? "完成" : job.status}</span>
-                              </span>
-                            )}
                             <div className="provider-actions">
                               {isCurrent ? (
                                 <span className="local-model-current">当前</span>

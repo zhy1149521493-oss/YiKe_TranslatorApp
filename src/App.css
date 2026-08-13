@@ -1186,16 +1186,32 @@ body,
   font-size: 12px;
   color: #34c759;
 }
-.pull-progress {
+.pull-jobs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pull-job {
   display: inline-flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.pull-job-head {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  flex: 1;
-  min-width: 160px;
-  max-width: 280px;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.pull-job-name {
+  font-weight: 600;
+}
+.pull-job-meta {
+  color: var(--ios-secondary);
+  white-space: nowrap;
 }
 .pull-progress-bar {
-  flex: 1;
+  width: 100%;
   height: 6px;
   border-radius: 3px;
   background: rgba(var(--ios-accent-rgb), 0.12);
@@ -1207,14 +1223,6 @@ body,
   background: var(--ios-blue);
   border-radius: 3px;
   transition: width 0.2s;
-}
-.pull-status {
-  font-size: 11px;
-  color: var(--ios-secondary);
-  white-space: nowrap;
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .confirm-delete {
   display: flex;
