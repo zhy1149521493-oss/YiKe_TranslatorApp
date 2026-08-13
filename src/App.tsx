@@ -42,6 +42,20 @@ const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
   "toggle-audio-subtitle": "音频字幕",
 };
 
+/* 悬浮窗外观预览的示例句子:每次打开设置页随机取一对(第一行原文,第二行翻译) */
+const FLOATING_SAMPLE_LINES: [string, string][] = [
+  ["We are the ones who make a brighter day, so let's start giving.", "创造美好的未来要靠我们，所以，让我们开始奉献自己。"],
+  ["To be, or not to be: that is the question.", "生存还是毁灭，这是一个问题。"],
+  ["古池や 蛙飛びこむ 水の音", "古池——青蛙跳入，水声。"],
+  ["Über allen Gipfeln ist Ruh.", "群山之巅，一片寂静。"],
+  ["Caminante, no hay camino, se hace camino al andar.", "行路人，本没有路，路是走出来的。"],
+  ["Если жизнь тебя обманет", "假如生活欺骗了你"],
+  ["Ἄνδρα μοι ἔννεπε, Μοῦσα...", "请告诉我，那位英雄"],
+  ["Nel mezzo del cammin di nostra vita", "在人生旅途的中途……"],
+  ["Demain, dès l'aube, à l'heure où blanchit la campagne", "明天，黎明时分，当原野开始泛白"],
+  ["落霞与孤鹜齐飞，秋水共长天一色", "The rainbow clouds with lonely bird together fly,The autumn water blends with the endless blue sky"],
+];
+
 const SETTINGS_NAV: [string, string][] = [
   ["general", "常规"],
   ["translate", "翻译"],
@@ -605,6 +619,14 @@ function MainWindow() {
   const [theme, setTheme] = useState<"light" | "dark" | "system">("light");
   const [accentColor, setAccentColor] = useState(""); // 主题色(强调色):留空=跟随主题默认
   const [appearance, setAppearance] = useState<Record<SurfaceKey, AppearanceItem>>(DEFAULT_APPEARANCE);
+  /* 悬浮窗外观预览示例句(随机):第一行原文,第二行翻译 */
+  const [floatingSample, setFloatingSample] = useState<[string, string]>(() => FLOATING_SAMPLE_LINES[Math.floor(Math.random() * FLOATING_SAMPLE_LINES.length)]);
+  /* 每次打开「悬浮窗外观」设置页,预览句子随机换一对 */
+  useEffect(() => {
+    if (settingsPage === "floating") {
+      setFloatingSample(FLOATING_SAMPLE_LINES[Math.floor(Math.random() * FLOATING_SAMPLE_LINES.length)]);
+    }
+  }, [settingsPage]);
   const [shortcuts, setShortcuts] = useState<Record<ShortcutAction, string>>(DEFAULT_SHORTCUTS);
   const [conflictHint, setConflictHint] = useState(true);
   const [recordingAction, setRecordingAction] = useState<ShortcutAction | null>(null);
@@ -2157,8 +2179,8 @@ function MainWindow() {
                       color: appearance.floating.textColor || "var(--ios-text)",
                       fontSize: `${appearance.floating.fontSize}px`,
                     }}>
-                      <div style={{ opacity: 0.7, fontSize: "0.82em" }}>We need to leave now.</div>
-                      <div style={{ fontWeight: 600 }}>我们现在必须离开。</div>
+                      <div style={{ opacity: 0.7, fontSize: "0.82em" }}>{floatingSample[0]}</div>
+                      <div style={{ fontWeight: 600 }}>{floatingSample[1]}</div>
                     </div>
                   </div>
                   {(Object.keys(SURFACE_LABELS) as SurfaceKey[]).map((key) => {
