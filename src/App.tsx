@@ -557,7 +557,8 @@ function MainWindow() {
   const [localModelsLoaded, setLocalModelsLoaded] = useState(false);
   const [pullJobs, setPullJobs] = useState<Record<string, { status: string; progress: number; total: number; speed?: number; layer?: string }>>({});
   /* 下载速度计算基准:按层记录 completed/时间戳,层切换时重置 */
-  const pullSpeedRef = useRef<Record<string, { lastCompleted: number; lastTime: number; lastSpeed: number; lastTotal: number }>>({});
+  /* 下载速度/累计字节基准:completedLayers=已完成层字节和,lastKey=当前层标识 */
+  const pullSpeedRef = useRef<Record<string, { completedLayers: number; lastKey: string; lastTotal: number; lastSpeed: number; lastTime: number; lastCompleted: number }>>({});
   const [importName, setImportName] = useState("");
   const [importPath, setImportPath] = useState("");
   const [importBusy, setImportBusy] = useState(false);
@@ -1637,26 +1638,43 @@ function MainWindow() {
                (缓存层直接 completed==total);"downloading" 是旧格式兼容。只要带 total 就当进度事件处理,
                否则下载期间进度会一直卡在 0%。 */
             if (total > 0 || d.status === "downloading") {
-            /* 速度:同层内按 completed 增量/时间窗平滑计算;换层(层大小不同)重置基准 */
+              /* 速度:同层内按 completed 增量/时间窗平滑计算;换层重置基准。
+                 百分比用累计字节(已完成层字节和 + 当前层已下字节)/(已完成层字节和 + 当前层总字节),
+                 换层时不会跳回 0%。 */
               const now = Date.now();
               const snap = pullSpeedRef.current[name];
-              let speed = snap?.lastSpeed ?? 0;
-              if (snap && total > 0) {
-                if (snap.lastTotal === total && completed > snap.lastCompleted) {
-                  const dt = (now - snap.lastTime) / 1000;
+              const layerKey = typeof d.digest === "string" && d.digest ? d.digest : `t:${total}`;
+              let completedLayers = snap?.completedLayers ?? 0;
+              let lastKey = snap?.lastKey ?? "";
+              let lastTotal = snap?.lastTotal ?? 0;
+              let lastSpeed = snap?.lastSpeed ?? 0;
+              let lastCompleted = snap?.lastCompleted ?? 0;
+              let speed = lastSpeed;
+              if (layerKey !== lastKey) {
+                /* 换层:上一层字节数计入已完成;速度归零重新测 */
+                if (lastKey) completedLayers += lastTotal;
+                lastKey = layerKey;
+                lastTotal = total;
+                lastCompleted = completed;
+                speed = 0;
+              } else {
+                lastTotal = total;
+                if (total > 0 && completed > lastCompleted) {
+                  const dt = (now - (snap?.lastTime ?? now)) / 1000;
                   if (dt > 0) {
-                    const inst = (completed - snap.lastCompleted) / dt;
-                    speed = snap.lastSpeed > 0 ? snap.lastSpeed * 0.7 + inst * 0.3 : inst;
+                    const inst = (completed - lastCompleted) / dt;
+                    speed = lastSpeed > 0 ? lastSpeed * 0.7 + inst * 0.3 : inst;
                   }
-                } else if (snap.lastTotal !== total) {
-                  speed = 0; // 新层开始,重新累计
                 }
+                lastCompleted = completed;
               }
-              pullSpeedRef.current[name] = { lastCompleted: completed, lastTime: now, lastSpeed: speed, lastTotal: total };
-              const layer = typeof d.digest === "string" ? d.digest.replace(/^sha256:/, "").slice(0, 12) : "";
-              setPullJobs((prev) => ({ ...prev, [name]: { status: "downloading", progress: completed, total, speed, layer } }));
-              if (total > 0) {
-                const pct = Math.min(100, Math.round((completed / total) * 100));
+              pullSpeedRef.current[name] = { completedLayers, lastKey, lastTotal, lastSpeed: speed, lastTime: now, lastCompleted };
+              const doneBytes = completedLayers + completed;
+              const totalBytes = completedLayers + total;
+              const layer = layerKey.replace(/^sha256:/, "").slice(0, 12);
+              setPullJobs((prev) => ({ ...prev, [name]: { status: "downloading", progress: doneBytes, total: totalBytes, speed, layer } }));
+              if (totalBytes > 0) {
+                const pct = Math.min(100, Math.round((doneBytes / totalBytes) * 100));
                 if (pct !== lastPct) {
                   lastPct = pct;
                   setEngineStatus(`正在下载 ${name} … ${pct}%${speed > 0 ? `, ${formatSpeed(speed)}` : ""}`);
@@ -1720,35 +1738,13 @@ function MainWindow() {
     if (!name || !path) { setEngineStatus("请填写模型名称和 GGUF 文件路径"); return; }
     if (/\s/.test(name) || !/^[A-Za-z0-9._:\/-]+$/.test(name)) { setEngineStatus("模型名称只能包含字母、数字、. _ : - /"); return; }
     setImportBusy(true);
-    setImportStatus("正在创建模型(大文件可能需要几分钟)…");
+    setImportStatus("准备导入…");
     setEngineStatus(`正在导入 ${name} …`);
+    const ch = new Channel<string>();
+    ch.onmessage = (s) => setImportStatus(s);
     try {
-      const resp = await fetch(`${OLLAMA_BASE}/api/create`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: name, modelfile: `FROM ${path.replace(/\\/g, "/")}`, stream: true }),
-      });
-      if (!resp.ok) {
-        const t = await resp.text().catch(() => "");
-        throw new Error(`HTTP ${resp.status} ${t.slice(0, 160)}`);
-      }
-      const reader = resp.body!.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() || "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          let d: any;
-          try { d = JSON.parse(line); } catch { continue; }
-          if (d.error) throw new Error(d.error);
-          setImportStatus(d.status === "success" ? "导入完成" : d.status);
-        }
-      }
+      /* 大文件上传/转换走 Rust 端(import_gguf_model:算 sha256 → 上传 blob → /api/create files) */
+      await invoke<string>("import_gguf_model", { model: name, path, onStatus: ch });
       await refreshLocalModels(true);
       setModel(name);
       setEngineMode("local");

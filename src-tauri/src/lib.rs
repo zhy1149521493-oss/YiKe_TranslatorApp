@@ -15,6 +15,10 @@ struct JobHandle(windows::Win32::Foundation::HANDLE);
 unsafe impl Send for JobHandle {}
 unsafe impl Sync for JobHandle {}
 
+/// 是否为"本应用自带的 Ollama"在提供服务(true=blob 存储就在本目录 models/blobs,可直拷;
+/// false=外部 Ollama 占用了 11434,blob 位置未知,只能走 HTTP 上传)。
+static MANAGED_OLLAMA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// 管理 Ollama serve 子进程的生命周期:应用启动时 spawn,退出时杀进程树。
 /// 用 Windows Job Object(KILL_ON_JOB_CLOSE)托管:应用进程退出时 Job 句柄被内核自动关闭,
 /// 系统随即终止整个 Job 内的进程树(ollama + 它拉起的 llama-server),不依赖析构是否执行。
@@ -552,6 +556,142 @@ async fn api_list_models(base_url: String, api_key: String) -> Result<Vec<String
         }
     }
     Ok(models)
+}
+
+// ============ Wave 10.5: GGUF 本地模型导入 ============
+// Ollama 0.32.x 的 /api/create 不再接受 Modelfile 的 FROM 路径(会报 invalid model name),
+// 正确流程:1) 流式计算文件 sha256;2) 若 blob 尚未存在则 POST /api/blobs/sha256:<digest> 上传;
+// 3) POST /api/create {"model", "files": {"model.gguf": "sha256:<digest>"}}。
+// 大文件走 Rust 端 reqwest 流式上传,避免 WebView 内存暴涨。
+#[tauri::command]
+async fn import_gguf_model(model: String, path: String, on_status: tauri::ipc::Channel<String>) -> Result<String, String> {
+    use sha2::Digest;
+    use std::io::Read;
+
+    let model = model.trim().to_string();
+    if model.is_empty()
+        || model.chars().any(|c| c.is_whitespace())
+        || !model.chars().all(|c| c.is_ascii_alphanumeric() || "._:-/".contains(c))
+    {
+        return Err("模型名称只能包含字母、数字、. _ : - /".to_string());
+    }
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        return Err("请填写 GGUF 文件路径".to_string());
+    }
+
+    let _ = on_status.send("正在校验文件(计算 SHA-256)…".into());
+    // 1) 流式计算 sha256(1MB 块,大文件不占内存)
+    let mut file = std::fs::File::open(&path).map_err(|e| format!("无法打开文件: {e}"))?;
+    let size = file
+        .metadata()
+        .map_err(|e| format!("读取文件信息失败: {e}"))?
+        .len();
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("读取文件失败: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let hex = format!("{:x}", hasher.finalize());
+    let digest = format!("sha256:{hex}");
+    eprintln!("[import] model={model} size={size} digest={digest}");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+
+    // 2) 把 GGUF 变成 Ollama 的 blob(内容寻址:文件名 sha256-<hex> 即校验)
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.to_path_buf()));
+    let local_blob = exe_dir
+        .as_ref()
+        .map(|d| d.join("models").join("blobs").join(format!("sha256-{hex}")));
+    let managed = MANAGED_OLLAMA.load(std::sync::atomic::Ordering::SeqCst);
+    let mut need_upload = true;
+    if managed {
+        // 自带 Ollama:blob 存储就是本目录 models/blobs,直接拷贝(内容寻址)
+        if let Some(blob) = &local_blob {
+            if !blob.exists() {
+                let _ = on_status.send(if size >= 1024 * 1024 * 1024 {
+                    "正在复制模型文件到模型库(大文件需要一点时间)…".into()
+                } else {
+                    "正在复制模型文件到模型库…".into()
+                });
+                if let Some(parent) = blob.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                std::fs::copy(&path, blob).map_err(|e| format!("复制模型文件失败: {e}"))?;
+            }
+            need_upload = false;
+        }
+    }
+    if need_upload {
+        let _ = on_status.send(if size >= 1024 * 1024 * 1024 {
+            "正在上传模型文件(大文件需要几分钟)…".into()
+        } else {
+            "正在上传模型文件…".into()
+        });
+        let up = std::fs::File::open(&path).map_err(|e| format!("无法打开文件: {e}"))?;
+        let stream = futures_util::stream::unfold(up, |mut f| async move {
+            let mut chunk = vec![0u8; 1 << 20];
+            match f.read(&mut chunk) {
+                Ok(0) => None,
+                Ok(n) => Some((Ok::<_, std::io::Error>(chunk[..n].to_vec()), f)),
+                Err(e) => Some((Err(e), f)),
+            }
+        });
+        let body = reqwest::Body::wrap_stream(stream);
+        let resp = client
+            .post(format!("http://127.0.0.1:11434/api/blobs/{digest}"))
+            .header("Content-Type", "application/octet-stream")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| format!("上传失败: {e}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "上传失败(HTTP {}): {}",
+                status,
+                text.chars().take(200).collect::<String>()
+            ));
+        }
+    }
+
+    // 3) 创建模型(files 方式;stream=false 一次性返回)
+    let _ = on_status.send("正在创建模型(解析/转换 GGUF)…".into());
+    let create_body = serde_json::json!({
+        "model": model,
+        "files": { "model.gguf": digest },
+        "stream": false,
+    });
+    let resp = client
+        .post("http://127.0.0.1:11434/api/create")
+        .json(&create_body)
+        .send()
+        .await
+        .map_err(|e| format!("创建请求失败: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "创建模型失败(HTTP {}): {}",
+            status,
+            text.chars().take(200).collect::<String>()
+        ));
+    }
+    let _ = on_status.send("导入完成".into());
+    eprintln!("[import] {model} created OK");
+    Ok(model)
 }
 
 // ============ 第7波:音频实时翻译 commands ============
@@ -1198,7 +1338,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
             // 【Ollama 启动(Wave 10 便携版)】
             // 1) 先清理上次退出异常留下的"本应用目录" ollama(按 exe 路径匹配,不误杀朋友系统的 Ollama)
@@ -1234,6 +1374,7 @@ pub fn run() {
                     // 不阻塞应用,翻译功能暂时不可用
                 } else {
                     eprintln!("[ollama] serve started OK");
+                    MANAGED_OLLAMA.store(true, std::sync::atomic::Ordering::SeqCst);
                 }
             }
             app.manage(mgr);
