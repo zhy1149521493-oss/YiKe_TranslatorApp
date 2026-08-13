@@ -598,6 +598,8 @@ body,
   overflow: hidden;
 }
 .voice-slot {
+  width: 100%;
+  box-sizing: border-box;
   border-radius: 10px;
   overflow: hidden;
 }
@@ -611,6 +613,8 @@ body,
 }
 .voice-prev {
   animation: voice-up 0.26s ease-out;
+  width: 100%;
+  box-sizing: border-box;
   font-size: 12px;
   color: var(--ios-secondary);
   line-height: 1.5;
@@ -620,6 +624,8 @@ body,
   overflow: auto;
 }
 .voice-cur {
+  width: 100%;
+  box-sizing: border-box;
   font-size: 13px;
   color: var(--ios-text);
   line-height: 1.55;
@@ -628,11 +634,13 @@ body,
   overflow: auto;
 }
 .voice-text {
+  width: 100%;
   word-break: break-word;
   white-space: pre-wrap;
   color: var(--ios-secondary); /* 原文:次要色,避免被误认为译文 */
 }
 .voice-result {
+  width: 100%;
   margin-top: 5px;
   font-size: 12px;
   color: var(--ios-text);

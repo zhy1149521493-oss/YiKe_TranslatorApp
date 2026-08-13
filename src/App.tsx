@@ -2321,9 +2321,9 @@ function FloatingWindow() {
 function AudioFloatingWindow() {
   const source = appWindow.label === "audio-floating-mic" ? "mic" : "system";
   const isMic = source === "mic";
-  /* 两句显示:prev=上一句(定稿,译文可能仍在翻译中),cur=正在识别/生成的一句 */
-  const [prev, setPrev] = useState<{ text: string; result: string } | null>(null);
-  const [cur, setCur] = useState<{ text: string; result: string }>({ text: "", result: "" });
+  /* 两句显示:hist 保留最近几句(最后一项=当前句,可能为空)。
+     译文异步到达时按 text 匹配历史中的句子补上,避免"滚动后句子被覆盖导致译文丢失"。 */
+  const [hist, setHist] = useState<{ text: string; result: string }[]>([{ text: "", result: "" }]);
   const [status, setStatus] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   // 断句灵敏度(共享):语言 → 秒
@@ -2391,25 +2391,28 @@ function AudioFloatingWindow() {
 
   useEffect(() => {
     // Rust 侧通过 eval 调用 window.__audioShow(payload) 注入定稿/译文数据:
-    //   result 为空 = 一句定稿开始翻译 → 当前句滚到上方成为"上一句",下方清空开始下一句;
-    //   result 非空 = 译文完成 → 按 text 匹配更新当前句或上一句的译文(滚动后译文异步回来)。
+    //   result 为空 = 一句定稿开始翻译 → 当前句滚入历史(成为上一句),追加空的当前句;
+    //   result 非空 = 译文完成 → 按 text 匹配历史中的句子补上译文(即使期间又滚动了也不丢)。
     const show = (p: { text: string; src: string; tgt: string; result: string }) => {
-      if (!p.text) { setPrev(null); setCur({ text: "", result: "" }); setStatus(null); return; } // 空 payload = 清空,准备下一句
+      if (!p.text) { setHist([{ text: "", result: "" }]); setStatus(null); return; } // 空 payload = 清空,准备下一句
       if (!p.result) {
-        // 定稿:当前句(原文)滚到上方成为上一句,当前槽位清空开始下一句
-        setPrev((pr) => ({ text: p.text, result: pr && pr.text === p.text ? pr.result : "" }));
-        setCur({ text: "", result: "" });
+        // 定稿:当前句滚入历史成为上一句,追加空的当前句;最多保留 3 项(上一句+当前句+缓冲)
+        setHist((h) => [...h, { text: p.text, result: "" }].slice(-3));
       } else {
-        // 译文完成:匹配当前句 → 更新当前句;匹配上一句 → 更新上一句(滚动后译文补回)
-        setCur((c) => (c.text === p.text ? { ...c, result: p.result } : c));
-        setPrev((pr) => (pr && pr.text === p.text ? { ...pr, result: p.result } : pr));
+        // 译文完成:按 text 匹配历史中的句子补上译文
+        setHist((h) => h.map((x) => (x.text === p.text ? { ...x, result: p.result } : x)));
       }
       setStatus(null);
     };
     (window as any).__audioShow = show;
     // Rust 实时转发 partial:正在识别的一句原文实时增长
     (window as any).__audioPartial = (text: string) => {
-      setCur((c) => ({ ...c, text }));
+      // 更新最后一项(当前句)的原文
+      setHist((h) => {
+        if (h.length === 0) return [{ text, result: "" }];
+        const last = h[h.length - 1];
+        return [...h.slice(0, -1), { ...last, text }];
+      });
       setStatus(null);
     };
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
@@ -2421,8 +2424,7 @@ function AudioFloatingWindow() {
       (e) => setStatus(e.payload)
     );
     const c = appWindow.listen("audio-close-me", () => {
-      setPrev(null);
-      setCur({ text: "", result: "" });
+      setHist([{ text: "", result: "" }]);
       closeAndStop();
     });
     return () => {
@@ -2435,8 +2437,7 @@ function AudioFloatingWindow() {
 
   /* 关闭语音窗并同步停止音频字幕 */
   const closeAndStop = () => {
-    setPrev(null);
-    setCur({ text: "", result: "" });
+    setHist([{ text: "", result: "" }]);
     // 通知主窗口更新状态(音频字幕已关)
     appWindow.emitTo("main", "audio-floating-closed", { source }).catch(() => {});
     invoke("close_audio_floating_window", { source }).catch(() => {});
@@ -2495,24 +2496,24 @@ function AudioFloatingWindow() {
           ) : (
             <>
               {/* 上一句(定稿):key 变化时播放上滚动画 */}
-              <div className="voice-slot voice-prev-slot">
-                {prev && (
-                  <div key={`${prev.text}|${prev.result}`} className="voice-prev">
-                    <div className="voice-text">{prev.text}</div>
-                    {prev.result && <div className="voice-result">{prev.result}</div>}
+              {hist.length >= 2 && hist[hist.length - 2].text && (
+                <div className="voice-slot voice-prev-slot">
+                  <div key={`${hist[hist.length - 2].text}|${hist[hist.length - 2].result}`} className="voice-prev">
+                    <div className="voice-text">{hist[hist.length - 2].text}</div>
+                    {hist[hist.length - 2].result && <div className="voice-result">{hist[hist.length - 2].result}</div>}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
               {/* 正在识别/生成的一句 */}
               <div className="voice-slot voice-cur-slot">
-                {cur.text && (
+                {hist[hist.length - 1].text && (
                   <div className="voice-cur">
-                    <div className="voice-text">{cur.text}</div>
-                    {cur.result && <div className="voice-result">{cur.result}</div>}
+                    <div className="voice-text">{hist[hist.length - 1].text}</div>
+                    {hist[hist.length - 1].result && <div className="voice-result">{hist[hist.length - 1].result}</div>}
                   </div>
                 )}
               </div>
-              {!prev && !cur.text && (
+              {hist.length === 1 && !hist[0].text && (
                 <div className="floating-hint">
                   <p><Icon name="mic" size={18} /> 音频识别</p>
                   <span>在主窗口点击「音频翻译」开始音频字幕</span>

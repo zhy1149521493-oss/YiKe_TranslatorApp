@@ -86,7 +86,7 @@ pub fn window_label(source: AudioSource) -> &'static str {
 }
 
 /// 断句灵敏度(端点检测):每个语言独立数值(秒),主界面/悬浮窗/设置面板共享
-/// 默认:英语语速快用 0.3s,其余 1.2s
+/// 默认:全部 0.6s(用户 2026-08-13 要求统一)
 static SENSITIVITY: std::sync::OnceLock<Mutex<std::collections::HashMap<String, f32>>> =
     std::sync::OnceLock::new();
 
@@ -94,11 +94,11 @@ fn sensitivity_map() -> std::sync::MutexGuard<'static, std::collections::HashMap
     SENSITIVITY
         .get_or_init(|| {
             let mut m = std::collections::HashMap::new();
-            m.insert("auto".to_string(), 1.2);
-            m.insert("zh".to_string(), 1.2);
-            m.insert("en".to_string(), 0.3);
-            m.insert("ja".to_string(), 1.2);
-            m.insert("ko".to_string(), 1.2);
+            m.insert("auto".to_string(), 0.6);
+            m.insert("zh".to_string(), 0.6);
+            m.insert("en".to_string(), 0.6);
+            m.insert("ja".to_string(), 0.6);
+            m.insert("ko".to_string(), 0.6);
             Mutex::new(m)
         })
         .lock()
@@ -107,13 +107,13 @@ fn sensitivity_map() -> std::sync::MutexGuard<'static, std::collections::HashMap
 
 /// 读取某语言的断句灵敏度(秒)
 pub fn get_sensitivity(lang: &str) -> f32 {
-    sensitivity_map().get(lang).copied().unwrap_or(1.2)
+    sensitivity_map().get(lang).copied().unwrap_or(0.6)
 }
 
 /// 设置某语言的断句灵敏度(秒):存值并广播到主界面/语音窗(联动)
 /// 不重启识别器(避免滑块拖动时反复停止);真正生效由 audio_apply_sensitivity 触发
 pub fn set_sensitivity(lang: &str, value: f32, app: &AppHandle) {
-    let clamped = if value.is_finite() { value.clamp(0.1, 5.0) } else { 1.2 };
+    let clamped = if value.is_finite() { value.clamp(0.1, 5.0) } else { 0.6 };
     sensitivity_map().insert(lang.to_string(), clamped);
     // 广播到主界面与所有语音窗(用 eval,跨窗口事件不可靠);广播 clamp 后的值,保证两端一致
     let payload = serde_json::json!({ "lang": lang, "value": clamped }).to_string();
