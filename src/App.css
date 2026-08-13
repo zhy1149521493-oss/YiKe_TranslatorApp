@@ -1210,6 +1210,11 @@ body,
   color: var(--ios-secondary);
   white-space: nowrap;
 }
+.pull-job-layer {
+  font-size: 11px;
+  color: var(--ios-secondary);
+  opacity: 0.85;
+}
 .pull-progress-bar {
   width: 100%;
   height: 6px;

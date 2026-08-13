@@ -513,8 +513,8 @@ async function translateStream(
   if (eng.kind === "api") return fetchApiStream(eng.provider, source, target, text, onToken, signal, onReasoning);
   /* 无本地模型守卫:给友好提示而不是裸 API 报错(列表加载完才开始拦截,避免启动瞬间误报) */
   if (localModelsReady) {
-    if (localModelStore.length === 0) throw new Error("尚未配置本地模型:请到「设置 → 模型」下载或导入模型后再翻译");
-    if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载或导入`);
+    if (localModelStore.length === 0) throw new Error("尚未配置本地模型:请到「设置 → 模型」下载/导入,或在「外接 API」配置云端模型后再翻译");
+    if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载/导入,或切换到外接 API 模型`);
   }
   return fetchOllamaStream(model, source, target, text, numCtx, onToken, signal);
 }
@@ -523,8 +523,8 @@ async function translateFull(model: string, source: string, target: string, text
   const eng = resolveEngine();
   if (eng.kind === "api") return fetchApiFull(eng.provider, source, target, text);
   if (localModelsReady) {
-    if (localModelStore.length === 0) throw new Error("尚未配置本地模型:请到「设置 → 模型」下载或导入模型后再翻译");
-    if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载或导入`);
+    if (localModelStore.length === 0) throw new Error("尚未配置本地模型:请到「设置 → 模型」下载/导入,或在「外接 API」配置云端模型后再翻译");
+    if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载/导入,或切换到外接 API 模型`);
   }
   return fetchOllamaFull(model, source, target, text, numCtx);
 }
@@ -555,7 +555,7 @@ function MainWindow() {
   /* Wave 10.5: 本地模型管理(模型页:列表/下载/删除/导入 GGUF) */
   const [localModels, setLocalModels] = useState<LocalModelInfo[]>([]);
   const [localModelsLoaded, setLocalModelsLoaded] = useState(false);
-  const [pullJobs, setPullJobs] = useState<Record<string, { status: string; progress: number; total: number; speed?: number }>>({});
+  const [pullJobs, setPullJobs] = useState<Record<string, { status: string; progress: number; total: number; speed?: number; layer?: string }>>({});
   /* 下载速度计算基准:按层记录 completed/时间戳,层切换时重置 */
   const pullSpeedRef = useRef<Record<string, { lastCompleted: number; lastTime: number; lastSpeed: number; lastTotal: number }>>({});
   const [importName, setImportName] = useState("");
@@ -1627,38 +1627,44 @@ function MainWindow() {
           let d: any;
           try { d = JSON.parse(line); } catch { continue; }
           if (d.error) throw new Error(d.error);
-          if (d.status === "downloading") {
-            const progress = d.completed || 0;
-            const total = d.total || 0;
-            /* 速度:同层内按 completed 增量/时间窗平滑计算;换层(层大小不同)重置基准 */
-            const now = Date.now();
-            const snap = pullSpeedRef.current[name];
-            let speed = snap?.lastSpeed ?? 0;
-            if (snap && total > 0) {
-              if (snap.lastTotal === total && progress > snap.lastCompleted) {
-                const dt = (now - snap.lastTime) / 1000;
-                if (dt > 0) {
-                  const inst = (progress - snap.lastCompleted) / dt;
-                  speed = snap.lastSpeed > 0 ? snap.lastSpeed * 0.7 + inst * 0.3 : inst;
-                }
-              } else if (snap.lastTotal !== total) {
-                speed = 0; // 新层开始,重新累计
-              }
-            }
-            pullSpeedRef.current[name] = { lastCompleted: progress, lastTime: now, lastSpeed: speed, lastTotal: total };
-            setPullJobs((prev) => ({ ...prev, [name]: { status: "downloading", progress, total, speed } }));
-            if (total > 0) {
-              const pct = Math.min(100, Math.round((progress / total) * 100));
-              if (pct !== lastPct) {
-                lastPct = pct;
-                setEngineStatus(`正在下载 ${name} … ${pct}%${speed > 0 ? `, ${formatSpeed(speed)}` : ""}`);
-              }
-            }
-          } else if (d.status === "success") {
+          if (d.status === "success") {
             setPullJobs((prev) => ({ ...prev, [name]: { status: "success", progress: 1, total: 1 } }));
             setEngineStatus(`模型 ${name} 下载完成`);
           } else {
-            setPullJobs((prev) => ({ ...prev, [name]: { status: d.status, progress: prev[name]?.progress ?? 0, total: prev[name]?.total ?? 0 } }));
+            const total = d.total || 0;
+            const completed = d.completed || 0;
+            /* Ollama 0.32.x 的 pull:进度通过 "pulling <短摘要>" 状态携带 total/completed 上报
+               (缓存层直接 completed==total);"downloading" 是旧格式兼容。只要带 total 就当进度事件处理,
+               否则下载期间进度会一直卡在 0%。 */
+            if (total > 0 || d.status === "downloading") {
+            /* 速度:同层内按 completed 增量/时间窗平滑计算;换层(层大小不同)重置基准 */
+              const now = Date.now();
+              const snap = pullSpeedRef.current[name];
+              let speed = snap?.lastSpeed ?? 0;
+              if (snap && total > 0) {
+                if (snap.lastTotal === total && completed > snap.lastCompleted) {
+                  const dt = (now - snap.lastTime) / 1000;
+                  if (dt > 0) {
+                    const inst = (completed - snap.lastCompleted) / dt;
+                    speed = snap.lastSpeed > 0 ? snap.lastSpeed * 0.7 + inst * 0.3 : inst;
+                  }
+                } else if (snap.lastTotal !== total) {
+                  speed = 0; // 新层开始,重新累计
+                }
+              }
+              pullSpeedRef.current[name] = { lastCompleted: completed, lastTime: now, lastSpeed: speed, lastTotal: total };
+              const layer = typeof d.digest === "string" ? d.digest.replace(/^sha256:/, "").slice(0, 12) : "";
+              setPullJobs((prev) => ({ ...prev, [name]: { status: "downloading", progress: completed, total, speed, layer } }));
+              if (total > 0) {
+                const pct = Math.min(100, Math.round((completed / total) * 100));
+                if (pct !== lastPct) {
+                  lastPct = pct;
+                  setEngineStatus(`正在下载 ${name} … ${pct}%${speed > 0 ? `, ${formatSpeed(speed)}` : ""}`);
+                }
+              }
+            } else {
+              setPullJobs((prev) => ({ ...prev, [name]: { status: d.status, progress: prev[name]?.progress ?? 0, total: prev[name]?.total ?? 0 } }));
+            }
           }
         }
       }
@@ -1957,7 +1963,7 @@ function MainWindow() {
                 <div className="engine-menu">
                   <div className="engine-menu-title">翻译引擎</div>
                   {localModelsLoaded && menuLocalModels.length === 0 && (
-                    <div className="engine-menu-empty">还没有本地模型:到 设置 → 模型 下载或导入</div>
+                    <div className="engine-menu-empty">还没有本地模型:到 设置 → 模型 下载/导入,或配置外接 API</div>
                   )}
                   {menuLocalModels.map((m) => {
                     const mn = m.name;
@@ -2210,6 +2216,7 @@ function MainWindow() {
                                 <span className="pull-job-name">{displayName}</span>
                                 <span className="pull-job-meta">{statusText}</span>
                               </div>
+                              {job.status === "downloading" && job.layer && <div className="pull-job-layer">数据层 {job.layer}</div>}
                               <div className="pull-progress-bar">
                                 <span className="pull-progress-fill" style={{ width: `${pct}%` }} />
                               </div>
