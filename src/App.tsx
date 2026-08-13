@@ -762,14 +762,15 @@ function MainWindow() {
   const [audioMode, setAudioMode] = useState<"system" | "mic" | "both">("system"); // 音频来源模式
   const [audioSubOn, setAudioSubOn] = useState<Record<string, boolean>>({});       // 各来源开关
   const [audioStatus, setAudioStatus] = useState<Record<string, string>>({});      // 各来源状态
-  const [audioPartial, setAudioPartial] = useState<Record<string, string>>({});    // 各来源增量文本
+  const [, setAudioPartial] = useState<Record<string, string>>({});                 // 各来源增量文本(仅写入,显示改走 audioHist)
   const [audioLevel, setAudioLevel] = useState<Record<string, number>>({});        // 各来源实时音量(dB)
   const [sensitivities, setSensitivities] = useState<Record<string, number>>({}); // 各语言断句灵敏度(秒)
+  /* 主窗口音频 hist:原文区/译文区四行显示(与语音窗一致,跨来源合并按时间推进) */
+  const [audioHist, setAudioHist] = useState<{ text: string; result: string }[]>([{ text: "", result: "" }]);
 
   // 便捷访问:某来源是否运行 / 状态 / 增量文本
   const isSrcOn = (src: string) => !!audioSubOn[src];
   const srcStatus = (src: string) => audioStatus[src] ?? "";
-  const srcPartial = (src: string) => audioPartial[src] ?? "";
   const srcLevel = (src: string) => audioLevel[src] ?? -100;
 
   /* 读取某语言灵敏度(懒加载:首次从 Rust 拉全部) */
@@ -914,7 +915,7 @@ function MainWindow() {
 
   /* 音频字幕翻译(source: 来源):原文实时增长 + 译文完成后整体替换(保留旧译文,不闪)
      增量时 result="" 只更新原文;译文完成时 result 非空整体替换 */
-  const submitAudioSubtitle = useCallback(async (source: string, text: string) => {
+  const submitAudioSubtitle = useCallback(async (source: string, text: string, isFinal = false) => {
     if (!text.trim()) return;
     if (audioTranslatingRef.current[source]) {
       // 看门狗:同一句翻译超过 65s 未完成 → 强制放锁,让后续句子继续(防外接 API 卡住后"无响应")
@@ -941,10 +942,21 @@ function MainWindow() {
         invoke("audio_forward_to_floating", { source, text, src, tgt, result }).catch((e) => {
           setAudioStatus((prev) => ({ ...prev, [source]: `转发失败: ${JSON.stringify(e)}` }));
         });
-      await send("");
+      // 仅定稿(final)才向语音窗滚动:partial 的原文已由 __audioPartial 实时更新,
+      // 若每次增量都 send("") 会让语音窗每识别一个新词就滚动一次(第一句第二句重复/乱窜)。
+      if (isFinal) await send("");
       let result = await translateFull(model, src, tgt, text, numCtx);
       if (!result.trim()) result = "(空响应)";
-      await send(result);
+      if (isFinal) await send(result);
+      // 主窗口 hist:final = 定稿(当前句滚为上一句,压入空当前句);partial = 译文匹配当前句
+      setAudioHist((h) => {
+        if (isFinal) {
+          const rest = h.slice(0, -1);
+          const finalized = { text, result };
+          return [...rest, finalized, { text: "", result: "" }].slice(-3);
+        }
+        return h.map((x) => (x.text === text ? { ...x, result } : x));
+      });
       setModeOutput((prev) => ({ ...prev, audio: result }));
       setAudioStatus((prev) => ({ ...prev, [source]: "" }));
     } catch (e: any) {
@@ -1054,9 +1066,15 @@ function MainWindow() {
       const trimmed = text.trim();
       setAudioPartial((prev) => ({ ...prev, [source]: trimmed }));
       if (!trimmed) return;
+      // 主窗口 hist:当前句原文实时更新
+      setAudioHist((h) => {
+        if (h.length === 0) return [{ text: trimmed, result: "" }];
+        const last = h[h.length - 1];
+        return [...h.slice(0, -1), { ...last, text: trimmed }];
+      });
       // 与当前定稿句不同才触发累积翻译(同一句内增量变化都要翻,译文跟着增长)
       if (trimmed !== audioFinalRef.current[source]) {
-        submitAudioSubtitle(source, trimmed);
+        submitAudioSubtitle(source, trimmed, false);
       }
     });
     const f = appWindow.listen<{ source: string; text: string }>("audio-final", (e) => {
@@ -1064,7 +1082,7 @@ function MainWindow() {
       const trimmed = text.trim();
       if (!trimmed) return;
       audioFinalRef.current[source] = trimmed;
-      submitAudioSubtitle(source, trimmed);
+      submitAudioSubtitle(source, trimmed, true);
       // 保留最后一句显示(暂停/停顿不清空),新句子到来时自动替换
       setAudioPartial((prev) => ({ ...prev, [source]: trimmed }));
     });
@@ -2086,11 +2104,32 @@ function MainWindow() {
                   <b style={{ fontSize: 11, minWidth: 44 }}>{srcLevel(s).toFixed(1)}dB</b>
                 </div>
               ))}
-              {sourcesForMode(audioMode).filter((s) => srcPartial(s)).map((s) => (
-                <div key={s} className="subtitle-current">
-                  <div className="subtitle-current-src"><Icon name={s === "mic" ? "mic" : "volume"} size={12} /> {srcPartial(s)}</div>
+              {/* 主窗口音频四行显示(与语音窗一致):原文区(上一句+当前句)/译文区(上一句+当前句) */}
+              <div className="voice-panel-main">
+                <div className="voice-section voice-src-section">
+                  <div className="voice-section-label">原文</div>
+                  {audioHist.length >= 2 && audioHist[audioHist.length - 2].text && (
+                    <div key={`msrc-${audioHist[audioHist.length - 2].text}`} className="voice-line voice-line-prev">
+                      {audioHist[audioHist.length - 2].text}
+                    </div>
+                  )}
+                  {audioHist[audioHist.length - 1].text && (
+                    <div className="voice-line voice-line-cur">{audioHist[audioHist.length - 1].text}</div>
+                  )}
                 </div>
-              ))}
+                <div className="voice-divider" />
+                <div className="voice-section voice-result-section">
+                  <div className="voice-section-label">译文</div>
+                  {audioHist.length >= 2 && audioHist[audioHist.length - 2].result && (
+                    <div key={`mres-${audioHist[audioHist.length - 2].result}`} className="voice-line voice-line-prev voice-line-result">
+                      {audioHist[audioHist.length - 2].result}
+                    </div>
+                  )}
+                  {audioHist[audioHist.length - 1].result && (
+                    <div className="voice-line voice-line-cur voice-line-result">{audioHist[audioHist.length - 1].result}</div>
+                  )}
+                </div>
+              </div>
               </div>
             )}
 
@@ -2396,8 +2435,14 @@ function AudioFloatingWindow() {
     const show = (p: { text: string; src: string; tgt: string; result: string }) => {
       if (!p.text) { setHist([{ text: "", result: "" }]); setStatus(null); return; } // 空 payload = 清空,准备下一句
       if (!p.result) {
-        // 定稿:当前句滚入历史成为上一句,追加空的当前句;最多保留 3 项(上一句+当前句+缓冲)
-        setHist((h) => [...h, { text: p.text, result: "" }].slice(-3));
+        // 定稿:当前句(用 final 完整文本)滚为上一句,追加空的当前句;
+        // 不能压入 {text:p.text} 副本——那会让"第一句=第二句"重复。
+        setHist((h) => {
+          const rest = h.slice(0, -1);
+          const cur = h[h.length - 1];
+          const finalized = { text: p.text, result: cur && cur.text === p.text ? cur.result : "" };
+          return [...rest, finalized, { text: "", result: "" }].slice(-3);
+        });
       } else {
         // 译文完成:按 text 匹配历史中的句子补上译文
         setHist((h) => h.map((x) => (x.text === p.text ? { ...x, result: p.result } : x)));

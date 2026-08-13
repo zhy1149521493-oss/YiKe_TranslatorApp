@@ -1258,8 +1258,8 @@ pub fn run() {
                 // 音频字幕独立语音窗(右下角,透明置顶;与视频字幕窗分开)
                 let _ = WebviewWindowBuilder::new(handle, "audio-floating", WebviewUrl::App("index.html".into()))
                     .title("语音窗")
-                    .inner_size(380.0, 440.0) // 四行显示(原文两句 + 译文两句),默认加长(高度),宽度保持 380
-                    .min_inner_size(280.0, 300.0)
+                    .inner_size(380.0, 220.0) // 恢复默认大小(用户要求);四行紧凑显示
+                    .min_inner_size(280.0, 160.0)
                     .resizable(true)
                     .decorations(false)
                     .transparent(true)
@@ -1271,8 +1271,8 @@ pub fn run() {
                 // 麦克风语音窗(独立窗口,与电脑音频窗分开)
                 let _ = WebviewWindowBuilder::new(handle, "audio-floating-mic", WebviewUrl::App("index.html".into()))
                     .title("麦克风语音窗")
-                    .inner_size(380.0, 440.0) // 四行显示(原文两句 + 译文两句),默认加长(高度),宽度保持 380
-                    .min_inner_size(280.0, 300.0)
+                    .inner_size(380.0, 220.0) // 恢复默认大小(用户要求);四行紧凑显示
+                    .min_inner_size(280.0, 160.0)
                     .resizable(true)
                     .decorations(false)
                     .transparent(true)
