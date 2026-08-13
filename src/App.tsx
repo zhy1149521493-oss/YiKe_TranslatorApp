@@ -2117,7 +2117,7 @@ function MainWindow() {
                 </div>
               ))}
               {/* 主窗口音频:只显示原文区(上一句+当前句),不要译文内容(译文在独立译文框) */}
-              {audioHist.some((x) => x.text || x.result) && (
+              {audioHist.some((x) => x.text) && (
               <div className="voice-panel-main">
                 <div className="voice-section voice-src-section">
                   <div className="voice-section-label">原文</div>
@@ -2128,19 +2128,6 @@ function MainWindow() {
                   )}
                   {audioHist[audioHist.length - 1].text && (
                     <div className="voice-line voice-line-cur">{audioHist[audioHist.length - 1].text}</div>
-                  )}
-                </div>
-                <div className="voice-divider" />
-                {/* 译文区(与语音窗一致):译文第一句(已说过) + 译文第二句(正在说) */}
-                <div className="voice-section voice-result-section">
-                  <div className="voice-section-label">译文</div>
-                  {audioHist.length >= 2 && audioHist[audioHist.length - 2].result && (
-                    <div key={`mres-${audioHist[audioHist.length - 2].result}`} className="voice-line voice-line-prev voice-line-result">
-                      {audioHist[audioHist.length - 2].result}
-                    </div>
-                  )}
-                  {audioHist[audioHist.length - 1].result && (
-                    <div className="voice-line voice-line-cur voice-line-result">{audioHist[audioHist.length - 1].result}</div>
                   )}
                 </div>
               </div>
@@ -2195,7 +2182,22 @@ function MainWindow() {
         {/* 译文输出:独立于任务卡,每种模式各自一份互不影响 */}
         <div className="trans-output trans-output-standalone">
           <div className="output-label">译文 {translating && activeMode === "text" && <span className="pulse"><Icon name="dot" size={10} /></span>}{apiThinking && activeMode === "text" && <span className="thinking-hint"><Icon name="sparkle" size={11} /> 模型思考中…</span>}</div>
-          <div className="output-text">{modeOutput[activeMode] || (activeMode === "text" ? (translating ? "" : "输入后自动翻译...") : "暂无译文")}</div>
+          {activeMode === "audio" ? (
+            /* 音频模式:译文区显示两句(译文第一句已说过 + 译文第二句正在说),与语音窗一致 */
+            <div className="output-text output-voice">
+              {audioHist.length >= 2 && audioHist[audioHist.length - 2].result && (
+                <div key={`ores-${audioHist[audioHist.length - 2].result}`} className="voice-line voice-line-prev voice-line-result">
+                  {audioHist[audioHist.length - 2].result}
+                </div>
+              )}
+              {audioHist[audioHist.length - 1].result && (
+                <div className="voice-line voice-line-cur voice-line-result">{audioHist[audioHist.length - 1].result}</div>
+              )}
+              {!audioHist.some((x) => x.result) && <span className="output-empty-hint">暂无译文</span>}
+            </div>
+          ) : (
+            <div className="output-text">{modeOutput[activeMode] || (activeMode === "text" ? (translating ? "" : "输入后自动翻译...") : "暂无译文")}</div>
+          )}
         </div>
       </main>
       )}
