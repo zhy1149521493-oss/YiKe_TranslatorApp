@@ -716,7 +716,6 @@ fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Resu
         eprintln!("[screenshot] ocr start coords=({x},{y},{w},{h})");
         let result: String = (|| {
             let cropped = capture_region(x, y, w, h)?;
-            let _ = cropped.save(app_dir().join("last_screenshot.png"));
             ocr_image(&cropped)
         })().unwrap_or_else(|e| format!("ERROR: {e}"));
         let preview: String = result.chars().take(120).collect();
@@ -1173,6 +1172,27 @@ pub fn run() {
         eprintln!("[single-instance] another instance is running, bringing it to front and exiting");
         std::process::exit(0);
     }
+
+    // 【WebView2 缺失引导(Wave 10)】界面依赖 WebView2 Runtime;
+    // 缺失时 Tauri 窗口必然创建失败,直接提示 + 打开官方下载页 + 退出。
+    if !webview2_installed() {
+        use windows::core::HSTRING;
+        use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
+        let text = HSTRING::from("检测到系统缺少 WebView2 运行时,本应用无法显示界面。\n\n即将打开微软官方下载页,安装后请重新运行本应用。");
+        let title = HSTRING::from("翻译助手");
+        let _ = unsafe { MessageBoxW(None, &text, &title, MB_OK | MB_ICONWARNING) };
+        let _ = StdCommand::new("cmd")
+            .args([
+                "/c",
+                "start",
+                "",
+                "https://developer.microsoft.com/microsoft-edge/webview2/",
+            ])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW:隐藏 cmd 窗口,start 打开默认浏览器
+            .spawn();
+        std::process::exit(1);
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -1386,4 +1406,13 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// 检测 WebView2 Runtime 是否安装(检查 EdgeWebView 安装目录,Win11 一般自带)
+fn webview2_installed() -> bool {
+    let candidates = [
+        r"C:\Program Files (x86)\Microsoft\EdgeWebView\Application",
+        r"C:\Program Files\Microsoft\EdgeWebView\Application",
+    ];
+    candidates.iter().any(|p| std::path::Path::new(p).exists())
 }

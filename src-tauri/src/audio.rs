@@ -35,22 +35,10 @@ fn app_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// 诊断日志:同时输出到 stderr 与 exe 同目录 audio_diag.log
-/// (GUI 运行时没有控制台,文件日志是采集 stderr 的替代通道;排查完 ENG 问题后应移除)
-static DIAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
+/// 诊断日志:仅输出到 stderr(GUI 运行时无控制台,自然丢弃)。
+/// Wave 10 诊断清理:不再写 audio_diag.log 文件,避免交付目录攒垃圾。
 fn diag_log(msg: &str) {
     eprintln!("{msg}");
-    let _g = DIAG_LOCK.lock().unwrap();
-    use std::io::Write;
-    let p = app_dir().join("audio_diag.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-        let _ = writeln!(f, "[{ts:.3}] {msg}");
-    }
 }
 
 /// 全局音频引擎状态:按来源存(电脑音频 / 麦克风),None = 未启动
@@ -410,27 +398,6 @@ unsafe fn parse_format(pwf: *const WAVEFORMATEX) -> (u16, u32, u16, bool) {
     }
 }
 
-/// 写 44 字节标准 PCM WAV 头(mono 16kHz 16-bit);data_len 为样本数据字节数
-/// 用于麦克风信号诊断转储(与 ASR 实际输入一致)
-fn wav_write_header(f: &mut std::fs::File, data_len: u32) -> std::io::Result<()> {
-    use std::io::{Seek, Write};
-    f.seek(std::io::SeekFrom::Start(0))?;
-    f.write_all(b"RIFF")?;
-    f.write_all(&(36u32 + data_len).to_le_bytes())?;
-    f.write_all(b"WAVE")?;
-    f.write_all(b"fmt ")?;
-    f.write_all(&16u32.to_le_bytes())?;
-    f.write_all(&1u16.to_le_bytes())?; // PCM
-    f.write_all(&1u16.to_le_bytes())?; // mono
-    f.write_all(&16000u32.to_le_bytes())?;
-    f.write_all(&32000u32.to_le_bytes())?; // byte rate = 16000 * 2
-    f.write_all(&2u16.to_le_bytes())?; // block align
-    f.write_all(&16u16.to_le_bytes())?; // bits per sample
-    f.write_all(b"data")?;
-    f.write_all(&data_len.to_le_bytes())?;
-    f.flush()
-}
-
 /// 打印 WAVEFORMATEX 细节(含 EXTENSIBLE 的有效位深),用于诊断设备返回格式与数据是否一致
 unsafe fn log_format_details(pwf: *const WAVEFORMATEX, source: AudioSource) {
     let wf = &*pwf;
@@ -582,25 +549,6 @@ fn capture_loop(
 
         let block_align = (bits / 8) as usize * channels as usize;
 
-        // 麦克风诊断:把重采样后(16k 单声道)前 10 秒写入 WAV,便于离线分析信号质量
-        // (与 ASR 实际输入一致;文件在 exe 同目录 mic_diag.wav,每次启动覆盖)
-        let mut wav: Option<(std::fs::File, u32)> = if source == AudioSource::Mic {
-            match std::fs::File::create(app_dir().join("mic_diag.wav")) {
-                Ok(mut f) => {
-                    if wav_write_header(&mut f, 0).is_err() {
-                        diag_log("[audio] WARN: mic_diag.wav header write failed");
-                    }
-                    Some((f, 0))
-                }
-                Err(e) => {
-                    diag_log(&format!("[audio] WARN: mic_diag.wav create failed: {e}"));
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
         let mut diag_frames: u64 = 0;   // 诊断:累计捕获帧数
         let mut diag_last = Instant::now();
         let mut sample_diag_last = Instant::now(); // 样本诊断计时(所有来源)
@@ -736,27 +684,6 @@ fn capture_loop(
                 continue;
             }
 
-            // WAV 诊断:写前 10 秒(重采样后,即 ASR 实际输入)
-            if let Some((f, n)) = wav.as_mut() {
-                use std::io::Write;
-                const MAX_SAMPLES: u32 = 16000 * 10;
-                let remaining = MAX_SAMPLES.saturating_sub(*n);
-                if remaining > 0 {
-                    let take = (resampled.len() as u32).min(remaining);
-                    let mut buf = Vec::with_capacity(take as usize * 2);
-                    for &s in resampled.iter().take(take as usize) {
-                        let v = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-                        buf.extend_from_slice(&v.to_le_bytes());
-                    }
-                    if let Err(e) = f.write_all(&buf) {
-                        diag_log(&format!("[audio] WARN: mic_diag.wav write failed: {e}"));
-                        wav = None;
-                    } else {
-                        *n += take;
-                    }
-                }
-            }
-
             stream.accept_waveform(16000, &resampled);
 
             // 增量解码
@@ -800,15 +727,6 @@ fn capture_loop(
                     }
                 }
             }
-        }
-
-        // 收尾:补全 WAV 头中的样本数
-        if let Some((mut f, n)) = wav {
-            let _ = wav_write_header(&mut f, n * 2);
-            diag_log(&format!(
-                "[audio] mic_diag.wav done: {n} samples ({:.1}s @16k mono)",
-                n as f32 / 16000.0
-            ));
         }
 
         let _ = audio_client.Stop();
