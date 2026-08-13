@@ -878,7 +878,9 @@ function MainWindow() {
         submitSubtitle(t);
       }
     }
-  }, [model, numCtx, independentLang, modeLangs]);
+    // 依赖必须包含 sourceLang/targetLang:independentLang=false 时语言方向取自它们,
+    // 否则闭包捕获旧值,用户改语言方向后字幕/音频/截图翻译仍走旧方向(修复 2026-08-13)
+  }, [model, numCtx, independentLang, modeLangs, sourceLang, targetLang]);
 
   /* 字幕 OCR 结果:去重 → 句子稳定(500ms 去抖)→ 提交翻译 */
   const handleSubtitleOcr = useCallback((text: string) => {
@@ -950,7 +952,9 @@ function MainWindow() {
         submitAudioSubtitle(source, t);
       }
     }
-  }, [model, numCtx, independentLang, modeLangs]);
+    // 依赖必须包含 sourceLang/targetLang:independentLang=false 时语言方向取自它们,
+    // 否则闭包捕获旧值,用户改语言方向后仍走旧方向(修复 2026-08-13)
+  }, [model, numCtx, independentLang, modeLangs, sourceLang, targetLang]);
 
   /* 模式对应的来源列表 */
   const sourcesForMode = useCallback((mode: string): string[] => {
@@ -966,7 +970,7 @@ function MainWindow() {
       setSubtitleOn(false);
       setActiveMode("audio");
       appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
-      const asrLang = sourceLang === "auto" ? "auto" : sourceLang;
+      const asrLang = langFor("audio").src === "auto" ? "auto" : langFor("audio").src;
       for (const src of sourcesForMode(audioMode)) {
         setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
         try {
@@ -989,7 +993,7 @@ function MainWindow() {
         await invoke("close_audio_floating_window", { source: src }).catch(() => {});
       }
     }
-  }, [audioMode, audioSubOn, sourceLang, sourcesForMode]);
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs]);
 
   /* 切换音频来源模式:运行中切换 = 自动关旧来源+启新来源(不停止);
      停止状态切换 = 仅改模式选择 */
@@ -1011,7 +1015,7 @@ function MainWindow() {
       }
     }
     // 再启动新模式里新增的来源 + 开其窗
-    const asrLang = sourceLang === "auto" ? "auto" : sourceLang;
+    const asrLang = langFor("audio").src === "auto" ? "auto" : langFor("audio").src;
     for (const src of newSrcs) {
       if (!oldSrcs.includes(src)) {
         setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
@@ -1025,7 +1029,7 @@ function MainWindow() {
         }
       }
     }
-  }, [audioMode, audioSubOn, sourceLang, sourcesForMode]);
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs]);
 
   /* 监听音频字幕事件(带 source):status/partial/final */
   useEffect(() => {
@@ -1422,7 +1426,9 @@ function MainWindow() {
       (e) => { handleOcrResult(screenshotSource.current, e.payload); }
     );
     return () => { u.then((f) => f()); o.then((f) => f()); };
-  }, [model, numCtx, independentLang, modeLangs]);
+    // 依赖必须包含 sourceLang/targetLang:independentLang=false 时语言方向取自它们,
+    // 否则闭包捕获旧值,用户改语言方向后截图翻译仍走旧方向(修复 2026-08-13)
+  }, [model, numCtx, independentLang, modeLangs, sourceLang, targetLang]);
 
   /* ---- 剪贴板监听:复制即译 ---- */
   useEffect(() => {
