@@ -2375,8 +2375,13 @@ function AudioFloatingWindow() {
     return () => { delete (window as any).__audioSensChanged; };
   }, []);
 
-  /* 修改灵敏度:写 Rust(广播到所有端);松手时应用生效 */
+  /* 修改灵敏度:写 Rust(广播到所有端);松手时应用生效。
+     节流 100ms:拖动滑块会高频触发 onChange,每次都 invoke+eval 广播会让 WebView 忙。 */
+  const sensThrottleRef = useRef(0);
   const changeSens = (lang: string, v: number) => {
+    const now = Date.now();
+    if (now - sensThrottleRef.current < 100) return;
+    sensThrottleRef.current = now;
     setSens((prev) => ({ ...prev, [lang]: v }));
     invoke("audio_set_sensitivity", { lang, value: v }).catch(() => {});
   };

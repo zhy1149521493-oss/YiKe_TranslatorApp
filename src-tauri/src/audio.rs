@@ -125,19 +125,25 @@ pub fn set_sensitivity(lang: &str, value: f32, app: &AppHandle) {
     eprintln!("[audio] sensitivity {lang}={clamped} stored + broadcast");
 }
 
-/// 应用某语言的灵敏度(重启识别器使端点参数生效);由滑块松手时调用,避免拖动过程反复重启
+/// 应用某语言的灵敏度(重启识别器使端点参数生效);由滑块松手时调用,避免拖动过程反复重启。
+/// 整个重启放到后台线程执行:模型重载需要数秒,且 stop() 的 join 等待不能阻塞
+/// Tauri 的 command 线程(否则 invoke 卡住,UI 表现为"未响应")。
 pub fn apply_sensitivity(lang: &str, app: &AppHandle) {
-    // 所有运行中的引擎,若其语言匹配则重启
-    for (source, e) in engine().clone() {
-        let running = e.running.load(Ordering::SeqCst);
-        let cur_lang = e.lang.lock().unwrap().clone();
-        eprintln!("[audio] apply_sensitivity source={:?} lang={lang} running={running} cur_lang={cur_lang}", source);
-        if running && cur_lang == lang {
-            eprintln!("[audio] sensitivity applied, restarting recognizer (source={:?} lang={lang})", source);
-            stop(source);
-            let _ = start(source, &lang, app.clone());
+    let app2 = app.clone();
+    let lang = lang.to_string();
+    std::thread::spawn(move || {
+        // 所有运行中的引擎,若其语言匹配则重启
+        for (source, e) in engine().clone() {
+            let running = e.running.load(Ordering::SeqCst);
+            let cur_lang = e.lang.lock().unwrap().clone();
+            eprintln!("[audio] apply_sensitivity source={:?} lang={lang} running={running} cur_lang={cur_lang}", source);
+            if running && cur_lang == lang {
+                eprintln!("[audio] sensitivity applied, restarting recognizer (source={:?} lang={lang})", source);
+                stop(source);
+                let _ = start(source, &lang, app2.clone());
+            }
         }
-    }
+    });
 }
 
 /// 获取所有语言的断句灵敏度

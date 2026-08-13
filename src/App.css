@@ -614,8 +614,6 @@ body,
   font-size: 12px;
   color: var(--ios-secondary);
   line-height: 1.5;
-  background: rgba(128, 128, 128, 0.08);
-  border-radius: 8px;
   padding: 7px 9px;
   opacity: 0.75;
   max-height: 100%;
@@ -625,8 +623,6 @@ body,
   font-size: 13px;
   color: var(--ios-text);
   line-height: 1.55;
-  background: rgba(var(--ios-accent-rgb, 0, 122, 255), 0.07);
-  border-radius: 8px;
   padding: 7px 9px;
   height: 100%;
   overflow: auto;
@@ -634,11 +630,13 @@ body,
 .voice-text {
   word-break: break-word;
   white-space: pre-wrap;
+  color: var(--ios-secondary); /* 原文:次要色,避免被误认为译文 */
 }
 .voice-result {
   margin-top: 5px;
   font-size: 12px;
   color: var(--ios-text);
+  font-weight: 600; /* 译文:加粗醒目,一眼可辨 */
   word-break: break-word;
   white-space: pre-wrap;
 }
