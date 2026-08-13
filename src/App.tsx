@@ -1618,13 +1618,13 @@ function MainWindow() {
     }
   };
 
-  /* 删除本地模型(POST /api/delete);若删的是当前模型,自动切换到剩余模型 */
+  /* 删除本地模型(DELETE /api/delete);若删的是当前模型,自动切换到剩余模型 */
   const deleteLocalModel = async (name: string) => {
     setConfirmDeleteModel(null);
     setEngineStatus(`正在删除 ${name} …`);
     try {
       const resp = await fetch(`${OLLAMA_BASE}/api/delete`, {
-        method: "POST",
+        method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
