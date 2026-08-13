@@ -2117,7 +2117,7 @@ function MainWindow() {
                 </div>
               ))}
               {/* 主窗口音频:只显示原文区(上一句+当前句),不要译文内容(译文在独立译文框) */}
-              {audioHist.some((x) => x.text) && (
+              {audioHist.some((x) => x.text || x.result) && (
               <div className="voice-panel-main">
                 <div className="voice-section voice-src-section">
                   <div className="voice-section-label">原文</div>
@@ -2128,6 +2128,19 @@ function MainWindow() {
                   )}
                   {audioHist[audioHist.length - 1].text && (
                     <div className="voice-line voice-line-cur">{audioHist[audioHist.length - 1].text}</div>
+                  )}
+                </div>
+                <div className="voice-divider" />
+                {/* 译文区(与语音窗一致):译文第一句(已说过) + 译文第二句(正在说) */}
+                <div className="voice-section voice-result-section">
+                  <div className="voice-section-label">译文</div>
+                  {audioHist.length >= 2 && audioHist[audioHist.length - 2].result && (
+                    <div key={`mres-${audioHist[audioHist.length - 2].result}`} className="voice-line voice-line-prev voice-line-result">
+                      {audioHist[audioHist.length - 2].result}
+                    </div>
+                  )}
+                  {audioHist[audioHist.length - 1].result && (
+                    <div className="voice-line voice-line-cur voice-line-result">{audioHist[audioHist.length - 1].result}</div>
                   )}
                 </div>
               </div>
