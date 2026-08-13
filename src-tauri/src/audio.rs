@@ -705,6 +705,12 @@ fn capture_loop(
                         ));
                         let r = app.emit_to("main", "audio-partial", serde_json::json!({ "source": source.as_str(), "text": text }));
                         if let Err(e) = &r { diag_log(&format!("[audio] emit audio-partial FAILED: {e}")); }
+                        // 语音窗实时原文:partial 也转发到对应语音窗(两句显示:上一句 + 正在生成的一句)
+                        let wlabel = if source == AudioSource::Mic { "audio-floating-mic" } else { "audio-floating" };
+                        if let Some(w) = app.get_webview_window(wlabel) {
+                            let js = format!("window.__audioPartial && window.__audioPartial({})", serde_json::json!(text));
+                            let _ = w.eval(&js);
+                        }
                     }
                     if recognizer.is_endpoint(&stream) {
                         // 端点:定稿整句

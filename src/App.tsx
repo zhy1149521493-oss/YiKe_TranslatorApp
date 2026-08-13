@@ -2321,7 +2321,9 @@ function FloatingWindow() {
 function AudioFloatingWindow() {
   const source = appWindow.label === "audio-floating-mic" ? "mic" : "system";
   const isMic = source === "mic";
-  const [trans, setTrans] = useState<{ text: string; src: string; tgt: string; result: string } | null>(null);
+  /* 两句显示:prev=上一句(定稿,译文可能仍在翻译中),cur=正在识别/生成的一句 */
+  const [prev, setPrev] = useState<{ text: string; result: string } | null>(null);
+  const [cur, setCur] = useState<{ text: string; result: string }>({ text: "", result: "" });
   const [status, setStatus] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   // 断句灵敏度(共享):语言 → 秒
@@ -2383,18 +2385,28 @@ function AudioFloatingWindow() {
   };
 
   useEffect(() => {
-    // Rust 侧通过 eval 调用 window.__audioShow(payload) 注入数据
-    // result 为空 → 只更新原文(保留旧译文);result 非空 → 整体替换(新译文直接换旧译文,不闪)
+    // Rust 侧通过 eval 调用 window.__audioShow(payload) 注入定稿/译文数据:
+    //   result 为空 = 一句定稿开始翻译 → 当前句滚到上方成为"上一句",下方清空开始下一句;
+    //   result 非空 = 译文完成 → 按 text 匹配更新当前句或上一句的译文(滚动后译文异步回来)。
     const show = (p: { text: string; src: string; tgt: string; result: string }) => {
-      if (!p.text) { setTrans(null); setStatus(null); return; } // 空 payload = 清空,准备下一句
+      if (!p.text) { setPrev(null); setCur({ text: "", result: "" }); setStatus(null); return; } // 空 payload = 清空,准备下一句
       if (!p.result) {
-        setTrans((prev) => (prev ? { ...prev, text: p.text } : { text: p.text, src: p.src, tgt: p.tgt, result: "" }));
+        // 定稿:当前句(原文)滚到上方成为上一句,当前槽位清空开始下一句
+        setPrev((pr) => ({ text: p.text, result: pr && pr.text === p.text ? pr.result : "" }));
+        setCur({ text: "", result: "" });
       } else {
-        setTrans({ text: p.text, src: p.src, tgt: p.tgt, result: p.result });
+        // 译文完成:匹配当前句 → 更新当前句;匹配上一句 → 更新上一句(滚动后译文补回)
+        setCur((c) => (c.text === p.text ? { ...c, result: p.result } : c));
+        setPrev((pr) => (pr && pr.text === p.text ? { ...pr, result: p.result } : pr));
       }
       setStatus(null);
     };
     (window as any).__audioShow = show;
+    // Rust 实时转发 partial:正在识别的一句原文实时增长
+    (window as any).__audioPartial = (text: string) => {
+      setCur((c) => ({ ...c, text }));
+      setStatus(null);
+    };
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
       "audio-show-translation",
       (e) => show(e.payload)
@@ -2404,19 +2416,22 @@ function AudioFloatingWindow() {
       (e) => setStatus(e.payload)
     );
     const c = appWindow.listen("audio-close-me", () => {
-      setTrans(null);
+      setPrev(null);
+      setCur({ text: "", result: "" });
       closeAndStop();
     });
     return () => {
       u.then((f) => f()); s.then((f) => f()); c.then((f) => f());
       delete (window as any).__audioShow;
+      delete (window as any).__audioPartial;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* 关闭语音窗并同步停止音频字幕 */
   const closeAndStop = () => {
-    setTrans(null);
+    setPrev(null);
+    setCur({ text: "", result: "" });
     // 通知主窗口更新状态(音频字幕已关)
     appWindow.emitTo("main", "audio-floating-closed", { source }).catch(() => {});
     invoke("close_audio_floating_window", { source }).catch(() => {});
@@ -2472,17 +2487,33 @@ function AudioFloatingWindow() {
         <div className="floating-body">
           {status ? (
             <div className="floating-status">{status}</div>
-          ) : trans ? (
-            <div className="floating-trans">
-              <div className="floating-src">{trans.text}</div>
-              <div className="floating-divider" />
-              <div className="floating-result">{trans.result}</div>
-            </div>
           ) : (
-            <div className="floating-hint">
-              <p><Icon name="mic" size={18} /> 音频识别</p>
-              <span>在主窗口点击「音频翻译」开始音频字幕</span>
-            </div>
+            <>
+              {/* 上一句(定稿):key 变化时播放上滚动画 */}
+              <div className="voice-slot voice-prev-slot">
+                {prev && (
+                  <div key={`${prev.text}|${prev.result}`} className="voice-prev">
+                    <div className="voice-text">{prev.text}</div>
+                    {prev.result && <div className="voice-result">{prev.result}</div>}
+                  </div>
+                )}
+              </div>
+              {/* 正在识别/生成的一句 */}
+              <div className="voice-slot voice-cur-slot">
+                {cur.text && (
+                  <div className="voice-cur">
+                    <div className="voice-text">{cur.text}</div>
+                    {cur.result && <div className="voice-result">{cur.result}</div>}
+                  </div>
+                )}
+              </div>
+              {!prev && !cur.text && (
+                <div className="floating-hint">
+                  <p><Icon name="mic" size={18} /> 音频识别</p>
+                  <span>在主窗口点击「音频翻译」开始音频字幕</span>
+                </div>
+              )}
+            </>
           )}
         </div>
         <div className="floating-resize-zone" onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); invoke("floating_resize_begin", { kind: isMic ? "audioMic" : "audio" }).catch(() => {}); }} title="拖动右下角调整窗口大小" />
