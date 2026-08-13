@@ -1117,6 +1117,19 @@ body,
   flex: 1;
   min-width: 180px;
 }
+.provider-test {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-bottom: 8px;
+  max-width: 100%;
+  word-break: break-all;
+}
+.provider-test.ok {
+  color: #34c759;
+}
+.provider-test.err {
+  color: #d9534f;
+}
 .provider-models {
   display: flex;
   align-items: center;

@@ -568,6 +568,8 @@ function MainWindow() {
   const [activeProviderId, setActiveProviderId] = useState("");
   const [engineStatus, setEngineStatus] = useState("");
   const [detectPicker, setDetectPicker] = useState<{ providerId: string; models: string[]; query: string } | null>(null);
+  /* 外接 API 测试连接的就地反馈:providerId → 状态/消息(按钮旁边直接显示,不依赖页面顶部状态栏) */
+  const [testStates, setTestStates] = useState<Record<string, { state: "testing" | "ok" | "err"; msg: string }>>({});
   /* Wave 10.5: 本地模型管理(模型页:列表/下载/删除/导入 GGUF) */
   const [localModels, setLocalModels] = useState<LocalModelInfo[]>([]);
   const [localModelsLoaded, setLocalModelsLoaded] = useState(false);
@@ -1932,14 +1934,18 @@ function MainWindow() {
     const p = providers.find((x) => x.id === id);
     if (!p) return;
     if (!p.baseUrl.trim() || !p.apiKey.trim() || !p.model.trim()) {
+      setTestStates((prev) => ({ ...prev, [id]: { state: "err", msg: "请先填写 Base URL / API Key / 模型" } }));
       setEngineStatus("请完整填写 Base URL / API Key / 模型");
       return;
     }
+    setTestStates((prev) => ({ ...prev, [id]: { state: "testing", msg: "正在测试连接…" } }));
     setEngineStatus("正在测试连接…");
     try {
       const result = await fetchApiFull(p, "en", "zh", "hello");
+      setTestStates((prev) => ({ ...prev, [id]: { state: "ok", msg: `连接成功: ${result.slice(0, 40)}` } }));
       setEngineStatus(`连接成功: ${result.slice(0, 60)}`);
     } catch (e: any) {
+      setTestStates((prev) => ({ ...prev, [id]: { state: "err", msg: `${e?.message ?? e}` } }));
       setEngineStatus(`测试失败: ${e?.message ?? e}`);
     }
   };
@@ -2360,8 +2366,13 @@ function MainWindow() {
                                 禁用思考
                               </label>
                               <button className="btn-float" onClick={() => openModelPicker(p.id)} title="GET /models 拉取模型列表,点选要添加的(只添加你选的)"><Icon name="search" size={13} /> 检测/选择模型</button>
-                              <button className="btn-float" onClick={() => testProvider(p.id)} title="发一个小翻译请求验证连通性"><Icon name="flask" size={13} /> 测试连接</button>
+                              <button className="btn-float" disabled={testStates[p.id]?.state === "testing"} onClick={() => testProvider(p.id)} title="发一个小翻译请求验证连通性"><Icon name="flask" size={13} /> {testStates[p.id]?.state === "testing" ? "测试中…" : "测试连接"}</button>
                             </div>
+                            {testStates[p.id] && testStates[p.id].state !== "testing" && (
+                              <div className={`provider-test ${testStates[p.id].state}`}>
+                                {testStates[p.id].state === "ok" ? "✓ 连接成功" : `测试失败: ${testStates[p.id].msg}`}
+                              </div>
+                            )}
                             <div className="provider-models">
                               <span className="settings-note">已添加模型(点 × 移除):</span>
                               {p.models.length === 0 && <span className="settings-note">(空,点「检测/选择模型」添加)</span>}
