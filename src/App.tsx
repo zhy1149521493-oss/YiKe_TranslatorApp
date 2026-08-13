@@ -2439,6 +2439,7 @@ function MainWindow() {
                 <div className="settings-section">
                   <h2>关于</h2>
                   <p>译刻 v1.0.0</p>
+                  <p className="settings-note">Copyright © 2026 谨语</p>
                   <p>本地优先的桌面实时翻译工作台:文本 / 划词 / 截图 / 视频字幕 / 音频字幕,支持本地 Ollama 与外接 API 双引擎。</p>
                   <p>杀软(如火绒)可能拦截未签名程序:请加入白名单或信任后再使用;个别老式程序(如 DirectUI、游戏内文本)划词捕获不到。</p>
                 </div>
