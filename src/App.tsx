@@ -1996,7 +1996,7 @@ function MainWindow() {
     <div className="app-main">
       <header className="app-header" onMouseDown={onHeaderMouseDown} onDoubleClick={onHeaderDoubleClick}>
         <div className="app-brand">
-          <h1>翻译助手</h1>
+          <h1>译刻</h1>
           <div className="engine-menu-wrap">
             <button className="engine-pill" onClick={() => setEngineMenuOpen(!engineMenuOpen)} title="切换翻译引擎 / 模型">
               <Icon name={activeApiModel ? "globe" : "dot"} size={13} /> {engineLabelText} <Icon name="chevron" size={11} className="engine-pill-caret" />
@@ -2438,7 +2438,7 @@ function MainWindow() {
               {settingsPage === "about" && (
                 <div className="settings-section">
                   <h2>关于</h2>
-                  <p>翻译助手 v0.1.0(Wave 9 设置中心)</p>
+                  <p>译刻 v1.0.0</p>
                   <p>本地优先的桌面实时翻译工作台:文本 / 划词 / 截图 / 视频字幕 / 音频字幕,支持本地 Ollama 与外接 API 双引擎。</p>
                   <p>杀软(如火绒)可能拦截未签名程序:请加入白名单或信任后再使用;个别老式程序(如 DirectUI、游戏内文本)划词捕获不到。</p>
                 </div>

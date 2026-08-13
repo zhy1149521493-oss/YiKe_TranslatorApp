@@ -1215,7 +1215,7 @@ fn acquire_single_instance() -> bool {
         if already {
             // 已有实例:弹提示后退出(用户决定不做"显示到顶层",只保证单实例)
             let text = HSTRING::from("该应用正在运行");
-            let title = HSTRING::from("翻译助手");
+            let title = HSTRING::from("译刻");
             let _ = MessageBoxW(None, &text, &title, MB_OK | MB_ICONINFORMATION);
             return false;
         }
@@ -1320,7 +1320,7 @@ pub fn run() {
         use windows::core::HSTRING;
         use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
         let text = HSTRING::from("检测到系统缺少 WebView2 运行时,本应用无法显示界面。\n\n即将打开微软官方下载页,安装后请重新运行本应用。");
-        let title = HSTRING::from("翻译助手");
+        let title = HSTRING::from("译刻");
         let _ = unsafe { MessageBoxW(None, &text, &title, MB_OK | MB_ICONWARNING) };
         let _ = StdCommand::new("cmd")
             .args([
@@ -1354,7 +1354,7 @@ pub fn run() {
                 use windows::core::HSTRING;
                 use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
                 let text = HSTRING::from("检测到 11434 端口已被占用(可能已有 Ollama 正在运行)。\n\n请先关闭已有的 Ollama,再重新打开本应用。\n否则本地翻译不可用。");
-                let title = HSTRING::from("翻译助手");
+                let title = HSTRING::from("译刻");
                 let _ = unsafe { MessageBoxW(None, &text, &title, MB_OK | MB_ICONWARNING) };
             } else {
                 let base = app_dir();
