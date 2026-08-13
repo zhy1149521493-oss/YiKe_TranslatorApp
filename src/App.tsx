@@ -938,8 +938,9 @@ function MainWindow() {
       if (src === tgt) tgt = src === "zh" ? "en" : "zh";
       lastAudioTranslatedRef.current[source] = text;
       // 只更新原文(保留旧译文),译文完成后再整体替换
+      const role = isFinal ? "prev" : "cur"; // prev=定稿句(滚为上一句), cur=当前句(增量)
       const send = (result: string) =>
-        invoke("audio_forward_to_floating", { source, text, src, tgt, result }).catch((e) => {
+        invoke("audio_forward_to_floating", { source, text, src, tgt, result, role }).catch((e) => {
           setAudioStatus((prev) => ({ ...prev, [source]: `转发失败: ${JSON.stringify(e)}` }));
         });
       // 仅定稿(final)才向语音窗滚动(压入上一句):partial 的原文已由 __audioPartial 实时更新,
@@ -949,8 +950,17 @@ function MainWindow() {
       if (!result.trim()) result = "(空响应)";
       // partial/final 都向语音窗发译文:partial = 当前句边说边出, final = 定稿句(已滚为上一句)。
       await send(result);
-      // 主窗口 hist:译文按 text 匹配补上(当前句或上一句均可);滚动由 audio-final 监听立即触发
-      setAudioHist((h) => h.map((x) => (x.text === text ? { ...x, result } : x)));
+      // 主窗口 hist:译文按角色直接更新(不依赖 text 匹配——识别增量变化快,匹配会导致译文丢失/滞后)
+      setAudioHist((h) => {
+        if (isFinal) {
+          if (h.length < 2) return h;
+          const i = h.length - 2; // 上一句(定稿句)
+          return h.map((x, j) => (j === i ? { ...x, result } : x));
+        }
+        const i = h.length - 1; // 当前句
+        if (!h[i].text) return h; // 当前句为空(刚定稿滚动)时丢弃 partial 译文,等 final 翻译补
+        return h.map((x, j) => (j === i ? { ...x, result } : x));
+      });
       setModeOutput((prev) => ({ ...prev, audio: result }));
       setAudioStatus((prev) => ({ ...prev, [source]: "" }));
     } catch (e: any) {
@@ -2237,7 +2247,7 @@ function FloatingWindow() {
   }, [mode, appr]);
 
   useEffect(() => {
-    const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
+    const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string; role?: string }>(
       "show-translation",
       (e) => { setTrans(e.payload); setStatus(null); setMode("trans"); }
     );
@@ -2434,7 +2444,7 @@ function AudioFloatingWindow() {
     // Rust 侧通过 eval 调用 window.__audioShow(payload) 注入定稿/译文数据:
     //   result 为空 = 一句定稿开始翻译 → 当前句滚入历史(成为上一句),追加空的当前句;
     //   result 非空 = 译文完成 → 按 text 匹配历史中的句子补上译文(即使期间又滚动了也不丢)。
-    const show = (p: { text: string; src: string; tgt: string; result: string }) => {
+    const show = (p: { text: string; src: string; tgt: string; result: string; role?: string }) => {
       if (!p.text) { setHist([{ text: "", result: "" }]); setStatus(null); return; } // 空 payload = 清空,准备下一句
       if (!p.result) {
         // 定稿:当前句(用 final 完整文本)滚为上一句,追加空的当前句;
@@ -2446,8 +2456,20 @@ function AudioFloatingWindow() {
           return [...rest, finalized, { text: "", result: "" }].slice(-3);
         });
       } else {
-        // 译文完成:按 text 匹配历史中的句子补上译文
-        setHist((h) => h.map((x) => (x.text === p.text ? { ...x, result: p.result } : x)));
+        // 译文完成:按角色直接更新(不依赖 text 匹配——识别增量变化快,匹配会导致译文丢失/滞后)
+        if (p.role === "prev") {
+          setHist((h) => {
+            if (h.length < 2) return h;
+            const i = h.length - 2; // 上一句(定稿句)
+            return h.map((x, j) => (j === i ? { ...x, result: p.result } : x));
+          });
+        } else {
+          setHist((h) => {
+            const i = h.length - 1; // 当前句
+            if (!h[i].text) return h; // 当前句为空(刚定稿滚动)时丢弃 partial 译文,等 final 翻译补
+            return h.map((x, j) => (j === i ? { ...x, result: p.result } : x));
+          });
+        }
       }
       setStatus(null);
     };

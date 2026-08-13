@@ -822,6 +822,7 @@ fn audio_forward_to_floating(
     src: String,
     tgt: String,
     result: String,
+    role: String, // "cur"=当前句(partial 增量翻译), "prev"=上一句(定稿句翻译)
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     use tauri::Manager as _;
@@ -833,7 +834,7 @@ fn audio_forward_to_floating(
         return Err(format!("{label} 窗口不存在"));
     };
     // 转义 payload 为 JS 字符串(JSON 序列化后嵌入)
-    let js_payload = serde_json::json!({ "text": text, "src": src, "tgt": tgt, "result": result }).to_string();
+    let js_payload = serde_json::json!({ "text": text, "src": src, "tgt": tgt, "result": result, "role": role }).to_string();
     let js = format!("window.__audioShow && window.__audioShow({js_payload})");
     w.eval(&js)
         .map_err(|e| format!("eval 到语音窗失败: {e}"))?;
