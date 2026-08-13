@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback, type CSSProperties } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
 import "./App.css";
 
@@ -47,7 +48,7 @@ const SETTINGS_NAV: [string, string][] = [
   ["audio", "音频"],
   ["subtitle", "视频字幕"],
   ["floating", "悬浮窗"],
-  ["providers", "翻译服务"],
+  ["providers", "模型"],
   ["shortcuts", "快捷键"],
   ["about", "关于"],
 ];
@@ -156,7 +157,8 @@ type IconName =
   | "pen" | "mic" | "film" | "camera" | "clipboard" | "settings" | "globe" | "dot"
   | "clock" | "sparkle" | "search" | "flask" | "trash" | "plus" | "up" | "down"
   | "check" | "warn" | "error" | "minimize" | "maximize" | "restore" | "close"
-  | "windows" | "target" | "volume" | "chevron" | "swap" | "play" | "stop";
+  | "windows" | "target" | "volume" | "chevron" | "swap" | "play" | "stop"
+  | "refresh" | "download" | "folder";
 
 function Icon({ name, size = 16, className, style }: { name: IconName; size?: number; className?: string; style?: CSSProperties }) {
   const p: Record<IconName, React.ReactNode> = {
@@ -190,6 +192,9 @@ function Icon({ name, size = 16, className, style }: { name: IconName; size?: nu
     swap: (<><path d="M7 4v13M3 13l4 4 4-4" /><path d="M17 20V7M13 11l4-4 4 4" /></>),
     play: (<path d="M6 4l14 8-14 8V4z" />),
     stop: (<rect x="5" y="5" width="14" height="14" rx="1" />),
+    refresh: (<><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></>),
+    download: (<><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></>),
+    folder: (<><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></>),
   };
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" className={className} style={style} aria-hidden="true">
@@ -199,7 +204,8 @@ function Icon({ name, size = 16, className, style }: { name: IconName; size?: nu
 }
 
 /* ============ 常量 ============ */
-const OLLAMA_API = "http://127.0.0.1:11434/api/generate";
+const OLLAMA_BASE = "http://127.0.0.1:11434";
+const OLLAMA_API = `${OLLAMA_BASE}/api/generate`;
 const CTX_OPTIONS = [512, 1024, 2048, 4096];
 const DEBOUNCE_MS = 600;
 
@@ -250,6 +256,14 @@ function similarity(a: string, b: string): number {
   let inter = 0;
   for (const ch of sa) if (sb.has(ch)) inter++;
   return inter / Math.max(sa.size, sb.size);
+}
+
+/* 本地模型大小显示:字节 → MB / GB */
+function formatModelSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return "";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 1024) return `${Math.round(mb)} MB`;
+  return `${(mb / 1024).toFixed(2)} GB`;
 }
 
 function buildPrompt(
@@ -329,6 +343,8 @@ async function fetchOllamaFull(
 }
 
 /* ============ 外接 API(第 8 波:OpenAI 兼容翻译后端) ============ */
+type LocalModelInfo = { name: string; size: number; modified_at: string };
+
 type ProviderCfg = {
   id: string;
   alias: string;
@@ -502,6 +518,16 @@ function MainWindow() {
   const [activeProviderId, setActiveProviderId] = useState("");
   const [engineStatus, setEngineStatus] = useState("");
   const [detectPicker, setDetectPicker] = useState<{ providerId: string; models: string[]; query: string } | null>(null);
+  /* Wave 10.5: 本地模型管理(模型页:列表/下载/删除/导入 GGUF) */
+  const [localModels, setLocalModels] = useState<LocalModelInfo[]>([]);
+  const [localModelsLoaded, setLocalModelsLoaded] = useState(false);
+  const [pullJobs, setPullJobs] = useState<Record<string, { status: string; progress: number; total: number }>>({});
+  const [importName, setImportName] = useState("");
+  const [importPath, setImportPath] = useState("");
+  const [importBusy, setImportBusy] = useState(false);
+  const [importStatus, setImportStatus] = useState("");
+  const [importDragging, setImportDragging] = useState(false);
+  const [confirmDeleteModel, setConfirmDeleteModel] = useState<string | null>(null);
   const [mainClose, setMainClose] = useState<"hide" | "quit">("hide"); // 主窗口 ✕ 行为(Wave 9 设置面板提供 UI,默认隐藏到托盘)
   const configLoadedRef = useRef(false);
   const loadedCfgRef = useRef<any>(null);
@@ -1505,6 +1531,194 @@ function MainWindow() {
     return () => clearInterval(timer);
   }, [sourceLang, targetLang, model, clipAuto]);
 
+  /* ---- 本地模型管理(Wave 10.5:模型页 列表/下载/删除/导入) ---- */
+  const refreshLocalModels = async (silent = false): Promise<LocalModelInfo[]> => {
+    try {
+      const resp = await fetch(`${OLLAMA_BASE}/api/tags`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const list: LocalModelInfo[] = Array.isArray(data.models) ? data.models : [];
+      setLocalModels(list);
+      setLocalModelsLoaded(true);
+      return list;
+    } catch (e: any) {
+      setLocalModels([]);
+      setLocalModelsLoaded(true);
+      if (!silent) setEngineStatus(`读取本地模型失败: ${e?.message ?? e}`);
+      return [];
+    }
+  };
+  /* 启动后拉取本地模型;若失败(serve 可能还在启动)3 秒后静默重试一次 */
+  useEffect(() => {
+    let alive = true;
+    let t: ReturnType<typeof setTimeout> | undefined;
+    refreshLocalModels().then((list) => {
+      if (!alive || list.length) return;
+      t = setTimeout(() => { refreshLocalModels(true); }, 3000);
+    });
+    return () => { alive = false; if (t) clearTimeout(t); };
+  }, []);
+
+  /* 下载模型(POST /api/pull,流式 NDJSON 进度) */
+  const downloadModel = async (name: string) => {
+    if (pullJobs[name]) return;
+    setPullJobs((prev) => ({ ...prev, [name]: { status: "准备下载…", progress: 0, total: 0 } }));
+    setEngineStatus(`正在下载 ${name} …`);
+    try {
+      const resp = await fetch(`${OLLAMA_BASE}/api/pull`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, stream: true }),
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => "");
+        throw new Error(`HTTP ${resp.status} ${t.slice(0, 120)}`);
+      }
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let lastPct = -1;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let d: any;
+          try { d = JSON.parse(line); } catch { continue; }
+          if (d.error) throw new Error(d.error);
+          if (d.status === "downloading") {
+            const progress = d.completed || 0;
+            const total = d.total || 0;
+            setPullJobs((prev) => ({ ...prev, [name]: { status: "downloading", progress, total } }));
+            if (total > 0) {
+              const pct = Math.min(100, Math.round((progress / total) * 100));
+              if (pct !== lastPct) { lastPct = pct; setEngineStatus(`正在下载 ${name} … ${pct}%`); }
+            }
+          } else if (d.status === "success") {
+            setPullJobs((prev) => ({ ...prev, [name]: { status: "success", progress: 1, total: 1 } }));
+            setEngineStatus(`模型 ${name} 下载完成`);
+          } else {
+            setPullJobs((prev) => ({ ...prev, [name]: { status: d.status, progress: prev[name]?.progress ?? 0, total: prev[name]?.total ?? 0 } }));
+          }
+        }
+      }
+      await refreshLocalModels(true);
+      if (!model) { setModel(name); setEngineMode("local"); }
+    } catch (e: any) {
+      setPullJobs((prev) => ({ ...prev, [name]: { status: `失败: ${e?.message ?? e}`, progress: 0, total: 0 } }));
+      setEngineStatus(`下载 ${name} 失败: ${e?.message ?? e}`);
+    } finally {
+      /* 下载完成后 6 秒自动收起进度条 */
+      setTimeout(() => {
+        setPullJobs((prev) => { const n = { ...prev }; delete n[name]; return n; });
+      }, 6000);
+    }
+  };
+
+  /* 删除本地模型(POST /api/delete);若删的是当前模型,自动切换到剩余模型 */
+  const deleteLocalModel = async (name: string) => {
+    setConfirmDeleteModel(null);
+    setEngineStatus(`正在删除 ${name} …`);
+    try {
+      const resp = await fetch(`${OLLAMA_BASE}/api/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => "");
+        throw new Error(`HTTP ${resp.status} ${t.slice(0, 120)}`);
+      }
+      const list = await refreshLocalModels(true);
+      if (model === name) {
+        const next = list.find((m) => m.name === "maternion/hy-mt2:1.8b")?.name
+          ?? list.find((m) => m.name === "gemma3:4b")?.name
+          ?? list[0]?.name
+          ?? "";
+        setModel(next);
+        setEngineMode("local");
+        setEngineStatus(next ? `已删除 ${name},当前模型切换为 ${next}` : `已删除 ${name},当前没有本地模型了,请下载或导入`);
+      } else {
+        setEngineStatus(`已删除 ${name}`);
+      }
+    } catch (e: any) {
+      setEngineStatus(`删除失败: ${e?.message ?? e}`);
+    }
+  };
+
+  /* 导入本地 GGUF(POST /api/create,Modelfile FROM 绝对路径,流式状态) */
+  const importLocalModel = async () => {
+    const name = importName.trim();
+    const path = importPath.trim();
+    if (!name || !path) { setEngineStatus("请填写模型名称和 GGUF 文件路径"); return; }
+    if (/\s/.test(name) || !/^[A-Za-z0-9._:\/-]+$/.test(name)) { setEngineStatus("模型名称只能包含字母、数字、. _ : - /"); return; }
+    setImportBusy(true);
+    setImportStatus("正在创建模型(大文件可能需要几分钟)…");
+    setEngineStatus(`正在导入 ${name} …`);
+    try {
+      const resp = await fetch(`${OLLAMA_BASE}/api/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: name, modelfile: `FROM ${path.replace(/\\/g, "/")}`, stream: true }),
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => "");
+        throw new Error(`HTTP ${resp.status} ${t.slice(0, 160)}`);
+      }
+      const reader = resp.body!.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let d: any;
+          try { d = JSON.parse(line); } catch { continue; }
+          if (d.error) throw new Error(d.error);
+          setImportStatus(d.status === "success" ? "导入完成" : d.status);
+        }
+      }
+      await refreshLocalModels(true);
+      setModel(name);
+      setEngineMode("local");
+      setEngineStatus(`模型 ${name} 导入完成,已切换为当前模型`);
+      setImportName("");
+      setImportPath("");
+    } catch (e: any) {
+      setImportStatus("");
+      setEngineStatus(`导入失败: ${e?.message ?? e}`);
+    } finally {
+      setImportBusy(false);
+    }
+  };
+
+  /* 文件拖拽取路径(Tauri 拖拽事件自带真实路径,无需文件选择器依赖) */
+  useEffect(() => {
+    let un: (() => void) | undefined;
+    getCurrentWebview().onDragDropEvent((event) => {
+      if (event.payload.type === "enter" || event.payload.type === "over") {
+        setImportDragging(true);
+      } else if (event.payload.type === "leave") {
+        setImportDragging(false);
+      } else if (event.payload.type === "drop") {
+        setImportDragging(false);
+        const p = event.payload.paths.find((x) => /\.gguf$/i.test(x)) ?? event.payload.paths[0];
+        if (p) {
+          setImportPath(p);
+          setEngineStatus(`已选择文件: ${p}`);
+        }
+      }
+    }).then((f) => { un = f; }).catch(() => {});
+    return () => { un?.(); };
+  }, []);
+
   /* ---- 外接 API 供应商管理(第 8 波) ---- */
   const activeProvider = providers.find((p) => p.id === activeProviderId) ?? null;
   /* 顶部模型下拉:本地模型 + 所有已配置供应商的全部 API 模型(直接选,自动切供应商/引擎) */
@@ -1527,8 +1741,14 @@ function MainWindow() {
   const activeApiModel = (engineMode === "api" || engineMode === "auto") && activeProvider && activeProvider.model.trim()
     ? { providerId: activeProvider.id, model: activeProvider.model }
     : null;
+  /* 顶部菜单的本地模型顺序:HY-MT2 → gemma3 → 其他(按名称) */
+  const menuLocalModels = [...localModels].sort((a, b) => {
+    const rank = (n: string) => n === "maternion/hy-mt2:1.8b" ? 0 : n === "gemma3:4b" ? 1 : 2;
+    return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
+  });
   const engineLabelText = (() => {
     if (activeApiModel && activeProvider) return `${activeProvider.alias || "API"} · ${activeApiModel.model}`;
+    if (localModelsLoaded && localModels.length === 0) return "无本地模型";
     if (model === "maternion/hy-mt2:1.8b") return "HY-MT2 · 本地";
     if (model === "gemma3:4b") return "gemma3 · 本地";
     return `${model} · 本地`;
@@ -1678,13 +1898,19 @@ function MainWindow() {
               <>
                 <div className="engine-menu">
                   <div className="engine-menu-title">翻译引擎</div>
-                  <button className={`engine-menu-item${headerEngineValue === "maternion/hy-mt2:1.8b" ? " active" : ""}`} onClick={() => selectHeaderEngine("maternion/hy-mt2:1.8b")}>
-                    {headerEngineValue === "maternion/hy-mt2:1.8b" ? <Icon name="check" size={13} /> : <Icon name="dot" size={13} />} HY-MT2-1.8B (本地 · 推荐)
-                  </button>
-                  <button className={`engine-menu-item${headerEngineValue === "gemma3:4b" ? " active" : ""}`} onClick={() => selectHeaderEngine("gemma3:4b")}>
-                    {headerEngineValue === "gemma3:4b" ? <Icon name="check" size={13} /> : <Icon name="dot" size={13} />} gemma3:4b (本地)
-                  </button>
-                  {apiModelOptions.length > 0 && <div className="engine-menu-divider" />}
+                  {localModelsLoaded && menuLocalModels.length === 0 && (
+                    <div className="engine-menu-empty">还没有本地模型:到 设置 → 模型 下载或导入</div>
+                  )}
+                  {menuLocalModels.map((m) => {
+                    const mn = m.name;
+                    const label = mn === "maternion/hy-mt2:1.8b" ? "HY-MT2-1.8B (本地 · 推荐)" : mn === "gemma3:4b" ? "gemma3:4b (本地)" : `${mn} (本地)`;
+                    return (
+                      <button key={mn} className={`engine-menu-item${headerEngineValue === mn ? " active" : ""}`} onClick={() => selectHeaderEngine(mn)}>
+                        {headerEngineValue === mn ? <Icon name="check" size={13} /> : <Icon name="dot" size={13} />} {label}
+                      </button>
+                    );
+                  })}
+                  {(localModels.length > 0 || !localModelsLoaded) && apiModelOptions.length > 0 && <div className="engine-menu-divider" />}
                   {apiModelOptions.map((o) => (
                     <button key={`${o.providerId}::${o.model}`} className={`engine-menu-item${headerEngineValue === `api:${o.providerId}::${o.model}` ? " active" : ""}`} onClick={() => selectHeaderEngine(`api:${o.providerId}::${o.model}`)}>
                       {headerEngineValue === `api:${o.providerId}::${o.model}` ? <Icon name="check" size={13} /> : <Icon name="globe" size={13} />} {o.label}
@@ -1692,7 +1918,7 @@ function MainWindow() {
                   ))}
                   <div className="engine-menu-divider" />
                   <button className="engine-menu-item manage" onClick={() => { setEngineMenuOpen(false); setSettingsOpen(true); setSettingsPage("providers"); }}>
-                    <Icon name="settings" size={13} /> 管理翻译服务
+                    <Icon name="settings" size={13} /> 管理模型
                   </button>
                 </div>
               </>
@@ -1890,80 +2116,164 @@ function MainWindow() {
               )}
               {settingsPage === "providers" && (
                 <div className="settings-section">
-                  <h2>翻译服务</h2>
-                  <p className="settings-note">供应商 = 外接 API 服务(Base URL + Key + 模型)。不配置时全部走本地模型;顶部模型下拉可直接切换本地/外接。</p>
-                  <div className="settings-row">
-                    <span>当前生效</span>
-                    <select className="tool-select" value={activeProviderId} onChange={(e) => setActiveProviderId(e.target.value)}>
-                      {providers.length === 0 && <option value="">未配置(本地模型)</option>}
-                      {providers.map((p) => <option key={p.id} value={p.id}>{p.alias || p.baseUrl || "(未命名)"}{p.model ? ` · ${p.model}` : ""}</option>)}
-                    </select>
-                    <select className="tool-select" defaultValue="" onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v !== "") addProvider(Number(v)); }} title="按预设新建供应商,自动填 Base URL 和常见模型">
-                      <option value="">按预设新建…</option>
-                      {PROVIDER_PRESETS.map((pr, i) => <option key={pr.name} value={i}>{pr.name}</option>)}
-                    </select>
-                    <button className="btn-float" onClick={() => addProvider()} title="手动新增空供应商"><Icon name="plus" size={13} /> 新增</button>
-                  </div>
+                  <h2>模型</h2>
+                  <p className="settings-note">本地模型由随应用内置的 Ollama 管理;正式发布包不会内置模型,请下载 HY-MT2 / gemma3 或导入自己的 GGUF 文件。外接 API 即云端模型,配置后无需本地显卡。</p>
                   {engineStatus && <p className="settings-note">{engineStatus}</p>}
-                  <div className="provider-list">
-                    {providers.map((p, idx) => {
-                      const isActive = p.id === activeProviderId;
-                      return (
-                        <div className={`provider-card${isActive ? " active" : ""}`} key={p.id}>
-                          <div className="provider-card-head">
-                            <span className="provider-name"><Icon name="dot" size={12} style={{ color: isActive ? "#34c759" : "#c7c7cc" }} /> {p.alias || p.baseUrl || "(未命名)"}</span>
-                            <span className="provider-model">{p.model || "未选模型"}</span>
-                            <div className="provider-actions">
-                              <button className="btn-float" disabled={idx === 0} onClick={() => moveProvider(p.id, -1)} title="上移"><Icon name="up" size={13} /></button>
-                              <button className="btn-float" disabled={idx === providers.length - 1} onClick={() => moveProvider(p.id, 1)} title="下移"><Icon name="down" size={13} /></button>
-                              <button className={`btn-float${isActive ? " active" : ""}`} onClick={() => setActiveProviderId(p.id)} title="设为当前生效供应商">使用</button>
-                              <button className="btn-float" onClick={() => removeProvider(p.id)} title="删除该供应商"><Icon name="trash" size={13} /></button>
-                            </div>
-                          </div>
-                          <div className="provider-fields">
-                            <input className="engine-input" placeholder="别名(如 DeepSeek)" value={p.alias} onChange={(e) => updateProvider(p.id, { alias: e.target.value })} />
-                            <input className="engine-input" placeholder="Base URL(如 https://api.deepseek.com/v1)" value={p.baseUrl} onChange={(e) => updateProvider(p.id, { baseUrl: e.target.value })} spellCheck={false} />
-                          </div>
-                          <div className="provider-fields">
-                            <input className="engine-input" type="password" placeholder="API Key" value={p.apiKey} onChange={(e) => updateProvider(p.id, { apiKey: e.target.value })} autoComplete="off" spellCheck={false} />
-                            <input className="engine-input" style={{ maxWidth: 110 }} type="number" step="0.1" min="0" max="2" placeholder="温度(空=默认)" value={p.temperature} onChange={(e) => updateProvider(p.id, { temperature: e.target.value })} title="留空=不发送(用模型默认);Kimi 只允许 1,DeepSeek 建议 0.1" />
-                            <label className="subtitle-mode" title="推理模型先输出思维链,首字很慢;勾选发送 thinking:disabled 跳过思考(不支持的供应商取消勾选)">
-                              <input type="checkbox" checked={p.noThinking === "1"} onChange={(e) => updateProvider(p.id, { noThinking: e.target.checked ? "1" : "" })} />
-                              禁用思考
-                            </label>
-                            <button className="btn-float" onClick={() => openModelPicker(p.id)} title="GET /models 拉取模型列表,点选要添加的(只添加你选的)"><Icon name="search" size={13} /> 检测/选择模型</button>
-                            <button className="btn-float" onClick={() => testProvider(p.id)} title="发一个小翻译请求验证连通性"><Icon name="flask" size={13} /> 测试连接</button>
-                          </div>
-                          <div className="provider-models">
-                            <span className="settings-note">已添加模型(点 × 移除):</span>
-                            {p.models.length === 0 && <span className="settings-note">(空,点「检测/选择模型」添加)</span>}
-                            {p.models.map((m) => (
-                              <span key={m} className={`model-chip${p.model === m ? " selected" : ""}`}>
-                                {m}
-                                <button className="model-chip-x" title="移除该模型" onClick={() => removeModel(p.id, m)}>×</button>
+
+                  {/* 本地模型 */}
+                  <div className="settings-block">
+                    <div className="settings-block-head">
+                      <h3>本地模型</h3>
+                      <button className="btn-float" onClick={() => refreshLocalModels()} title="重新读取本地模型列表"><Icon name="refresh" size={13} /> 刷新列表</button>
+                    </div>
+                    <div className="settings-row">
+                      <span>下载</span>
+                      <button className="btn-float" disabled={!!pullJobs["maternion/hy-mt2:1.8b"]} onClick={() => downloadModel("maternion/hy-mt2:1.8b")} title="Ollama 模型库 maternion/hy-mt2:1.8b(翻译专用小模型,约 1.1GB)">
+                        <Icon name="download" size={13} /> HY-MT2 (1.8B · 推荐)
+                      </button>
+                      <button className="btn-float" disabled={!!pullJobs["gemma3:4b"]} onClick={() => downloadModel("gemma3:4b")} title="Ollama 模型库 gemma3:4b(通用模型,约 3.3GB)">
+                        <Icon name="download" size={13} /> gemma3 (4B)
+                      </button>
+                    </div>
+                    <div className="local-model-list">
+                      {localModels.length === 0 && (
+                        <p className="settings-note">{localModelsLoaded ? "还没有本地模型:点上方按钮下载,或导入 GGUF 文件。" : "正在读取本地模型列表…"}</p>
+                      )}
+                      {localModels.map((m) => {
+                        const isCurrent = model === m.name;
+                        const job = pullJobs[m.name];
+                        const pct = job && job.total > 0 ? Math.min(100, Math.round((job.progress / job.total) * 100)) : 0;
+                        return (
+                          <div className={`local-model-row${isCurrent ? " active" : ""}`} key={m.name}>
+                            <span className="provider-name">
+                              <Icon name="dot" size={12} style={{ color: isCurrent ? "#34c759" : "#c7c7cc" }} />
+                              {m.name === "maternion/hy-mt2:1.8b" ? "HY-MT2-1.8B" : m.name === "gemma3:4b" ? "gemma3:4b" : m.name}
+                            </span>
+                            <span className="local-model-size">{formatModelSize(m.size)}</span>
+                            {job && (
+                              <span className="pull-progress">
+                                <span className="pull-progress-bar"><span className="pull-progress-fill" style={{ width: `${pct}%` }} /></span>
+                                <span className="pull-status">{job.status === "downloading" ? (job.total > 0 ? `下载中 ${pct}%` : "下载中…") : job.status === "success" ? "完成" : job.status}</span>
                               </span>
-                            ))}
+                            )}
+                            <div className="provider-actions">
+                              {isCurrent ? (
+                                <span className="local-model-current">当前</span>
+                              ) : (
+                                <button className="btn-float" onClick={() => { setModel(m.name); setEngineMode("local"); setEngineStatus(`已切换本地模型: ${m.name}`); }} title="切换为当前模型">使用</button>
+                              )}
+                              <button className="btn-float" onClick={() => setConfirmDeleteModel(m.name)} title={`删除 ${m.name},释放磁盘空间`}><Icon name="trash" size={13} /> 删除</button>
+                            </div>
                           </div>
-                          {detectPicker && detectPicker.providerId === p.id && (
-                            <div className="detect-picker">
-                              <div className="detect-picker-head">
-                                <b>选择要添加的模型(共 {detectPicker.models.length} 个,只添加你点的)</b>
-                                <input className="engine-input" placeholder="搜索模型名..." value={detectPicker.query} onChange={(e) => setDetectPicker({ ...detectPicker, query: e.target.value })} autoFocus spellCheck={false} />
-                                <button className="btn-float" onClick={() => setDetectPicker(null)} title="关闭选择器">完成</button>
-                              </div>
-                              <div className="detect-picker-list">
-                                {detectPicker.models.filter((m) => m.toLowerCase().includes(detectPicker.query.trim().toLowerCase())).map((m) => (
-                                  <button key={m} className={`detect-picker-item${p.models.includes(m) ? " added" : ""}`} onClick={() => pickModel(p.id, m)} title={p.models.includes(m) ? "已添加,点击切换为该模型" : "点击添加该模型并选中"}>
-                                {p.models.includes(m) ? <Icon name="check" size={13} /> : <Icon name="plus" size={13} />} {m}
-                                  </button>
-                                ))}
+                        );
+                      })}
+                    </div>
+                    {confirmDeleteModel && (
+                      <div className="confirm-delete">
+                        <span>删除本地模型 <b>{confirmDeleteModel}</b>?该操作会释放磁盘空间,不可恢复。</span>
+                        <button className="btn-float" onClick={() => setConfirmDeleteModel(null)}>取消</button>
+                        <button className="btn-float danger" onClick={() => deleteLocalModel(confirmDeleteModel)}><Icon name="trash" size={13} /> 确认删除</button>
+                      </div>
+                    )}
+
+                    {/* 导入 GGUF */}
+                    <div className="provider-card import-card">
+                      <div className="provider-card-head">
+                        <span className="provider-name"><Icon name="folder" size={13} /> 导入本地 GGUF 模型</span>
+                        <span className="settings-note">支持 HuggingFace / LM Studio 下载的 .gguf 文件</span>
+                      </div>
+                      <div className="provider-fields">
+                        <input className="engine-input" placeholder="模型名称(如 my-model)" value={importName} onChange={(e) => setImportName(e.target.value)} spellCheck={false} />
+                        <input className="engine-input" placeholder="GGUF 文件路径(可粘贴,或把文件拖到下方区域)" value={importPath} onChange={(e) => setImportPath(e.target.value)} spellCheck={false} />
+                      </div>
+                      <div className={`drop-zone${importDragging ? " dragging" : ""}`} onDragOver={(e) => { e.preventDefault(); setImportDragging(true); }} onDragLeave={() => setImportDragging(false)} onDrop={(e) => { e.preventDefault(); setImportDragging(false); }}>
+                        把 .gguf 文件拖到这里,自动填入路径
+                      </div>
+                      {importStatus && <span className="settings-note">{importStatus}</span>}
+                      <button className="btn-float" disabled={importBusy || !importName.trim() || !importPath.trim()} onClick={() => importLocalModel()}>
+                        {importBusy ? "正在导入…" : <><Icon name="plus" size={13} /> 开始导入</>}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 外接 API(云端模型) */}
+                  <div className="settings-block">
+                    <div className="settings-block-head">
+                      <h3>外接 API(云端模型)</h3>
+                    </div>
+                    <p className="settings-note">供应商 = 外接 API 服务(Base URL + Key + 模型)。不配置时全部走本地模型;顶部模型下拉可直接切换本地/外接。</p>
+                    <div className="settings-row">
+                      <span>当前生效</span>
+                      <select className="tool-select" value={activeProviderId} onChange={(e) => setActiveProviderId(e.target.value)}>
+                        {providers.length === 0 && <option value="">未配置(本地模型)</option>}
+                        {providers.map((p) => <option key={p.id} value={p.id}>{p.alias || p.baseUrl || "(未命名)"}{p.model ? ` · ${p.model}` : ""}</option>)}
+                      </select>
+                      <select className="tool-select" defaultValue="" onChange={(e) => { const v = e.target.value; e.target.value = ""; if (v !== "") addProvider(Number(v)); }} title="按预设新建供应商,自动填 Base URL 和常见模型">
+                        <option value="">按预设新建…</option>
+                        {PROVIDER_PRESETS.map((pr, i) => <option key={pr.name} value={i}>{pr.name}</option>)}
+                      </select>
+                      <button className="btn-float" onClick={() => addProvider()} title="手动新增空供应商"><Icon name="plus" size={13} /> 新增</button>
+                    </div>
+                    <div className="provider-list">
+                      {providers.map((p, idx) => {
+                        const isActive = p.id === activeProviderId;
+                        return (
+                          <div className={`provider-card${isActive ? " active" : ""}`} key={p.id}>
+                            <div className="provider-card-head">
+                              <span className="provider-name"><Icon name="dot" size={12} style={{ color: isActive ? "#34c759" : "#c7c7cc" }} /> {p.alias || p.baseUrl || "(未命名)"}</span>
+                              <span className="provider-model">{p.model || "未选模型"}</span>
+                              <div className="provider-actions">
+                                <button className="btn-float" disabled={idx === 0} onClick={() => moveProvider(p.id, -1)} title="上移"><Icon name="up" size={13} /></button>
+                                <button className="btn-float" disabled={idx === providers.length - 1} onClick={() => moveProvider(p.id, 1)} title="下移"><Icon name="down" size={13} /></button>
+                                <button className={`btn-float${isActive ? " active" : ""}`} onClick={() => setActiveProviderId(p.id)} title="设为当前生效供应商">使用</button>
+                                <button className="btn-float" onClick={() => removeProvider(p.id)} title="删除该供应商"><Icon name="trash" size={13} /></button>
                               </div>
                             </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                    {providers.length === 0 && <p className="settings-note">还没有供应商:用上方「按预设新建」或「新增」添加。</p>}
+                            <div className="provider-fields">
+                              <input className="engine-input" placeholder="别名(如 DeepSeek)" value={p.alias} onChange={(e) => updateProvider(p.id, { alias: e.target.value })} />
+                              <input className="engine-input" placeholder="Base URL(如 https://api.deepseek.com/v1)" value={p.baseUrl} onChange={(e) => updateProvider(p.id, { baseUrl: e.target.value })} spellCheck={false} />
+                            </div>
+                            <div className="provider-fields">
+                              <input className="engine-input" type="password" placeholder="API Key" value={p.apiKey} onChange={(e) => updateProvider(p.id, { apiKey: e.target.value })} autoComplete="off" spellCheck={false} />
+                              <input className="engine-input" style={{ maxWidth: 110 }} type="number" step="0.1" min="0" max="2" placeholder="温度(空=默认)" value={p.temperature} onChange={(e) => updateProvider(p.id, { temperature: e.target.value })} title="留空=不发送(用模型默认);Kimi 只允许 1,DeepSeek 建议 0.1" />
+                              <label className="subtitle-mode" title="推理模型先输出思维链,首字很慢;勾选发送 thinking:disabled 跳过思考(不支持的供应商取消勾选)">
+                                <input type="checkbox" checked={p.noThinking === "1"} onChange={(e) => updateProvider(p.id, { noThinking: e.target.checked ? "1" : "" })} />
+                                禁用思考
+                              </label>
+                              <button className="btn-float" onClick={() => openModelPicker(p.id)} title="GET /models 拉取模型列表,点选要添加的(只添加你选的)"><Icon name="search" size={13} /> 检测/选择模型</button>
+                              <button className="btn-float" onClick={() => testProvider(p.id)} title="发一个小翻译请求验证连通性"><Icon name="flask" size={13} /> 测试连接</button>
+                            </div>
+                            <div className="provider-models">
+                              <span className="settings-note">已添加模型(点 × 移除):</span>
+                              {p.models.length === 0 && <span className="settings-note">(空,点「检测/选择模型」添加)</span>}
+                              {p.models.map((m) => (
+                                <span key={m} className={`model-chip${p.model === m ? " selected" : ""}`}>
+                                  {m}
+                                  <button className="model-chip-x" title="移除该模型" onClick={() => removeModel(p.id, m)}>×</button>
+                                </span>
+                              ))}
+                            </div>
+                            {detectPicker && detectPicker.providerId === p.id && (
+                              <div className="detect-picker">
+                                <div className="detect-picker-head">
+                                  <b>选择要添加的模型(共 {detectPicker.models.length} 个,只添加你点的)</b>
+                                  <input className="engine-input" placeholder="搜索模型名..." value={detectPicker.query} onChange={(e) => setDetectPicker({ ...detectPicker, query: e.target.value })} autoFocus spellCheck={false} />
+                                  <button className="btn-float" onClick={() => setDetectPicker(null)} title="关闭选择器">完成</button>
+                                </div>
+                                <div className="detect-picker-list">
+                                  {detectPicker.models.filter((m) => m.toLowerCase().includes(detectPicker.query.trim().toLowerCase())).map((m) => (
+                                    <button key={m} className={`detect-picker-item${p.models.includes(m) ? " added" : ""}`} onClick={() => pickModel(p.id, m)} title={p.models.includes(m) ? "已添加,点击切换为该模型" : "点击添加该模型并选中"}>
+                                  {p.models.includes(m) ? <Icon name="check" size={13} /> : <Icon name="plus" size={13} />} {m}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {providers.length === 0 && <p className="settings-note">还没有供应商:用上方「按预设新建」或「新增」添加。</p>}
+                    </div>
                   </div>
                 </div>
               )}
