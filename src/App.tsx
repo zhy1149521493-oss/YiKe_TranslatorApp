@@ -2130,9 +2130,8 @@ function MainWindow() {
                     <div className="voice-line voice-line-cur">{audioHist[audioHist.length - 1].text}</div>
                   )}
                 </div>
-                <div className="voice-divider" />
+                {/* 无分隔线、无译文标签:译文内容直接跟在原文下面(原文灰/译文粗已区分) */}
                 <div className="voice-section voice-result-section">
-                  <div className="voice-section-label">译文</div>
                   {audioHist.length >= 2 && audioHist[audioHist.length - 2].result && (
                     <div key={`mres-${audioHist[audioHist.length - 2].result}`} className="voice-line voice-line-prev voice-line-result">
                       {audioHist[audioHist.length - 2].result}
