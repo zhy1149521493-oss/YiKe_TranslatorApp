@@ -505,6 +505,8 @@ function MainWindow() {
   const [mainClose, setMainClose] = useState<"hide" | "quit">("hide"); // 主窗口 ✕ 行为(Wave 9 设置面板提供 UI,默认隐藏到托盘)
   const configLoadedRef = useRef(false);
   const loadedCfgRef = useRef<any>(null);
+  /* ollama 实际推理后端(GPU/CPU):CPU 时提示本地翻译较慢(无 GPU 回退提示) */
+  const [ollamaBackend, setOllamaBackend] = useState("");
   /* Wave 9: 设置中心 / 主题 / 外观 / 快捷键 */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPage, setSettingsPage] = useState<string>("general");
@@ -592,6 +594,12 @@ function MainWindow() {
   };
   // 渲染时同步模块级镜像,供 translateStream/translateFull 路由读取
   engineCfg = { mode: engineMode, providers, activeProviderId };
+
+  /* 监听 ollama 实际推理后端(Rust 解析 serve 日志后广播):cpu → 显示"无 GPU"提示条 */
+  useEffect(() => {
+    const u = appWindow.listen<string>("ollama-backend", (e) => setOllamaBackend(e.payload));
+    return () => { u.then((f) => f()); };
+  }, []);
 
   /* 启动时加载配置(config.json,含引擎 + Wave 9 设置) */
   useEffect(() => {
@@ -1671,6 +1679,12 @@ function MainWindow() {
           <button className="icon-btn win-btn win-close" title="关闭(行为见 设置-常规)" onMouseDown={(e) => e.stopPropagation()} onClick={() => { appWindow.close().catch(() => {}); }}><Icon name="close" size={13} /></button>
         </div>
       </header>
+
+      {ollamaBackend === "cpu" && (
+        <div className="gpu-hint">
+          <Icon name="warn" size={13} /> 未检测到可用 GPU，本地翻译将使用 CPU 模式（速度较慢）
+        </div>
+      )}
 
       {settingsOpen ? (
         <main className="app-body settings-body">

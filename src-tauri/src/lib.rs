@@ -28,7 +28,7 @@ impl OllamaManager {
         Self { child: Mutex::new(None), job: Mutex::new(None) }
     }
 
-    fn start(&self, ollama_exe: &str, models_dir: &str) -> Result<(), String> {
+    fn start(&self, app: tauri::AppHandle, ollama_exe: &str, models_dir: &str) -> Result<(), String> {
         use windows::Win32::Foundation::CloseHandle;
         use windows::Win32::System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
@@ -59,7 +59,7 @@ impl OllamaManager {
         let ollama_dir = std::path::Path::new(ollama_exe)
             .parent()
             .unwrap_or(std::path::Path::new("."));
-        let child = StdCommand::new(ollama_exe)
+        let mut child = StdCommand::new(ollama_exe)
             .arg("serve")
             .current_dir(ollama_dir)
             .env("OLLAMA_MODELS", models_dir)
@@ -67,13 +67,19 @@ impl OllamaManager {
             .env("OLLAMA_ORIGINS", "*") // 允许 tauri:// 页面(null Origin)访问,否则 release 版 fetch 被 403
             .env("OLLAMA_NOHISTORY", "1")
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
             .map_err(|e| {
                 let _ = unsafe { CloseHandle(job) };
                 format!("启动 Ollama 失败: {e}")
             })?;
+
+        // 读取 ollama 的 stderr,解析 GPU 检测日志("inference compute ... library=xxx"),
+        // 把实际后端(cpu/gpu)发给主窗口,前端据此显示"未检测到 GPU,使用 CPU 模式"提示。
+        if let Some(stderr) = child.stderr.take() {
+            spawn_ollama_backend_watcher(stderr, app);
+        }
 
         // 把 ollama 主进程放进 Job;之后它拉起的 llama-server 子进程自动继承同一 Job
         let pid = child.id();
@@ -105,6 +111,39 @@ impl OllamaManager {
         *self.child.lock().unwrap() = Some(child);
         Ok(())
     }
+}
+
+/// 监听 ollama serve 的 stderr:ollama 启动时会输出 "inference compute ... library=CUDA/Vulkan/cpu",
+/// 捕获实际选择的推理后端,emit "ollama-backend"(cpu/gpu) 到主窗口。
+fn spawn_ollama_backend_watcher(stderr: std::process::ChildStderr, app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut reader = std::io::BufReader::new(stderr);
+        let mut emitted = false;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if line.contains("inference compute") {
+                        let backend = line
+                            .split("library=")
+                            .nth(1)
+                            .and_then(|s| s.split(' ').next())
+                            .map(|s| s.trim())
+                            .unwrap_or("cpu");
+                        if !emitted {
+                            emitted = true;
+                            let is_cpu = backend.eq_ignore_ascii_case("cpu");
+                            let _ = app.emit_to("main", "ollama-backend", if is_cpu { "cpu" } else { "gpu" });
+                            eprintln!("[ollama] backend detected: {backend} (is_cpu={is_cpu})");
+                        }
+                    }
+                }
+            }
+        }
+    });
 }
 
 impl Drop for OllamaManager {
@@ -1165,7 +1204,11 @@ pub fn run() {
                     ollama_exe.display(),
                     models_dir.display()
                 );
-                if let Err(e) = mgr.start(&ollama_exe.to_string_lossy(), &models_dir.to_string_lossy()) {
+                if let Err(e) = mgr.start(
+                    app.handle().clone(),
+                    &ollama_exe.to_string_lossy(),
+                    &models_dir.to_string_lossy(),
+                ) {
                     eprintln!("[ollama] start failed: {e}");
                     // 不阻塞应用,翻译功能暂时不可用
                 } else {
