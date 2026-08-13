@@ -299,6 +299,20 @@ body,
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
+}
+.lang-warn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #d9534f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.lang-warn-inline {
+  color: #d9534f;
+  font-weight: 600;
 }
 .lang-sel {
   font-size: var(--w-font, 14px);

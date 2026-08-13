@@ -235,6 +235,8 @@ const LANG_MAP: Record<string, string> = {};
 LANGS.forEach((l) => {
   if (l.code !== "auto") LANG_MAP[l.code] = l.label;
 });
+/* 音频识别(ASR)支持的语言:内嵌 sherpa-onnx 只接了 中/英/日/韩(auto=自动检测) */
+const AUDIO_ASR_LANGS = ["auto", "zh", "en", "ja", "ko"];
 
 /* ============ 工具 ============ */
 function detectLang(text: string): string {
@@ -643,6 +645,7 @@ function MainWindow() {
   };
   const renderLangBar = (mode: "audio" | "subtitle" | "screenshot") => {
     const l = langFor(mode);
+    const asrUnsupported = mode === "audio" && !AUDIO_ASR_LANGS.includes(l.src);
     return (
       <div className="lang-bar lang-center">
         <select className="lang-sel" value={l.src} onChange={(e) => setModeLang(mode, { src: e.target.value })} title="源语言(自动检测=自动识别输入语言)">
@@ -652,6 +655,9 @@ function MainWindow() {
         <select className="lang-sel" value={l.tgt} onChange={(e) => setModeLang(mode, { tgt: e.target.value })} title="目标语言">
           {LANGS.filter((x) => x.code !== "auto").map((x) => <option key={x.code} value={x.code}>{x.label}</option>)}
         </select>
+        {asrUnsupported && (
+          <span className="lang-warn"><Icon name="warn" size={13} /> 音频识别暂不支持{LANGS.find((x) => x.code === l.src)?.label ?? l.src}(仅支持 中文/英语/日语/韩语),开始识别会失败</span>
+        )}
       </div>
     );
   };
@@ -1060,6 +1066,12 @@ function MainWindow() {
       setActiveMode("audio");
       appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
       const asrLang = langFor("audio").src === "auto" ? "auto" : langFor("audio").src;
+      if (!AUDIO_ASR_LANGS.includes(asrLang)) {
+        for (const src of sourcesForMode(audioMode)) {
+          setAudioStatus((prev) => ({ ...prev, [src]: "识别语言不支持(音频识别仅支持 中文/英语/日语/韩语),请先切换语言" }));
+        }
+        return;
+      }
       for (const src of sourcesForMode(audioMode)) {
         setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
         try {
@@ -1105,6 +1117,13 @@ function MainWindow() {
     }
     // 再启动新模式里新增的来源 + 开其窗
     const asrLang = langFor("audio").src === "auto" ? "auto" : langFor("audio").src;
+    if (!AUDIO_ASR_LANGS.includes(asrLang)) {
+      for (const src of newSrcs) {
+        setAudioStatus((prev) => ({ ...prev, [src]: "识别语言不支持(音频识别仅支持 中文/英语/日语/韩语),请先切换语言" }));
+        setAudioSubOn((prev) => ({ ...prev, [src]: false }));
+      }
+      return;
+    }
     for (const src of newSrcs) {
       if (!oldSrcs.includes(src)) {
         setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
@@ -2489,7 +2508,7 @@ function MainWindow() {
                     <option value="both">电脑音频+麦克风</option>
                   </select>
                 </label>
-                <span className="subtitle-region">识别语言:{LANGS.find((l) => l.code === langFor("audio").src)?.label ?? langFor("audio").src}{independentLang ? "(音频独立)" : "(跟随文本翻译)"};断句灵敏度在 设置-音频</span>
+                <span className="subtitle-region">识别语言:{LANGS.find((l) => l.code === langFor("audio").src)?.label ?? langFor("audio").src}{independentLang ? "(音频独立)" : "(跟随文本翻译)"};断句灵敏度在 设置-音频{!AUDIO_ASR_LANGS.includes(langFor("audio").src) && <span className="lang-warn-inline"> · 该语言不支持音频识别</span>}</span>
               </div>
               {sourcesForMode(audioMode).filter((s) => isSrcOn(s)).map((s) => (
                 <div key={`lvl-${s}`} className="subtitle-panel-row" style={{ alignItems: "center", gap: 8 }}>
