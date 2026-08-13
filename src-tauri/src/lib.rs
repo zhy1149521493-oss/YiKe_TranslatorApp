@@ -9,17 +9,52 @@ use tauri_plugin_global_shortcut::ShortcutState;
 
 mod audio;
 
-/// 管理 Ollama serve 子进程的生命周期:应用启动时 spawn,退出时杀进程树
+/// Job Object 句柄包装:HANDLE(*mut c_void) 本身不是 Send/Sync,
+/// 但内核句柄是进程级资源,跨线程移动/共享安全,显式标记以便放入 managed state。
+struct JobHandle(windows::Win32::Foundation::HANDLE);
+unsafe impl Send for JobHandle {}
+unsafe impl Sync for JobHandle {}
+
+/// 管理 Ollama serve 子进程的生命周期:应用启动时 spawn,退出时杀进程树。
+/// 用 Windows Job Object(KILL_ON_JOB_CLOSE)托管:应用进程退出时 Job 句柄被内核自动关闭,
+/// 系统随即终止整个 Job 内的进程树(ollama + 它拉起的 llama-server),不依赖析构是否执行。
 struct OllamaManager {
     child: Mutex<Option<Child>>,
+    job: Mutex<Option<JobHandle>>,
 }
 
 impl OllamaManager {
     fn new() -> Self {
-        Self { child: Mutex::new(None) }
+        Self { child: Mutex::new(None), job: Mutex::new(None) }
     }
 
     fn start(&self, ollama_exe: &str, models_dir: &str) -> Result<(), String> {
+        use windows::Win32::Foundation::CloseHandle;
+        use windows::Win32::System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+            JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        };
+        use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+        // 创建 Job Object:句柄保存在 self.job。应用进程无论以何种方式退出,
+        // 该句柄都会被内核关闭 → KILL_ON_JOB_CLOSE 终止整棵 ollama 进程树。
+        let job = unsafe { CreateJobObjectW(None, None) }
+            .map_err(|e| format!("创建 Job Object 失败: {e}"))?;
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if let Err(e) = unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        } {
+            let _ = unsafe { CloseHandle(job) };
+            return Err(format!("设置 Job Object 失败: {e}"));
+        }
+
         // ollama.exe 必须在它所在的目录运行(依赖 ./lib/ollama/*.dll)
         let ollama_dir = std::path::Path::new(ollama_exe)
             .parent()
@@ -35,8 +70,38 @@ impl OllamaManager {
             .stderr(Stdio::inherit())
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn()
-            .map_err(|e| format!("启动 Ollama 失败: {e}"))?;
-        eprintln!("[ollama] serve started (pid={})", child.id());
+            .map_err(|e| {
+                let _ = unsafe { CloseHandle(job) };
+                format!("启动 Ollama 失败: {e}")
+            })?;
+
+        // 把 ollama 主进程放进 Job;之后它拉起的 llama-server 子进程自动继承同一 Job
+        let pid = child.id();
+        let assigned = unsafe {
+            match OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) {
+                Ok(hproc) => {
+                    let r = AssignProcessToJobObject(job, hproc);
+                    let _ = CloseHandle(hproc);
+                    r
+                }
+                Err(e) => {
+                    eprintln!("[ollama] OpenProcess failed: {e}");
+                    Err(e)
+                }
+            }
+        };
+        match assigned {
+            Ok(()) => {
+                eprintln!("[ollama] serve attached to kill-on-close job (pid={pid})");
+                *self.job.lock().unwrap() = Some(JobHandle(job));
+            }
+            Err(e) => {
+                // Job 绑定失败不阻塞启动:退回 Drop 里的 taskkill 兜底
+                eprintln!("[ollama] AssignProcessToJobObject failed: {e} — fallback to taskkill");
+                let _ = unsafe { CloseHandle(job) };
+            }
+        }
+        eprintln!("[ollama] serve started (pid={pid})");
         *self.child.lock().unwrap() = Some(child);
         Ok(())
     }
@@ -44,6 +109,11 @@ impl OllamaManager {
 
 impl Drop for OllamaManager {
     fn drop(&mut self) {
+        // 关闭 Job 句柄 → KILL_ON_JOB_CLOSE 终止整个 ollama 进程树(llama-server 一并被杀)
+        if let Some(job) = self.job.lock().unwrap().take() {
+            unsafe { let _ = windows::Win32::Foundation::CloseHandle(job.0); }
+            eprintln!("[ollama] job closed (kill-on-close)");
+        }
         if let Some(ref mut child) = *self.child.lock().unwrap() {
             let pid = child.id();
             eprintln!("[ollama] stopping serve (pid={pid})...");
@@ -56,6 +126,69 @@ impl Drop for OllamaManager {
                 .spawn();
             let _ = child.wait();
             eprintln!("[ollama] serve stopped");
+        }
+    }
+}
+
+/// 清理本应用目录的残留 ollama 进程(上次退出异常留下的),按可执行文件路径匹配,
+/// 绝不误杀朋友系统里已安装的 Ollama。taskkill 同步等待完成后再探测端口。
+fn kill_leftover_bundled_ollama() {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+        PROCESSENTRY32W,
+    };
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let own_path = app_dir().join("ollama").join("ollama.exe").to_string_lossy().to_lowercase();
+    unsafe {
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return };
+        let mut pids: Vec<u32> = Vec::new();
+        let mut entry = PROCESSENTRY32W::default();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snapshot, &mut entry).is_ok() {
+            loop {
+                // szExeFile 是定长 C 字符串,取到第一个 \0 为止
+                let name_len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
+                let name = String::from_utf16_lossy(&entry.szExeFile[..name_len]);
+                if name.eq_ignore_ascii_case("ollama.exe") {
+                    pids.push(entry.th32ProcessID);
+                }
+                if Process32NextW(snapshot, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snapshot.into());
+        for pid in pids {
+            let Ok(hproc) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { continue };
+            let mut buf = [0u16; 520];
+            let mut len = buf.len() as u32;
+            let path = QueryFullProcessImageNameW(
+                hproc,
+                PROCESS_NAME_FORMAT(0),
+                windows::core::PWSTR(buf.as_mut_ptr()),
+                &mut len,
+            )
+            .map(|_| String::from_utf16_lossy(&buf[..len as usize]).to_lowercase())
+            .unwrap_or_default();
+            let _ = CloseHandle(hproc);
+            eprintln!("[ollama] leftover check pid={pid} path={path}");
+            if !path.is_empty() && path == own_path {
+                eprintln!("[ollama] killing leftover bundled ollama pid={pid} ({path})");
+                let _ = StdCommand::new("taskkill")
+                    .args(["/pid", &pid.to_string(), "/t", "/f"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .creation_flags(0x08000000)
+                    .output(); // 同步等待,确保杀完再探测端口
+            }
         }
     }
 }
@@ -1008,9 +1141,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
             // 【Ollama 启动(Wave 10 便携版)】
-            // 不再无条件 taskkill 系统中的 ollama.exe —— 那会误杀朋友机器上已有的 Ollama。
-            // 策略:先探测 127.0.0.1:11434;已被占用(已有 Ollama 在跑)→ 弹窗提示,不启动自带引擎;
-            // 未被占用 → 启动本目录 ollama\ollama.exe serve(OLLAMA_MODELS = 本目录 models)。
+            // 1) 先清理上次退出异常留下的"本应用目录" ollama(按 exe 路径匹配,不误杀朋友系统的 Ollama)
+            // 2) 再探测 127.0.0.1:11434;仍被占用(朋友已有 Ollama 在跑)→ 弹窗提示,不启动自带引擎
+            // 3) 空闲 → 启动本目录 ollama\ollama.exe serve(OLLAMA_MODELS = 本目录 models),Job Object 托管
+            kill_leftover_bundled_ollama();
+            std::thread::sleep(std::time::Duration::from_millis(300));
             eprintln!("[ollama] probing 127.0.0.1:11434...");
             let port_busy = std::net::TcpStream::connect("127.0.0.1:11434").is_ok();
             let mgr = OllamaManager::new();
@@ -1184,10 +1319,16 @@ pub fn run() {
                         api.prevent_close();
                         if main_close == "quit" {
                             eprintln!("[main] CloseRequested → quit app (mainClose=quit)");
-                            // CloseRequested 处理中直接 exit 偶发不生效:延迟一小段再退出
+                            // 先显式销毁所有窗口(WebView2 正确关闭,避免 msedgewebview2 子进程残留),
+                            // 再请求退出。延迟 150ms 避开 CloseRequested 处理中的窗口状态;
+                            // 若 exit 仍不生效,全部窗口销毁会触发最后一个窗口 Destroyed → 事件循环
+                            // Exit → 进程正常退出,两条路都能保证退出。
                             let handle = window.app_handle().clone();
                             std::thread::spawn(move || {
                                 std::thread::sleep(std::time::Duration::from_millis(150));
+                                for (_, w) in handle.webview_windows() {
+                                    let _ = w.destroy();
+                                }
                                 handle.exit(0);
                             });
                         } else {

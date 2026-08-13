@@ -46,6 +46,10 @@ windows = { version = "0.62", features = [
     # 单实例:CreateMutexW / CreateEventW / WaitForSingleObject
     "Win32_System_Threading",
     "Win32_Security",
+    # Wave 10 退出清理:Job Object 托管 Ollama 进程树(KILL_ON_JOB_CLOSE)
+    "Win32_System_JobObjects",
+    # Wave 10 启动自愈:枚举进程 + 取 exe 路径,识别并清理本目录残留 ollama
+    "Win32_System_Diagnostics_ToolHelp",
 ] }
 # 第7波:流式语音识别 ASR(sherpa-onnx 官方预编译库自动下载,静态链接)
 sherpa-onnx = "1.13.5"
