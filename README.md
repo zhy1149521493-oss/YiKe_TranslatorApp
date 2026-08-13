@@ -15,7 +15,7 @@
 
 ## 下载与安装
 
-到 [Releases](https://github.com/你的用户名/译刻/releases) 页面下载最新版压缩包（如 `译刻-正式版-v1.0.0.zip`）。
+到 [Releases](https://github.com/zhy1149521493-oss/YiKe_TranslatorApp/releases) 页面下载最新版压缩包（如 `译刻-正式版-v1.0.0.zip`）。
 
 > 注意：压缩包为 7z 格式（因 GitHub 附件限制后缀为 .zip），请用 **7-Zip / Bandizip / WinRAR / 360压缩** 等软件解压，不要使用 Windows 自带的右键“全部解压缩”。
 
@@ -62,7 +62,7 @@
 ## 从源码构建（开发者）
 
 ```bash
-git clone https://github.com/你的用户名/译刻.git
+git clone https://github.com/zhy1149521493-oss/YiKe_TranslatorApp.git
 cd 译刻
 npm install
 npm run tauri dev      # 开发模式
