@@ -169,6 +169,19 @@ pub fn model_dir_for_lang(lang: &str) -> Option<PathBuf> {
     }
 }
 
+/// 检查指定目录是否包含完整的 ASR 模型文件(不实际加载,仅扫文件)
+pub fn is_complete_model_dir(dir: &std::path::Path) -> bool {
+    scan_model_files(dir).is_ok()
+}
+
+/// 某语言的 ASR 模型是否已安装(设置页"识别组件"状态显示用)
+pub fn model_installed(lang: &str) -> bool {
+    match model_dir_for_lang(lang) {
+        Some(dir) => is_complete_model_dir(&dir),
+        None => false,
+    }
+}
+
 /// 从模型目录扫描 encoder/decoder/joiner/tokens 文件(文件名可能带 int8 等后缀)
 fn scan_model_files(dir: &std::path::Path) -> Result<(String, String, String, String), String> {
     let mut encoder: Option<PathBuf> = None;

@@ -694,6 +694,215 @@ async fn import_gguf_model(model: String, path: String, on_status: tauri::ipc::C
     Ok(model)
 }
 
+// ============ Wave 10.6: 识别组件按需下载(OCR / ASR) ============
+// 纯文字版发布包不内置 OCR(截图/视频字幕)与 ASR(音频字幕)模型,
+// 全部在「设置 → 模型 → 识别组件」里按需下载,带进度/速度提示。
+// OCR: 3 个文件,ModelScope 官方托管(RapidAI/RapidOCR,与 rapidocr-core 内置源一致);
+// ASR: 2 个 tar.bz2,官方 GitHub Release(k2-fsa/sherpa-onnx)。
+
+const OCR_COMPONENT_FILES: &[(&str, &str, u64)] = &[
+    (
+        "PP-OCRv6_det_small.onnx",
+        "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.0/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx",
+        9_929_594,
+    ),
+    (
+        "PP-OCRv6_rec_small.onnx",
+        "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.0/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx",
+        21_234_383,
+    ),
+    (
+        "ppocrv6_dict.txt",
+        "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/master/paddle/PP-OCRv6/rec/PP-OCRv6_rec_small/ppocrv6_dict.txt",
+        74_947,
+    ),
+];
+
+const ASR_COMPONENT_MODELS: &[(&str, &str, &str, u64)] = &[
+    (
+        "multi",
+        "sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10",
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10.tar.bz2",
+        258_999_581,
+    ),
+    (
+        "ko",
+        "sherpa-onnx-streaming-zipformer-korean-2024-06-16",
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-korean-2024-06-16.tar.bz2",
+        418_218_652,
+    ),
+];
+
+fn ocr_component_installed() -> bool {
+    let dir = app_dir().join("ocr");
+    OCR_COMPONENT_FILES
+        .iter()
+        .all(|(name, _, size)| std::fs::metadata(dir.join(name)).map(|m| m.len() >= *size).unwrap_or(false))
+}
+
+fn asr_component_installed(kind: &str) -> bool {
+    match kind {
+        // 8 语模型覆盖 中/英/日/auto;韩语是独立模型
+        "multi" => audio::model_installed("zh"),
+        "ko" => audio::model_installed("ko"),
+        _ => false,
+    }
+}
+
+/// 查询 OCR/ASR 组件安装状态(前端设置页展示 已安装/未安装/下载中)
+#[tauri::command]
+fn component_status() -> serde_json::Value {
+    serde_json::json!({
+        "ocr": { "installed": ocr_component_installed() },
+        "asr": {
+            "multi": { "installed": asr_component_installed("multi") },
+            "ko": { "installed": asr_component_installed("ko") },
+        }
+    })
+}
+
+/// 流式下载单个文件到 dest(先写 .part 再改名,失败不污染目标文件)。
+/// tag 是每个进度事件的固定字段(如 {"type":"ocr","file":...}),事件追加 downloaded/total。
+async fn download_one(
+    client: &reqwest::Client,
+    url: &str,
+    dest: &std::path::Path,
+    expected: u64,
+    tag: serde_json::Value,
+    on_progress: &tauri::ipc::Channel<serde_json::Value>,
+) -> Result<(), String> {
+    use std::io::Write;
+    let mut resp = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("下载失败: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("下载失败(HTTP {})", resp.status()));
+    }
+    let total = resp.content_length().unwrap_or(expected);
+    let parent = dest.parent().ok_or("目标目录无效".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {e}"))?;
+    let part = dest.with_extension("part");
+    let mut file = std::fs::File::create(&part).map_err(|e| format!("创建文件失败: {e}"))?;
+    let mut downloaded: u64 = 0;
+    loop {
+        let chunk = resp
+            .chunk()
+            .await
+            .map_err(|e| format!("下载中断: {e}"))?;
+        let Some(chunk) = chunk else { break };
+        file.write_all(&chunk).map_err(|e| format!("写入失败: {e}"))?;
+        downloaded += chunk.len() as u64;
+        let mut ev = tag.clone();
+        if let serde_json::Value::Object(m) = &mut ev {
+            m.insert("downloaded".into(), downloaded.into());
+            m.insert("total".into(), total.into());
+        }
+        let _ = on_progress.send(ev);
+    }
+    file.flush().map_err(|e| format!("写入失败: {e}"))?;
+    drop(file);
+    std::fs::rename(&part, dest).map_err(|e| format!("文件保存失败: {e}"))?;
+    Ok(())
+}
+
+/// 下载 OCR 三件套(截图翻译/视频字幕用),进度事件:
+/// {"type":"ocr","file":...,"downloaded":N,"total":N} → 完成 {"type":"ocr","status":"done"}
+#[tauri::command]
+async fn download_ocr_models(on_progress: tauri::ipc::Channel<serde_json::Value>) -> Result<(), String> {
+    if ocr_component_installed() {
+        let _ = on_progress.send(serde_json::json!({"type":"ocr","status":"done","skipped":true}));
+        return Ok(());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1800))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let ocr_dir = app_dir().join("ocr");
+    for (name, url, size) in OCR_COMPONENT_FILES {
+        let dest = ocr_dir.join(name);
+        if std::fs::metadata(&dest).map(|m| m.len() >= *size).unwrap_or(false) {
+            continue; // 已存在且大小正常,跳过
+        }
+        let tag = serde_json::json!({"type":"ocr","file":name});
+        download_one(&client, url, &dest, *size, tag, &on_progress).await?;
+    }
+    let _ = on_progress.send(serde_json::json!({"type":"ocr","status":"done"}));
+    Ok(())
+}
+
+/// 解压 tar.bz2 到 dest_root(ASR 官方包内含一层同名目录)
+fn extract_tar_bz2(archive_path: &std::path::Path, dest_root: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::File::open(archive_path).map_err(|e| format!("打开压缩包失败: {e}"))?;
+    let dec = bzip2::read::BzDecoder::new(file);
+    let mut ar = tar::Archive::new(dec);
+    ar.unpack(dest_root).map_err(|e| format!("解压失败: {e}"))?;
+    Ok(())
+}
+
+/// 下载并安装 ASR 模型(kind: "multi"=8语 / "ko"=韩语)。
+/// 进度事件: {"type":"asr","kind","phase":"download","downloaded","total"} /
+/// {"type":"asr","kind","phase":"extract"} / {"type":"asr","kind","status":"done"}
+#[tauri::command]
+async fn download_asr_model(kind: String, on_progress: tauri::ipc::Channel<serde_json::Value>) -> Result<(), String> {
+    let spec = ASR_COMPONENT_MODELS
+        .iter()
+        .find(|(k, _, _, _)| *k == kind)
+        .ok_or_else(|| "未知的 ASR 组件".to_string())?;
+    let (kind, dir_name, url, size) = (spec.0, spec.1, spec.2, spec.3);
+    if asr_component_installed(kind) {
+        let _ = on_progress.send(serde_json::json!({"type":"asr","kind":kind,"status":"done","skipped":true}));
+        return Ok(());
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3600))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let asr_dir = app_dir().join("asr");
+    let tag = serde_json::json!({"type":"asr","kind":kind,"phase":"download"});
+    let archive = asr_dir.join(format!("{dir_name}.tar.bz2"));
+    download_one(&client, url, &archive, size, tag, &on_progress).await?;
+
+    // 先解压到临时目录,再整体移入,避免半截解压污染正式目录
+    let tmp_root = asr_dir.join(format!(".tmp_extract_{kind}"));
+    if tmp_root.exists() {
+        let _ = std::fs::remove_dir_all(&tmp_root);
+    }
+    std::fs::create_dir_all(&tmp_root).map_err(|e| format!("创建临时目录失败: {e}"))?;
+    let _ = on_progress.send(serde_json::json!({"type":"asr","kind":kind,"phase":"extract"}));
+    if let Err(e) = extract_tar_bz2(&archive, &tmp_root) {
+        let _ = std::fs::remove_dir_all(&tmp_root);
+        return Err(e);
+    }
+
+    // 校验解压结果:目录存在且文件完整
+    let extracted = tmp_root.join(dir_name);
+    if !extracted.is_dir() || !audio::is_complete_model_dir(&extracted) {
+        let _ = std::fs::remove_dir_all(&tmp_root);
+        return Err("解压后模型文件不完整,请重试".to_string());
+    }
+
+    // 目标已存在则先改名备份,再移入新目录,最后清理备份
+    let target = asr_dir.join(dir_name);
+    let backup = asr_dir.join(format!("{dir_name}.old"));
+    if target.exists() {
+        if backup.exists() {
+            let _ = std::fs::remove_dir_all(&backup);
+        }
+        std::fs::rename(&target, &backup).map_err(|e| format!("替换旧模型失败: {e}"))?;
+    }
+    std::fs::rename(&extracted, &target).map_err(|e| format!("安装模型失败: {e}"))?;
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    let _ = std::fs::remove_file(&archive);
+    if backup.exists() {
+        let _ = std::fs::remove_dir_all(&backup);
+    }
+    let _ = on_progress.send(serde_json::json!({"type":"asr","kind":kind,"status":"done"}));
+    Ok(())
+}
+
 // ============ 第7波:音频实时翻译 commands ============
 
 /// 启动音频实时识别(source: "system"=电脑音频 / "mic"=麦克风)
@@ -1338,7 +1547,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, component_status, download_ocr_models, download_asr_model, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
             // 【Ollama 启动(Wave 10 便携版)】
             // 1) 先清理上次退出异常留下的"本应用目录" ollama(按 exe 路径匹配,不误杀朋友系统的 Ollama)

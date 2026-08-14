@@ -577,6 +577,13 @@ function MainWindow() {
   /* 下载速度计算基准:按层记录 completed/时间戳,层切换时重置 */
   /* 下载速度/累计字节基准:completedLayers=已完成层字节和,lastKey=当前层标识 */
   const pullSpeedRef = useRef<Record<string, { completedLayers: number; lastKey: string; lastTotal: number; lastSpeed: number; lastTime: number; lastCompleted: number }>>({});
+  /* Wave 10.6: 识别组件(OCR/ASR)按需下载 —— 纯文字版不内置,设置页可下载 */
+  const [componentStatus, setComponentStatus] = useState<{ ocr: { installed: boolean }; asr: { multi: { installed: boolean }; ko: { installed: boolean } } }>({
+    ocr: { installed: false },
+    asr: { multi: { installed: false }, ko: { installed: false } },
+  });
+  const [componentJobs, setComponentJobs] = useState<Record<string, { status: string; progress: number; total: number; speed?: number; phase?: string }>>({});
+  const componentSpeedRef = useRef<Record<string, { lastTime: number; lastDownloaded: number; lastSpeed: number }>>({});
   const [importName, setImportName] = useState("");
   const [importPath, setImportPath] = useState("");
   const [importBusy, setImportBusy] = useState(false);
@@ -1096,6 +1103,14 @@ function MainWindow() {
         }
         return;
       }
+      /* ASR 组件未安装 → 引导去设置下载(纯文字版) */
+      const asrReady = asrLang === "ko" ? componentStatus.asr.ko.installed : componentStatus.asr.multi.installed;
+      if (!asrReady) {
+        for (const src of sourcesForMode(audioMode)) {
+          setAudioStatus((prev) => ({ ...prev, [src]: "ASR 识别组件未安装:请到 设置 → 模型 → 识别组件 下载后再试" }));
+        }
+        return;
+      }
       for (const src of sourcesForMode(audioMode)) {
         setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
         try {
@@ -1118,7 +1133,7 @@ function MainWindow() {
         await invoke("close_audio_floating_window", { source: src }).catch(() => {});
       }
     }
-  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs]);
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus]);
 
   /* 切换音频来源模式:运行中切换 = 自动关旧来源+启新来源(不停止);
      停止状态切换 = 仅改模式选择 */
@@ -1148,6 +1163,15 @@ function MainWindow() {
       }
       return;
     }
+    /* ASR 组件未安装 → 引导去设置下载(纯文字版) */
+    const asrReady = asrLang === "ko" ? componentStatus.asr.ko.installed : componentStatus.asr.multi.installed;
+    if (!asrReady) {
+      for (const src of newSrcs) {
+        setAudioStatus((prev) => ({ ...prev, [src]: "ASR 识别组件未安装:请到 设置 → 模型 → 识别组件 下载后再试" }));
+        setAudioSubOn((prev) => ({ ...prev, [src]: false }));
+      }
+      return;
+    }
     for (const src of newSrcs) {
       if (!oldSrcs.includes(src)) {
         setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
@@ -1161,7 +1185,7 @@ function MainWindow() {
         }
       }
     }
-  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs]);
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus]);
 
   /* 监听音频字幕事件(带 source):status/partial/final */
   useEffect(() => {
@@ -1241,6 +1265,11 @@ function MainWindow() {
   }, []);
 
   const toggleSubtitle = useCallback(() => {
+    /* OCR 组件未安装且选的是 RapidOCR → 引导去设置下载(纯文字版) */
+    if (subEngine === "rapid" && !componentStatus.ocr.installed) {
+      setSubStatus("OCR 组件未安装:请到 设置 → 模型 → 识别组件 下载后再试");
+      return;
+    }
     setSubtitleOn((on) => {
       const next = !on;
       if (next) {
@@ -1256,13 +1285,18 @@ function MainWindow() {
       }
       return next;
     });
-  }, [stopAllAudio]);
+  }, [stopAllAudio, subEngine, componentStatus]);
 
   const toggleSubtitleRef = useRef(toggleSubtitle);
   useEffect(() => { toggleSubtitleRef.current = toggleSubtitle; }, [toggleSubtitle]);
 
   /* 悬浮窗显式开始(幂等):开启字幕 + 弹悬浮窗 + 状态同步;与音频字幕互斥 */
   const startSubtitle = useCallback(() => {
+    /* OCR 组件未安装且选的是 RapidOCR → 引导去设置下载(纯文字版) */
+    if (subEngine === "rapid" && !componentStatus.ocr.installed) {
+      setSubStatus("OCR 组件未安装:请到 设置 → 模型 → 识别组件 下载后再试");
+      return;
+    }
     setSubtitleOn((on) => {
       if (on) return on;   // 已运行,幂等
       // 互斥:开视频字幕自动关音频字幕
@@ -1274,7 +1308,7 @@ function MainWindow() {
       appWindow.emitTo("floating", "subtitle-state", "on").catch(() => {});
       return true;
     });
-  }, [stopAllAudio]);
+  }, [stopAllAudio, subEngine, componentStatus]);
 
   /* 悬浮窗显式停止(幂等) */
   const stopSubtitle = useCallback(() => {
@@ -1480,6 +1514,11 @@ function MainWindow() {
 
   /* ---- 截图 ---- */
   const startScreenshot = async () => {
+    if (!componentStatus.ocr.installed) {
+      setScreenshotSrc("OCR 组件未安装:请到 设置 → 模型 → 识别组件 下载后再试");
+      setModeOutput((prev) => ({ ...prev, screenshot: "" }));
+      return;
+    }
     try { await invoke("open_screenshot_overlay", { from: "main" }); } catch (e) { console.error(e); }
   };
 
@@ -1626,7 +1665,7 @@ function MainWindow() {
     } catch (e: any) {
       setLocalModels([]);
       setLocalModelsLoaded(true);
-      if (!silent) setEngineStatus(`读取本地模型失败: ${e?.message ?? e}`);
+      if (!silent) setEngineStatus("本地模型服务未连接:纯文字版请到「设置 → 模型」下载本地模型,或配置「外接 API」后切换引擎");
       return [];
     }
   };
@@ -1639,6 +1678,10 @@ function MainWindow() {
       t = setTimeout(() => { refreshLocalModels(true); }, 3000);
     });
     return () => { alive = false; if (t) clearTimeout(t); };
+  }, []);
+  /* 启动后检测识别组件(OCR/ASR)是否已安装 */
+  useEffect(() => {
+    refreshComponentStatus();
   }, []);
 
   /* 下载模型(POST /api/pull,流式 NDJSON 进度) */
@@ -1739,6 +1782,77 @@ function MainWindow() {
       /* 下载完成后 6 秒自动收起进度条 */
       setTimeout(() => {
         setPullJobs((prev) => { const n = { ...prev }; delete n[name]; return n; });
+      }, 6000);
+    }
+  };
+
+  /* ---- 识别组件(OCR/ASR)安装状态 + 下载(Wave 10.6) ---- */
+  const refreshComponentStatus = async () => {
+    try {
+      const st = await invoke<{ ocr: { installed: boolean }; asr: { multi: { installed: boolean }; ko: { installed: boolean } } }>("component_status");
+      setComponentStatus(st);
+    } catch (e) {
+      console.error("component_status:", e);
+    }
+  };
+  /* 下载 OCR / ASR 组件:进度事件从 Rust Channel 推回,统一计算速度 */
+  const downloadComponent = async (key: "ocr" | "asr-multi" | "asr-ko") => {
+    if (componentJobs[key]) return;
+    const label = key === "ocr" ? "OCR 文字识别" : key === "asr-multi" ? "ASR 语音识别(8语)" : "ASR 语音识别(韩语)";
+    setComponentJobs((prev) => ({ ...prev, [key]: { status: "准备下载…", progress: 0, total: 0 } }));
+    setEngineStatus(`正在下载 ${label} …`);
+    const ch = new Channel<any>();
+    ch.onmessage = (m) => {
+      if (!m || typeof m !== "object") return;
+      const now = Date.now();
+      if (m.type === "ocr") {
+        if (m.status === "done") {
+          setComponentJobs((prev) => ({ ...prev, [key]: { status: "success", progress: 1, total: 1 } }));
+          setEngineStatus("OCR 文字识别组件下载完成");
+        } else if (typeof m.downloaded === "number") {
+          const snap = componentSpeedRef.current[key];
+          const dt = (now - (snap?.lastTime ?? now)) / 1000;
+          let speed = snap?.lastSpeed ?? 0;
+          if (dt > 0) {
+            const inst = (m.downloaded - (snap?.lastDownloaded ?? 0)) / dt;
+            speed = speed > 0 ? speed * 0.7 + inst * 0.3 : inst;
+          }
+          componentSpeedRef.current[key] = { lastTime: now, lastDownloaded: m.downloaded, lastSpeed: speed };
+          setComponentJobs((prev) => ({ ...prev, [key]: { status: "downloading", progress: m.downloaded, total: m.total || m.downloaded, speed, phase: m.file } }));
+        }
+      } else if (m.type === "asr") {
+        if (m.status === "done") {
+          setComponentJobs((prev) => ({ ...prev, [key]: { status: "success", progress: 1, total: 1 } }));
+          setEngineStatus(`${label} 下载完成`);
+        } else if (m.phase === "extract") {
+          setComponentJobs((prev) => ({ ...prev, [key]: { status: "正在解压安装…", progress: prev[key]?.progress ?? 0, total: prev[key]?.total ?? 0, speed: prev[key]?.speed } }));
+        } else if (typeof m.downloaded === "number") {
+          const snap = componentSpeedRef.current[key];
+          const dt = (now - (snap?.lastTime ?? now)) / 1000;
+          let speed = snap?.lastSpeed ?? 0;
+          if (dt > 0) {
+            const inst = (m.downloaded - (snap?.lastDownloaded ?? 0)) / dt;
+            speed = speed > 0 ? speed * 0.7 + inst * 0.3 : inst;
+          }
+          componentSpeedRef.current[key] = { lastTime: now, lastDownloaded: m.downloaded, lastSpeed: speed };
+          setComponentJobs((prev) => ({ ...prev, [key]: { status: "downloading", progress: m.downloaded, total: m.total || m.downloaded, speed } }));
+        }
+      }
+    };
+    try {
+      if (key === "ocr") {
+        await invoke("download_ocr_models", { onProgress: ch });
+      } else {
+        await invoke("download_asr_model", { kind: key === "asr-multi" ? "multi" : "ko", onProgress: ch });
+      }
+      await refreshComponentStatus();
+    } catch (e: any) {
+      setComponentJobs((prev) => ({ ...prev, [key]: { status: `失败: ${e?.message ?? e}`, progress: 0, total: 0 } }));
+      setEngineStatus(`${label} 下载失败: ${e?.message ?? e}`);
+    } finally {
+      delete componentSpeedRef.current[key];
+      setTimeout(() => {
+        setComponentJobs((prev) => { const n = { ...prev }; delete n[key]; return n; });
       }, 6000);
     }
   };
@@ -2224,7 +2338,7 @@ function MainWindow() {
               {settingsPage === "providers" && (
                 <div className="settings-section">
                   <h2>模型</h2>
-                  <p className="settings-note">本地模型由随应用内置的 Ollama 管理;正式发布包不会内置模型,请下载 HY-MT2 / gemma3 或导入自己的 GGUF 文件。外接 API 即云端模型,配置后无需本地显卡。</p>
+                  <p className="settings-note">本地模型由随应用内置的 Ollama 管理;正式发布包不会内置模型,请下载 HY-MT2 / gemma3 或导入自己的 GGUF 文件。外接 API 即云端模型,配置后无需本地显卡。截图/音频等识别组件见下方「识别组件」按需下载。</p>
                   {engineStatus && <p className="settings-note">{engineStatus}</p>}
 
                   {/* 本地模型 */}
@@ -2319,6 +2433,64 @@ function MainWindow() {
                         {importBusy ? "正在导入…" : <><Icon name="plus" size={13} /> 开始导入</>}
                       </button>
                     </div>
+                  </div>
+
+                  {/* 识别组件(OCR / ASR)按需下载:纯文字版不内置,下载后立即可用 */}
+                  <div className="settings-block">
+                    <div className="settings-block-head">
+                      <h3>识别组件(按需下载)</h3>
+                      <button className="btn-float" onClick={() => refreshComponentStatus()} title="重新检测 OCR / ASR 组件是否已安装"><Icon name="refresh" size={13} /> 刷新状态</button>
+                    </div>
+                    <p className="settings-note">纯文字版不内置识别模型,需要哪项点哪项下载:截图/视频字幕用 OCR(约 30MB),音频字幕用 ASR(8语约 247MB,韩语约 399MB)。下载完成后立即可用,不用时删掉对应文件夹即可释放空间。</p>
+                    <div className="settings-row">
+                      <span>OCR 文字识别</span>
+                      <span className="settings-note">截图翻译 / 视频字幕</span>
+                      <b className="local-model-size">{componentStatus.ocr.installed ? "已安装" : "约 30MB"}</b>
+                      <button className="btn-float" disabled={!!componentJobs["ocr"] || componentStatus.ocr.installed} onClick={() => downloadComponent("ocr")} title="下载 OCR 模型(PP-OCRv6,截图翻译与视频字幕需要)">
+                        <Icon name="download" size={13} /> {componentStatus.ocr.installed ? "已安装" : "下载"}
+                      </button>
+                    </div>
+                    <div className="settings-row">
+                      <span>ASR 语音识别 · 8语</span>
+                      <span className="settings-note">音频字幕(中/英/日 等)</span>
+                      <b className="local-model-size">{componentStatus.asr.multi.installed ? "已安装" : "约 247MB"}</b>
+                      <button className="btn-float" disabled={!!componentJobs["asr-multi"] || componentStatus.asr.multi.installed} onClick={() => downloadComponent("asr-multi")} title="下载 8 语流式语音识别模型(中/英/日/阿/印尼/俄/泰/越)">
+                        <Icon name="download" size={13} /> {componentStatus.asr.multi.installed ? "已安装" : "下载"}
+                      </button>
+                    </div>
+                    <div className="settings-row">
+                      <span>ASR 语音识别 · 韩语</span>
+                      <span className="settings-note">音频字幕(韩语)</span>
+                      <b className="local-model-size">{componentStatus.asr.ko.installed ? "已安装" : "约 399MB"}</b>
+                      <button className="btn-float" disabled={!!componentJobs["asr-ko"] || componentStatus.asr.ko.installed} onClick={() => downloadComponent("asr-ko")} title="下载韩语流式语音识别模型">
+                        <Icon name="download" size={13} /> {componentStatus.asr.ko.installed ? "已安装" : "下载"}
+                      </button>
+                    </div>
+                    {/* 组件下载进度(与本地模型下载样式一致) */}
+                    {Object.keys(componentJobs).length > 0 && (
+                      <div className="pull-jobs">
+                        {Object.entries(componentJobs).map(([key, job]) => {
+                          const pct = job.total > 0 ? Math.min(100, Math.round((job.progress / job.total) * 100)) : 0;
+                          const speedText = job.speed && job.speed > 0 ? formatSpeed(job.speed) : "";
+                          const etaSec = job.speed && job.speed > 0 && job.total > job.progress ? Math.round((job.total - job.progress) / job.speed) : 0;
+                          const displayName = key === "ocr" ? "OCR 文字识别" : key === "asr-multi" ? "ASR 语音识别(8语)" : "ASR 语音识别(韩语)";
+                          const statusText = job.status === "downloading"
+                            ? `${pct}%${speedText ? ` · ${speedText}` : ""}${etaSec > 0 ? ` · 剩余 ${formatEta(etaSec)}` : ""}${job.phase ? ` · ${job.phase}` : ""}`
+                            : (PULL_STATUS_TEXT[job.status] ?? job.status);
+                          return (
+                            <div className="pull-job" key={key}>
+                              <div className="pull-job-head">
+                                <span className="pull-job-name">{displayName}</span>
+                                <span className="pull-job-meta">{statusText}</span>
+                              </div>
+                              <div className="pull-progress-bar">
+                                <span className="pull-progress-fill" style={{ width: `${pct}%` }} />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
 
                   {/* 外接 API(云端模型) */}

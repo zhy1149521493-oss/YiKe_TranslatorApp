@@ -59,3 +59,6 @@ reqwest = { version = "0.12", features = ["json", "stream"] }
 futures-util = "0.3"
 # 第 10.5 波:GGUF 本地模型导入(流式计算 sha256;已在依赖树中,无需新下载)
 sha2 = "0.10"
+# 第 10.6 波:识别组件(OCR/ASR)按需下载 —— ASR 官方包是 tar.bz2,需要解压
+tar = "0.4"
+bzip2 = "0.4"
