@@ -740,6 +740,16 @@ fn ocr_component_installed() -> bool {
         .all(|(name, _, size)| std::fs::metadata(dir.join(name)).map(|m| m.len() >= *size).unwrap_or(false))
 }
 
+/// 下载用 HTTP 客户端:必须带浏览器 User-Agent —— ModelScope 的文件下载会 302 到 CDN,
+/// CDN 对没有 UA 的请求直接回 403 Forbidden(2026-08-14 实测:空 UA=403,curl/Mozilla UA=200)。
+fn build_download_client(secs: u64) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(secs))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))
+}
+
 fn asr_component_installed(kind: &str) -> bool {
     match kind {
         // 8 语模型覆盖 中/英/日/auto;韩语是独立模型
@@ -815,10 +825,7 @@ async fn download_ocr_models(on_progress: tauri::ipc::Channel<serde_json::Value>
         let _ = on_progress.send(serde_json::json!({"type":"ocr","status":"done","skipped":true}));
         return Ok(());
     }
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(1800))
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let client = build_download_client(1800)?;
     let ocr_dir = app_dir().join("ocr");
     for (name, url, size) in OCR_COMPONENT_FILES {
         let dest = ocr_dir.join(name);
@@ -856,10 +863,7 @@ async fn download_asr_model(kind: String, on_progress: tauri::ipc::Channel<serde
         return Ok(());
     }
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3600))
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {e}"))?;
+    let client = build_download_client(3600)?;
     let asr_dir = app_dir().join("asr");
     let tag = serde_json::json!({"type":"asr","kind":kind,"phase":"download"});
     let archive = asr_dir.join(format!("{dir_name}.tar.bz2"));
