@@ -529,7 +529,12 @@ async function translateStream(
   if (eng.kind === "api") return fetchApiStream(eng.provider, source, target, text, onToken, signal, onReasoning);
   /* 无本地模型守卫:给友好提示而不是裸 API 报错(列表加载完才开始拦截,避免启动瞬间误报) */
   if (localModelsReady) {
-    if (localModelStore.length === 0) throw new Error("尚未配置本地模型:请到「设置 → 模型」下载/导入,或在「外接 API」配置云端模型后再翻译");
+    if (localModelStore.length === 0) {
+      const hasApiModel = engineCfg.providers.some((p) => p.models.length > 0);
+      throw new Error(hasApiModel
+        ? "当前没有本地模型:请到「设置 → 模型」下载/导入,或点顶部模型下拉切换到已配置的外接 API 模型"
+        : "还没有配置任何翻译模型:请到「设置 → 模型」下载本地模型(HY-MT2 / gemma3),或在「外接 API」配置云端模型后再翻译");
+    }
     if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载/导入,或切换到外接 API 模型`);
   }
   return fetchOllamaStream(model, source, target, text, numCtx, onToken, signal);
@@ -539,7 +544,12 @@ async function translateFull(model: string, source: string, target: string, text
   const eng = resolveEngine();
   if (eng.kind === "api") return fetchApiFull(eng.provider, source, target, text);
   if (localModelsReady) {
-    if (localModelStore.length === 0) throw new Error("尚未配置本地模型:请到「设置 → 模型」下载/导入,或在「外接 API」配置云端模型后再翻译");
+    if (localModelStore.length === 0) {
+      const hasApiModel = engineCfg.providers.some((p) => p.models.length > 0);
+      throw new Error(hasApiModel
+        ? "当前没有本地模型:请到「设置 → 模型」下载/导入,或点顶部模型下拉切换到已配置的外接 API 模型"
+        : "还没有配置任何翻译模型:请到「设置 → 模型」下载本地模型(HY-MT2 / gemma3),或在「外接 API」配置云端模型后再翻译");
+    }
     if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载/导入,或切换到外接 API 模型`);
   }
   return fetchOllamaFull(model, source, target, text, numCtx);
@@ -584,6 +594,7 @@ function MainWindow() {
   });
   const [componentJobs, setComponentJobs] = useState<Record<string, { status: string; progress: number; total: number; speed?: number; phase?: string }>>({});
   const componentSpeedRef = useRef<Record<string, { lastTime: number; lastDownloaded: number; lastSpeed: number }>>({});
+  const [confirmDeleteComponent, setConfirmDeleteComponent] = useState<"ocr" | "asr-multi" | "asr-ko" | null>(null);
   const [importName, setImportName] = useState("");
   const [importPath, setImportPath] = useState("");
   const [importBusy, setImportBusy] = useState(false);
@@ -1103,11 +1114,18 @@ function MainWindow() {
         }
         return;
       }
+      /* 本地模型和 API 模型都没有 → 提前拦截,给清晰引导而不是识别完才报错 */
+      if (localModels.length === 0 && !providers.some((p) => p.models.length > 0)) {
+        for (const src of sourcesForMode(audioMode)) {
+          setAudioStatus((prev) => ({ ...prev, [src]: "还没有配置任何翻译模型:请到 设置 → 模型 下载本地模型,或在「外接 API」配置云端模型后再试" }));
+        }
+        return;
+      }
       /* ASR 组件未安装 → 引导去设置下载(纯文字版) */
       const asrReady = asrLang === "ko" ? componentStatus.asr.ko.installed : componentStatus.asr.multi.installed;
       if (!asrReady) {
         for (const src of sourcesForMode(audioMode)) {
-          setAudioStatus((prev) => ({ ...prev, [src]: "ASR 识别组件未安装:请到 设置 → 模型 → 识别组件 下载后再试" }));
+          setAudioStatus((prev) => ({ ...prev, [src]: asrLang === "ko" ? "ASR 韩语识别组件未安装(约399MB):请到 设置 → 模型 → 识别组件 下载后再试" : "ASR 语音识别组件未安装(约247MB):请到 设置 → 模型 → 识别组件 下载后再试" }));
         }
         return;
       }
@@ -1133,7 +1151,7 @@ function MainWindow() {
         await invoke("close_audio_floating_window", { source: src }).catch(() => {});
       }
     }
-  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus]);
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus, localModels, providers]);
 
   /* 切换音频来源模式:运行中切换 = 自动关旧来源+启新来源(不停止);
      停止状态切换 = 仅改模式选择 */
@@ -1163,11 +1181,19 @@ function MainWindow() {
       }
       return;
     }
+    /* 本地模型和 API 模型都没有 → 提前拦截,给清晰引导而不是识别完才报错 */
+    if (localModels.length === 0 && !providers.some((p) => p.models.length > 0)) {
+      for (const src of newSrcs) {
+        setAudioStatus((prev) => ({ ...prev, [src]: "还没有配置任何翻译模型:请到 设置 → 模型 下载本地模型,或在「外接 API」配置云端模型后再试" }));
+        setAudioSubOn((prev) => ({ ...prev, [src]: false }));
+      }
+      return;
+    }
     /* ASR 组件未安装 → 引导去设置下载(纯文字版) */
     const asrReady = asrLang === "ko" ? componentStatus.asr.ko.installed : componentStatus.asr.multi.installed;
     if (!asrReady) {
       for (const src of newSrcs) {
-        setAudioStatus((prev) => ({ ...prev, [src]: "ASR 识别组件未安装:请到 设置 → 模型 → 识别组件 下载后再试" }));
+        setAudioStatus((prev) => ({ ...prev, [src]: asrLang === "ko" ? "ASR 韩语识别组件未安装(约399MB):请到 设置 → 模型 → 识别组件 下载后再试" : "ASR 语音识别组件未安装(约247MB):请到 设置 → 模型 → 识别组件 下载后再试" }));
         setAudioSubOn((prev) => ({ ...prev, [src]: false }));
       }
       return;
@@ -1185,7 +1211,7 @@ function MainWindow() {
         }
       }
     }
-  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus]);
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus, localModels, providers]);
 
   /* 监听音频字幕事件(带 source):status/partial/final */
   useEffect(() => {
@@ -1267,7 +1293,7 @@ function MainWindow() {
   const toggleSubtitle = useCallback(() => {
     /* OCR 组件未安装且选的是 RapidOCR → 引导去设置下载(纯文字版) */
     if (subEngine === "rapid" && !componentStatus.ocr.installed) {
-      setSubStatus("OCR 组件未安装:请到 设置 → 模型 → 识别组件 下载后再试");
+      setSubStatus("OCR 组件未安装(约30MB):请到 设置 → 模型 → 识别组件 下载后再试");
       return;
     }
     setSubtitleOn((on) => {
@@ -1294,7 +1320,7 @@ function MainWindow() {
   const startSubtitle = useCallback(() => {
     /* OCR 组件未安装且选的是 RapidOCR → 引导去设置下载(纯文字版) */
     if (subEngine === "rapid" && !componentStatus.ocr.installed) {
-      setSubStatus("OCR 组件未安装:请到 设置 → 模型 → 识别组件 下载后再试");
+      setSubStatus("OCR 组件未安装(约30MB):请到 设置 → 模型 → 识别组件 下载后再试");
       return;
     }
     setSubtitleOn((on) => {
@@ -1515,7 +1541,7 @@ function MainWindow() {
   /* ---- 截图 ---- */
   const startScreenshot = async () => {
     if (!componentStatus.ocr.installed) {
-      setScreenshotSrc("OCR 组件未安装:请到 设置 → 模型 → 识别组件 下载后再试");
+      setScreenshotSrc("OCR 组件未安装(约30MB):请到 设置 → 模型 → 识别组件 下载后再试");
       setModeOutput((prev) => ({ ...prev, screenshot: "" }));
       return;
     }
@@ -1854,6 +1880,20 @@ function MainWindow() {
       setTimeout(() => {
         setComponentJobs((prev) => { const n = { ...prev }; delete n[key]; return n; });
       }, 6000);
+    }
+  };
+
+  /* 卸载识别组件(OCR/ASR):释放磁盘空间;Rust 端会先停音频识别/清 OCR 缓存 */
+  const uninstallComponent = async (key: "ocr" | "asr-multi" | "asr-ko") => {
+    setConfirmDeleteComponent(null);
+    const label = key === "ocr" ? "OCR 文字识别" : key === "asr-multi" ? "ASR 语音识别(8语)" : "ASR 语音识别(韩语)";
+    setEngineStatus(`正在卸载 ${label} …`);
+    try {
+      await invoke("uninstall_component", { kind: key });
+      await refreshComponentStatus();
+      setEngineStatus(`${label} 已卸载,已释放磁盘空间`);
+    } catch (e: any) {
+      setEngineStatus(`卸载失败: ${e?.message ?? e}`);
     }
   };
 
@@ -2446,26 +2486,45 @@ function MainWindow() {
                       <span>OCR 文字识别</span>
                       <span className="settings-note">截图翻译 / 视频字幕</span>
                       <b className="local-model-size">{componentStatus.ocr.installed ? "已安装" : "约 30MB"}</b>
-                      <button className="btn-float" disabled={!!componentJobs["ocr"] || componentStatus.ocr.installed} onClick={() => downloadComponent("ocr")} title="下载 OCR 模型(PP-OCRv6,截图翻译与视频字幕需要)">
-                        <Icon name="download" size={13} /> {componentStatus.ocr.installed ? "已安装" : "下载"}
-                      </button>
+                      {componentStatus.ocr.installed ? (
+                        <button className="btn-float danger" onClick={() => setConfirmDeleteComponent("ocr")} title="卸载 OCR 模型,释放约 30MB 磁盘空间"><Icon name="trash" size={13} /> 卸载</button>
+                      ) : (
+                        <button className="btn-float" disabled={!!componentJobs["ocr"]} onClick={() => downloadComponent("ocr")} title="下载 OCR 模型(PP-OCRv6,截图翻译与视频字幕需要)">
+                          <Icon name="download" size={13} /> 下载
+                        </button>
+                      )}
                     </div>
                     <div className="settings-row">
                       <span>ASR 语音识别 · 8语</span>
                       <span className="settings-note">音频字幕(中/英/日 等)</span>
                       <b className="local-model-size">{componentStatus.asr.multi.installed ? "已安装" : "约 247MB"}</b>
-                      <button className="btn-float" disabled={!!componentJobs["asr-multi"] || componentStatus.asr.multi.installed} onClick={() => downloadComponent("asr-multi")} title="下载 8 语流式语音识别模型(中/英/日/阿/印尼/俄/泰/越)">
-                        <Icon name="download" size={13} /> {componentStatus.asr.multi.installed ? "已安装" : "下载"}
-                      </button>
+                      {componentStatus.asr.multi.installed ? (
+                        <button className="btn-float danger" onClick={() => setConfirmDeleteComponent("asr-multi")} title="卸载 ASR 8语模型,释放约 247MB 磁盘空间"><Icon name="trash" size={13} /> 卸载</button>
+                      ) : (
+                        <button className="btn-float" disabled={!!componentJobs["asr-multi"]} onClick={() => downloadComponent("asr-multi")} title="下载 8 语流式语音识别模型(中/英/日/阿/印尼/俄/泰/越)">
+                          <Icon name="download" size={13} /> 下载
+                        </button>
+                      )}
                     </div>
                     <div className="settings-row">
                       <span>ASR 语音识别 · 韩语</span>
                       <span className="settings-note">音频字幕(韩语)</span>
                       <b className="local-model-size">{componentStatus.asr.ko.installed ? "已安装" : "约 399MB"}</b>
-                      <button className="btn-float" disabled={!!componentJobs["asr-ko"] || componentStatus.asr.ko.installed} onClick={() => downloadComponent("asr-ko")} title="下载韩语流式语音识别模型">
-                        <Icon name="download" size={13} /> {componentStatus.asr.ko.installed ? "已安装" : "下载"}
-                      </button>
+                      {componentStatus.asr.ko.installed ? (
+                        <button className="btn-float danger" onClick={() => setConfirmDeleteComponent("asr-ko")} title="卸载 ASR 韩语模型,释放约 399MB 磁盘空间"><Icon name="trash" size={13} /> 卸载</button>
+                      ) : (
+                        <button className="btn-float" disabled={!!componentJobs["asr-ko"]} onClick={() => downloadComponent("asr-ko")} title="下载韩语流式语音识别模型">
+                          <Icon name="download" size={13} /> 下载
+                        </button>
+                      )}
                     </div>
+                    {confirmDeleteComponent && (
+                      <div className="confirm-delete">
+                        <span>卸载 {confirmDeleteComponent === "ocr" ? "OCR 文字识别" : confirmDeleteComponent === "asr-multi" ? "ASR 语音识别(8语)" : "ASR 语音识别(韩语)"}?该操作会释放磁盘空间,不可恢复。</span>
+                        <button className="btn-float" onClick={() => setConfirmDeleteComponent(null)}>取消</button>
+                        <button className="btn-float danger" onClick={() => uninstallComponent(confirmDeleteComponent)}><Icon name="trash" size={13} /> 确认卸载</button>
+                      </div>
+                    )}
                     {/* 组件下载进度(与本地模型下载样式一致) */}
                     {Object.keys(componentJobs).length > 0 && (
                       <div className="pull-jobs">

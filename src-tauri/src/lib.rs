@@ -903,6 +903,58 @@ async fn download_asr_model(kind: String, on_progress: tauri::ipc::Channel<serde
     Ok(())
 }
 
+/// 卸载识别组件(kind: "ocr" / "asr-multi" / "asr-ko"),释放磁盘空间。
+/// OCR 同时清空已加载的引擎缓存;ASR 先停掉所有音频识别再删目录(避免文件句柄占用)。
+#[tauri::command]
+fn uninstall_component(kind: String) -> Result<(), String> {
+    match kind.as_str() {
+        "ocr" => {
+            // 清空已加载的 OCR 引擎,下次使用会重新初始化(文件缺失时给出清晰错误)
+            if let Some(lock) = OCR_CACHE.get() {
+                if let Ok(mut guard) = lock.lock() {
+                    *guard = None;
+                }
+            }
+            let dir = app_dir().join("ocr");
+            let mut removed = 0;
+            for (name, _, _) in OCR_COMPONENT_FILES {
+                let p = dir.join(name);
+                if p.is_file() {
+                    std::fs::remove_file(&p).map_err(|e| format!("删除 OCR 模型失败: {e}"))?;
+                    removed += 1;
+                }
+            }
+            if removed == 0 {
+                return Err("OCR 组件尚未安装".to_string());
+            }
+            // 目录已空则一并删除(应用自管目录)
+            if dir.is_dir()
+                && std::fs::read_dir(&dir)
+                    .map(|mut it| it.next().is_none())
+                    .unwrap_or(false)
+            {
+                let _ = std::fs::remove_dir(&dir);
+            }
+        }
+        "asr-multi" | "asr-ko" => {
+            // 先停掉所有音频识别,释放可能占用模型文件的句柄
+            audio::stop_all();
+            let dir_name = ASR_COMPONENT_MODELS
+                .iter()
+                .find(|(k, _, _, _)| *k == kind)
+                .map(|(_, d, _, _)| *d)
+                .ok_or_else(|| "未知的 ASR 组件".to_string())?;
+            let dir = app_dir().join("asr").join(dir_name);
+            if !dir.is_dir() {
+                return Err("该 ASR 组件尚未安装".to_string());
+            }
+            std::fs::remove_dir_all(&dir).map_err(|e| format!("删除 ASR 模型失败: {e}"))?;
+        }
+        _ => return Err("未知组件".to_string()),
+    }
+    Ok(())
+}
+
 // ============ 第7波:音频实时翻译 commands ============
 
 /// 启动音频实时识别(source: "system"=电脑音频 / "mic"=麦克风)
@@ -1547,7 +1599,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, component_status, download_ocr_models, download_asr_model, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, component_status, download_ocr_models, download_asr_model, uninstall_component, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
         .setup(|app| {
             // 【Ollama 启动(Wave 10 便携版)】
             // 1) 先清理上次退出异常留下的"本应用目录" ollama(按 exe 路径匹配,不误杀朋友系统的 Ollama)
