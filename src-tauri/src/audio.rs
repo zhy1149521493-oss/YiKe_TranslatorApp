@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use sherpa_onnx::{LinearResampler, OnlineRecognizer, OnlineRecognizerConfig};
+use sherpa_onnx::{LinearResampler, OnlineRecognizer, OnlineRecognizerConfig, OnlineSpeechDenoiser, OnlineSpeechDenoiserConfig};
 use tauri::{AppHandle, Emitter, Manager};
 
 use windows::core::GUID;
@@ -90,6 +90,31 @@ pub fn window_label(source: AudioSource) -> &'static str {
 static SENSITIVITY: std::sync::OnceLock<Mutex<std::collections::HashMap<String, f32>>> =
     std::sync::OnceLock::new();
 
+/// 降噪开关(设置 → 音频 → 降噪):识别前先用 GTCRN 压掉喘气/底噪,再喂给 ASR。
+/// 默认关(不影响速度);开启且模型缺失时自动退回不降噪(不阻塞识别)。
+static DENOISE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_denoise(enabled: bool) {
+    DENOISE_ENABLED.store(enabled, Ordering::SeqCst);
+    eprintln!("[audio] denoise enabled={enabled}");
+}
+
+pub fn get_denoise() -> bool {
+    DENOISE_ENABLED.load(Ordering::SeqCst)
+}
+
+/// GTCRN 降噪模型路径(exe 同目录 asr\denoise\gtcrn_simple.onnx)
+pub fn denoise_model_path() -> PathBuf {
+    app_dir().join("asr").join("denoise").join("gtcrn_simple.onnx")
+}
+
+/// 降噪模型是否已安装(设置页"识别组件"状态用)
+pub fn denoise_installed() -> bool {
+    std::fs::metadata(denoise_model_path())
+        .map(|m| m.len() >= 500_000)
+        .unwrap_or(false)
+}
+
 fn sensitivity_map() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, f32>> {
     SENSITIVITY
         .get_or_init(|| {
@@ -139,6 +164,22 @@ pub fn apply_sensitivity(lang: &str, app: &AppHandle) {
             eprintln!("[audio] apply_sensitivity source={:?} lang={lang} running={running} cur_lang={cur_lang}", source);
             if running && cur_lang == lang {
                 eprintln!("[audio] sensitivity applied, restarting recognizer (source={:?} lang={lang})", source);
+                stop(source);
+                let _ = start(source, &lang, app2.clone());
+            }
+        }
+    });
+}
+
+/// 应用降噪开关(重启所有运行中的识别器使降噪生效),同样放到后台线程
+pub fn apply_denoise(app: &AppHandle) {
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        for (source, e) in engine().clone() {
+            let running = e.running.load(Ordering::SeqCst);
+            let lang = e.lang.lock().unwrap().clone();
+            eprintln!("[audio] apply_denoise source={:?} running={running} lang={lang}", source);
+            if running {
                 stop(source);
                 let _ = start(source, &lang, app2.clone());
             }
@@ -352,8 +393,30 @@ pub fn start(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), Stri
         };
         diag_log(&format!("[audio] source={:?} recognizer READY", source));
         let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "ready" }));
+
+        // 降噪:开关打开且模型存在 → 创建 GTCRN 在线降噪器(识别前先压噪)
+        let denoiser = if get_denoise() && denoise_installed() {
+            let mut dcfg = OnlineSpeechDenoiserConfig::default();
+            dcfg.model.gtcrn.model = Some(denoise_model_path().to_string_lossy().to_string());
+            match OnlineSpeechDenoiser::create(&dcfg) {
+                Some(d) => {
+                    diag_log(&format!("[audio] denoiser GTCRN ready (source={:?})", source));
+                    Some(d)
+                }
+                None => {
+                    diag_log("[audio] denoiser create FAILED, running without denoise");
+                    None
+                }
+            }
+        } else {
+            if get_denoise() {
+                diag_log("[audio] denoise enabled but model missing, running without denoise");
+            }
+            None
+        };
+
         // 捕获循环(内部含 ASR 喂数据)
-        let result = capture_loop(source, &inner2, &recognizer, &run_app);
+        let result = capture_loop(source, &inner2, &recognizer, denoiser, &run_app);
         inner2.running.store(false, Ordering::SeqCst);
         match result {
             Ok(()) => {
@@ -488,6 +551,7 @@ fn capture_loop(
     source: AudioSource,
     inner: &AudioEngineInner,
     recognizer: &OnlineRecognizer,
+    denoiser: Option<OnlineSpeechDenoiser>,
     app: &AppHandle,
 ) -> Result<(), String> {
     unsafe {
@@ -703,7 +767,15 @@ fn capture_loop(
                 continue;
             }
 
-            stream.accept_waveform(16000, &resampled);
+            // 降噪(可选):GTCRN 输出 16k 样本,再喂给识别器
+            let mut feed = resampled;
+            if let Some(d) = &denoiser {
+                let out = d.run(&feed, 16000);
+                if !out.samples.is_empty() {
+                    feed = out.samples;
+                }
+            }
+            stream.accept_waveform(16000, &feed);
 
             // 增量解码
             while recognizer.is_ready(&stream) {

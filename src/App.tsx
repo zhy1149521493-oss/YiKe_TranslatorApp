@@ -588,13 +588,16 @@ function MainWindow() {
   /* 下载速度/累计字节基准:completedLayers=已完成层字节和,lastKey=当前层标识 */
   const pullSpeedRef = useRef<Record<string, { completedLayers: number; lastKey: string; lastTotal: number; lastSpeed: number; lastTime: number; lastCompleted: number }>>({});
   /* Wave 10.6: 识别组件(OCR/ASR)按需下载 —— 纯文字版不内置,设置页可下载 */
-  const [componentStatus, setComponentStatus] = useState<{ ocr: { installed: boolean }; asr: { multi: { installed: boolean }; ko: { installed: boolean } } }>({
+  const [componentStatus, setComponentStatus] = useState<{ ocr: { installed: boolean }; asr: { multi: { installed: boolean }; ko: { installed: boolean } }; denoise: { installed: boolean } }>({
     ocr: { installed: false },
     asr: { multi: { installed: false }, ko: { installed: false } },
+    denoise: { installed: false },
   });
   const [componentJobs, setComponentJobs] = useState<Record<string, { status: string; progress: number; total: number; speed?: number; phase?: string }>>({});
   const componentSpeedRef = useRef<Record<string, { lastTime: number; lastDownloaded: number; lastSpeed: number }>>({});
-  const [confirmDeleteComponent, setConfirmDeleteComponent] = useState<"ocr" | "asr-multi" | "asr-ko" | null>(null);
+  const [confirmDeleteComponent, setConfirmDeleteComponent] = useState<"ocr" | "asr-multi" | "asr-ko" | "denoise" | null>(null);
+  /* 降噪开关(设置 → 音频):识别前用 GTCRN 压掉喘气/底噪 */
+  const [audioDenoise, setAudioDenoise] = useState(false);
   const [importName, setImportName] = useState("");
   const [importPath, setImportPath] = useState("");
   const [importBusy, setImportBusy] = useState(false);
@@ -743,6 +746,11 @@ function MainWindow() {
           });
         }
         if (s.clipboard) setClipAuto(!!s.clipboard.auto);
+        /* 降噪开关:读配置 + 同步到 Rust(识别前是否先压噪) */
+        if (s.audio && typeof s.audio.denoise === "boolean") {
+          setAudioDenoise(s.audio.denoise);
+          invoke("audio_set_denoise", { enabled: s.audio.denoise }).catch(() => {});
+        }
         if (Array.isArray(cfg.providers)) {
           let list = cfg.providers
             .filter((p: ProviderCfg) => p && typeof p.id === "string")
@@ -841,6 +849,7 @@ function MainWindow() {
           translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs },
           subtitle: { fps: subFps, mode: subMode, engine: subEngine, region: subRegionRef.current },
           clipboard: { auto: clipAuto },
+          audio: { denoise: audioDenoise },
         },
       },
     }).catch((e) => console.error("保存配置失败", e));
@@ -859,13 +868,14 @@ function MainWindow() {
         translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs },
         subtitle: { fps: subFps, mode: subMode, engine: subEngine, region: subRegionRef.current },
         clipboard: { auto: clipAuto },
+        audio: { denoise: audioDenoise },
       };
       invoke("save_app_config", { config: { configVersion: 3, mainClose, engineMode, activeProviderId, providers, settings } }).catch((e) => console.error("保存配置失败", e));
       invoke("broadcast_settings", { settings }).catch(() => {});
       invoke("apply_shortcuts", { shortcuts }).catch(() => {});
     }, 400);
     return () => clearTimeout(t);
-  }, [engineMode, activeProviderId, providers, mainClose, theme, accentColor, appearance, shortcuts, sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs, subFps, subMode, subEngine, subRegion, clipAuto]);
+  }, [engineMode, activeProviderId, providers, mainClose, theme, accentColor, appearance, shortcuts, sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs, subFps, subMode, subEngine, subRegion, clipAuto, audioDenoise]);
 
   /* 主窗口应用主题 + 外观(CSS 变量即时生效) */
   useEffect(() => { applyWindowTheme("main", theme, appearance, accentColor); }, [theme, appearance, accentColor]);
@@ -1815,16 +1825,16 @@ function MainWindow() {
   /* ---- 识别组件(OCR/ASR)安装状态 + 下载(Wave 10.6) ---- */
   const refreshComponentStatus = async () => {
     try {
-      const st = await invoke<{ ocr: { installed: boolean }; asr: { multi: { installed: boolean }; ko: { installed: boolean } } }>("component_status");
+      const st = await invoke<{ ocr: { installed: boolean }; asr: { multi: { installed: boolean }; ko: { installed: boolean } }; denoise: { installed: boolean } }>("component_status");
       setComponentStatus(st);
     } catch (e) {
       console.error("component_status:", e);
     }
   };
   /* 下载 OCR / ASR 组件:进度事件从 Rust Channel 推回,统一计算速度 */
-  const downloadComponent = async (key: "ocr" | "asr-multi" | "asr-ko") => {
+  const downloadComponent = async (key: "ocr" | "asr-multi" | "asr-ko" | "denoise") => {
     if (componentJobs[key]) return;
-    const label = key === "ocr" ? "OCR 文字识别" : key === "asr-multi" ? "ASR 语音识别(8语)" : "ASR 语音识别(韩语)";
+    const label = key === "ocr" ? "OCR 文字识别" : key === "asr-multi" ? "ASR 语音识别(8语)" : key === "asr-ko" ? "ASR 语音识别(韩语)" : "降噪模型";
     setComponentJobs((prev) => ({ ...prev, [key]: { status: "准备下载…", progress: 0, total: 0 } }));
     setEngineStatus(`正在下载 ${label} …`);
     const ch = new Channel<any>();
@@ -1863,13 +1873,30 @@ function MainWindow() {
           componentSpeedRef.current[key] = { lastTime: now, lastDownloaded: m.downloaded, lastSpeed: speed };
           setComponentJobs((prev) => ({ ...prev, [key]: { status: "downloading", progress: m.downloaded, total: m.total || m.downloaded, speed } }));
         }
+      } else if (m.type === "denoise") {
+        if (m.status === "done") {
+          setComponentJobs((prev) => ({ ...prev, [key]: { status: "success", progress: 1, total: 1 } }));
+          setEngineStatus("降噪模型下载完成");
+        } else if (typeof m.downloaded === "number") {
+          const snap = componentSpeedRef.current[key];
+          const dt = (now - (snap?.lastTime ?? now)) / 1000;
+          let speed = snap?.lastSpeed ?? 0;
+          if (dt > 0) {
+            const inst = (m.downloaded - (snap?.lastDownloaded ?? 0)) / dt;
+            speed = speed > 0 ? speed * 0.7 + inst * 0.3 : inst;
+          }
+          componentSpeedRef.current[key] = { lastTime: now, lastDownloaded: m.downloaded, lastSpeed: speed };
+          setComponentJobs((prev) => ({ ...prev, [key]: { status: "downloading", progress: m.downloaded, total: m.total || m.downloaded, speed } }));
+        }
       }
     };
     try {
       if (key === "ocr") {
         await invoke("download_ocr_models", { onProgress: ch });
-      } else {
+      } else if (key === "asr-multi" || key === "asr-ko") {
         await invoke("download_asr_model", { kind: key === "asr-multi" ? "multi" : "ko", onProgress: ch });
+      } else {
+        await invoke("download_denoise_model", { onProgress: ch });
       }
       await refreshComponentStatus();
     } catch (e: any) {
@@ -1884,17 +1911,32 @@ function MainWindow() {
   };
 
   /* 卸载识别组件(OCR/ASR):释放磁盘空间;Rust 端会先停音频识别/清 OCR 缓存 */
-  const uninstallComponent = async (key: "ocr" | "asr-multi" | "asr-ko") => {
+  const uninstallComponent = async (key: "ocr" | "asr-multi" | "asr-ko" | "denoise") => {
     setConfirmDeleteComponent(null);
-    const label = key === "ocr" ? "OCR 文字识别" : key === "asr-multi" ? "ASR 语音识别(8语)" : "ASR 语音识别(韩语)";
+    const label = key === "ocr" ? "OCR 文字识别" : key === "asr-multi" ? "ASR 语音识别(8语)" : key === "asr-ko" ? "ASR 语音识别(韩语)" : "降噪模型";
     setEngineStatus(`正在卸载 ${label} …`);
     try {
       await invoke("uninstall_component", { kind: key });
       await refreshComponentStatus();
+      if (key === "denoise") {
+        setAudioDenoise(false);
+        await invoke("audio_set_denoise", { enabled: false }).catch(() => {});
+      }
       setEngineStatus(`${label} 已卸载,已释放磁盘空间`);
     } catch (e: any) {
       setEngineStatus(`卸载失败: ${e?.message ?? e}`);
     }
+  };
+
+  /* 降噪开关(设置 → 音频):模型未安装时引导去识别组件下载 */
+  const toggleDenoise = async (on: boolean) => {
+    if (on && !componentStatus.denoise.installed) {
+      setEngineStatus("降噪模型未安装:请到 设置 → 模型 → 识别组件 下载「降噪模型」(约0.5MB)后再开启");
+      return;
+    }
+    setAudioDenoise(on);
+    try { await invoke("audio_set_denoise", { enabled: on }); } catch {}
+    setEngineStatus(on ? "已开启降噪(正在重启识别器…)" : "已关闭降噪");
   };
 
   /* 删除本地模型(DELETE /api/delete);若删的是当前模型,自动切换到剩余模型 */
@@ -2303,6 +2345,14 @@ function MainWindow() {
                       <b>{(sensitivityForLang(code) ?? 1.2).toFixed(1)}s</b>
                     </div>
                   ))}
+                  <div className="settings-row">
+                    <span>降噪(去喘气/底噪)</span>
+                    <label className="subtitle-mode" title="识别前先用 GTCRN 压掉喘气/底噪/部分回声,适合跑步、户外等嘈杂视频;需先下载降噪模型">
+                      <input type="checkbox" checked={audioDenoise} onChange={(e) => toggleDenoise(e.target.checked)} />
+                      开启
+                    </label>
+                    <span className="settings-note">{audioDenoise ? "已开启(重启识别后生效)" : componentStatus.denoise.installed ? "默认关(不增加CPU占用)" : "需先到「识别组件」下载降噪模型"}</span>
+                  </div>
                 </div>
               )}
               {settingsPage === "subtitle" && (
@@ -2518,9 +2568,21 @@ function MainWindow() {
                         </button>
                       )}
                     </div>
+                    <div className="settings-row">
+                      <span>降噪模型(GTCRN)</span>
+                      <span className="settings-note">识别前压掉喘气/底噪</span>
+                      <b className="local-model-size">{componentStatus.denoise.installed ? "已安装" : "约 0.5MB"}</b>
+                      {componentStatus.denoise.installed ? (
+                        <button className="btn-float danger" onClick={() => setConfirmDeleteComponent("denoise")} title="卸载降噪模型,释放磁盘空间(降噪开关将自动关闭)"><Icon name="trash" size={13} /> 卸载</button>
+                      ) : (
+                        <button className="btn-float" disabled={!!componentJobs["denoise"]} onClick={() => downloadComponent("denoise")} title="下载 GTCRN 降噪模型(设置 → 音频 里开启降噪后生效)">
+                          <Icon name="download" size={13} /> 下载
+                        </button>
+                      )}
+                    </div>
                     {confirmDeleteComponent && (
                       <div className="confirm-delete">
-                        <span>卸载 {confirmDeleteComponent === "ocr" ? "OCR 文字识别" : confirmDeleteComponent === "asr-multi" ? "ASR 语音识别(8语)" : "ASR 语音识别(韩语)"}?该操作会释放磁盘空间,不可恢复。</span>
+                        <span>卸载 {confirmDeleteComponent === "ocr" ? "OCR 文字识别" : confirmDeleteComponent === "asr-multi" ? "ASR 语音识别(8语)" : confirmDeleteComponent === "asr-ko" ? "ASR 语音识别(韩语)" : "降噪模型"}?该操作会释放磁盘空间,不可恢复。</span>
                         <button className="btn-float" onClick={() => setConfirmDeleteComponent(null)}>取消</button>
                         <button className="btn-float danger" onClick={() => uninstallComponent(confirmDeleteComponent)}><Icon name="trash" size={13} /> 确认卸载</button>
                       </div>
@@ -2532,7 +2594,7 @@ function MainWindow() {
                           const pct = job.total > 0 ? Math.min(100, Math.round((job.progress / job.total) * 100)) : 0;
                           const speedText = job.speed && job.speed > 0 ? formatSpeed(job.speed) : "";
                           const etaSec = job.speed && job.speed > 0 && job.total > job.progress ? Math.round((job.total - job.progress) / job.speed) : 0;
-                          const displayName = key === "ocr" ? "OCR 文字识别" : key === "asr-multi" ? "ASR 语音识别(8语)" : "ASR 语音识别(韩语)";
+                          const displayName = key === "ocr" ? "OCR 文字识别" : key === "asr-multi" ? "ASR 语音识别(8语)" : key === "asr-ko" ? "ASR 语音识别(韩语)" : "降噪模型";
                           const statusText = job.status === "downloading"
                             ? `${pct}%${speedText ? ` · ${speedText}` : ""}${etaSec > 0 ? ` · 剩余 ${formatEta(etaSec)}` : ""}${job.phase ? ` · ${job.phase}` : ""}`
                             : (PULL_STATUS_TEXT[job.status] ?? job.status);

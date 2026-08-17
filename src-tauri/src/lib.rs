@@ -733,6 +733,14 @@ const ASR_COMPONENT_MODELS: &[(&str, &str, &str, u64)] = &[
     ),
 ];
 
+/// GTCRN 降噪模型(设置 → 音频 → 降噪 使用;sherpa-onnx 官方 speech-enhancement-models)
+/// 依次尝试官方源与 hf-mirror 镜像(GitHub 国内偶发连不上,镜像兜底)
+const DENOISE_MODEL_URLS: &[&str] = &[
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/speech-enhancement-models/gtcrn_simple.onnx",
+    "https://hf-mirror.com/bitsydarel/gtcrn-onnx/resolve/main/gtcrn_simple.onnx",
+];
+const DENOISE_MODEL_SIZE: u64 = 535_638;
+
 fn ocr_component_installed() -> bool {
     let dir = app_dir().join("ocr");
     OCR_COMPONENT_FILES
@@ -767,7 +775,8 @@ fn component_status() -> serde_json::Value {
         "asr": {
             "multi": { "installed": asr_component_installed("multi") },
             "ko": { "installed": asr_component_installed("ko") },
-        }
+        },
+        "denoise": { "installed": audio::denoise_installed() },
     })
 }
 
@@ -907,6 +916,29 @@ async fn download_asr_model(kind: String, on_progress: tauri::ipc::Channel<serde
     Ok(())
 }
 
+/// 下载 GTCRN 降噪模型(约 523KB,用于 设置 → 音频 → 降噪)
+#[tauri::command]
+async fn download_denoise_model(on_progress: tauri::ipc::Channel<serde_json::Value>) -> Result<(), String> {
+    if audio::denoise_installed() {
+        let _ = on_progress.send(serde_json::json!({"type":"denoise","status":"done","skipped":true}));
+        return Ok(());
+    }
+    let client = build_download_client(600)?;
+    let mut last_err = String::new();
+    for url in DENOISE_MODEL_URLS {
+        let dest = audio::denoise_model_path();
+        let tag = serde_json::json!({"type":"denoise"});
+        match download_one(&client, url, &dest, DENOISE_MODEL_SIZE, tag, &on_progress).await {
+            Ok(()) => {
+                let _ = on_progress.send(serde_json::json!({"type":"denoise","status":"done"}));
+                return Ok(());
+            }
+            Err(e) => last_err = e,
+        }
+    }
+    Err(format!("降噪模型下载失败: {last_err}"))
+}
+
 /// 卸载识别组件(kind: "ocr" / "asr-multi" / "asr-ko"),释放磁盘空间。
 /// OCR 同时清空已加载的引擎缓存;ASR 先停掉所有音频识别再删目录(避免文件句柄占用)。
 #[tauri::command]
@@ -954,9 +986,31 @@ fn uninstall_component(kind: String) -> Result<(), String> {
             }
             std::fs::remove_dir_all(&dir).map_err(|e| format!("删除 ASR 模型失败: {e}"))?;
         }
+        "denoise" => {
+            audio::stop_all();
+            audio::set_denoise(false); // 模型没了,降噪开关自动关闭,避免下次启动空转
+            let dir = app_dir().join("asr").join("denoise");
+            if !dir.is_dir() {
+                return Err("降噪模型尚未安装".to_string());
+            }
+            std::fs::remove_dir_all(&dir).map_err(|e| format!("删除降噪模型失败: {e}"))?;
+        }
         _ => return Err("未知组件".to_string()),
     }
     Ok(())
+}
+
+/// 设置降噪开关(设置 → 音频);开启后重启运行中的识别器使降噪生效
+#[tauri::command]
+fn audio_set_denoise(enabled: bool, app: tauri::AppHandle) {
+    audio::set_denoise(enabled);
+    audio::apply_denoise(&app);
+}
+
+/// 查询降噪开关状态
+#[tauri::command]
+fn audio_get_denoise() -> bool {
+    audio::get_denoise()
 }
 
 // ============ 第7波:音频实时翻译 commands ============
@@ -1603,7 +1657,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, component_status, download_ocr_models, download_asr_model, uninstall_component, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity])
+        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, component_status, download_ocr_models, download_asr_model, download_denoise_model, uninstall_component, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity, audio_set_denoise, audio_get_denoise])
         .setup(|app| {
             // 【Ollama 启动(Wave 10 便携版)】
             // 1) 先清理上次退出异常留下的"本应用目录" ollama(按 exe 路径匹配,不误杀朋友系统的 Ollama)
