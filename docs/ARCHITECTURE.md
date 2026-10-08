@@ -4,6 +4,8 @@
 
 `src/App.tsx` routes to main, translation floating, audio floating or screenshot overlay components using the native window label. The main window owns configuration and provider selection, and orchestrates translation. React and CSS are embedded into the portable executable by the Tauri CLI release build.
 
+The main window's studio/classic layouts share state and translation handlers. `src/Studio.css` scopes the redesign to `.studio` and the main document's `data-layout="studio"`; auxiliary windows retain `src/App.css` and their original palettes. `settings.uiLayout` selects the layout without changing native IPC. `scripts/ui-preview.mjs` supplies development-only fixture IPC through Vite and is not included in the production frontend. See [workbench behavior](WORKBENCH.md).
+
 `src/text-tools.ts` provides bounded language heuristics and conservative normalized subtitle deduplication. Uncertain source detection returns `auto`; prompts then ask the model to detect the original language. These heuristics do not replace a full language-identification model.
 
 `src/request.ts` bounds the complete translation operation to 60 seconds. Its AbortSignal is passed to local Ollama fetch calls, including body reads. For native API IPC calls, the UI task settles on cancellation and the channel ignores late callbacks; the HTTP operation itself currently runs until its existing native timeout/completion.

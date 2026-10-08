@@ -3,7 +3,8 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { currentMonitor } from "@tauri-apps/api/window";
-import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { version as appVersion } from "../src-tauri/tauri.conf.json";
 import { LatestTask, errorMessage } from "./latest-task";
 import { detectLang, similarity } from "./text-tools";
 import { boundedRequest } from "./request";
@@ -12,6 +13,7 @@ import type { AudioLine, AudioJob } from "./audio-tasks";
 type AudioEvent = { source: string; text: string; id: string; session: number };
 type ScreenCapture = { b64: string; x: number; y: number };
 import "./App.css";
+import "./Studio.css";
 
 const appWindow = getCurrentWebviewWindow();
 
@@ -124,9 +126,16 @@ function applyWindowTheme(
   if (acc) {
     st.setProperty("--ios-blue", acc);
     st.setProperty("--ios-accent-rgb", hexToRgbTriplet(acc));
+    const rgb = hexToRgbTriplet(acc).split(",").map(Number).map(channel => {
+      const value = channel / 255;
+      return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+    });
+    const luminance = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+    st.setProperty("--studio-on-accent", luminance > 0.179 ? "#000000" : "#ffffff");
   } else {
     st.removeProperty("--ios-blue");
     st.removeProperty("--ios-accent-rgb");
+    st.removeProperty("--studio-on-accent");
   }
   if (item.textColor) st.setProperty("--ios-text", item.textColor);
   else st.removeProperty("--ios-text");
@@ -615,6 +624,17 @@ function MainWindow() {
   const [ollamaBackend, setOllamaBackend] = useState("");
   /* Wave 9: 设置中心 / 主题 / 外观 / 快捷键 */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [uiLayout, setUiLayout] = useState<"studio" | "classic">("studio");
+  const [actionNotice, setActionNotice] = useState("");
+  useEffect(() => {
+    document.documentElement.dataset.layout = uiLayout;
+    return () => { delete document.documentElement.dataset.layout; };
+  }, [uiLayout]);
+  useEffect(() => {
+    if (!actionNotice) return;
+    const timer = setTimeout(() => setActionNotice(""), 3000);
+    return () => clearTimeout(timer);
+  }, [actionNotice]);
   const [settingsPage, setSettingsPage] = useState<string>("general");
   const [activeMode, setActiveMode] = useState<"text" | "audio" | "subtitle" | "screenshot">("text");
   const [engineMenuOpen, setEngineMenuOpen] = useState(false);
@@ -732,6 +752,7 @@ function MainWindow() {
         if (cfg.engineMode) setEngineMode(cfg.engineMode);
         if (cfg.mainClose === "quit") setMainClose("quit");
         const s = cfg.settings ?? {};
+        setUiLayout(s.uiLayout === "classic" ? "classic" : "studio");
         // Restore subtitle state after the asynchronous config request resolves.
         if (s.subtitle?.fps) setSubFps(Number(s.subtitle.fps));
         if (s.subtitle?.mode) setSubMode(s.subtitle.mode);
@@ -802,12 +823,17 @@ function MainWindow() {
   useEffect(() => {
     const el = textareaElRef.current;
     if (!el) return;
+    if (uiLayout === "studio") {
+      el.style.removeProperty("height");
+      el.style.removeProperty("overflow-y");
+      return;
+    }
     el.style.height = "auto";
     const max = Math.round(window.innerHeight * 0.38);
     const h = Math.min(Math.max(el.scrollHeight, 96), max);
     el.style.height = h + "px";
     el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
-  }, [input]);
+  }, [input, uiLayout, activeMode, settingsOpen]);
 
   const floatingRef = useRef(false);
   useEffect(() => { floatingRef.current = floatingOpen; }, [floatingOpen]);
@@ -828,7 +854,7 @@ function MainWindow() {
       config: {
         configVersion: 3, mainClose, engineMode, activeProviderId, providers,
         settings: {
-          theme, accentColor, appearance, shortcuts,
+          theme, accentColor, appearance, shortcuts, uiLayout,
           translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs },
           subtitle: { fps: subFps, mode: subMode, engine: subEngine, region: subRegionRef.current },
           clipboard: { auto: clipAuto },
@@ -837,7 +863,7 @@ function MainWindow() {
       },
     }).catch((e) => console.error("保存配置失败", e));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mainClose]);
+  }, [mainClose, uiLayout]);
 
   /* 配置变更防抖保存(400ms)+ 广播外观到其他窗口 + 重注册快捷键(须在相关 state 声明之后) */
   useEffect(() => {
@@ -845,6 +871,7 @@ function MainWindow() {
     const t = setTimeout(() => {
       const settings = {
         theme,
+        uiLayout,
         accentColor,
         appearance,
         shortcuts,
@@ -858,7 +885,7 @@ function MainWindow() {
       invoke("apply_shortcuts", { shortcuts }).catch(() => {});
     }, 400);
     return () => clearTimeout(t);
-  }, [engineMode, activeProviderId, providers, mainClose, theme, accentColor, appearance, shortcuts, sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs, subFps, subMode, subEngine, subRegion, clipAuto, audioDenoise]);
+  }, [engineMode, activeProviderId, providers, mainClose, theme, uiLayout, accentColor, appearance, shortcuts, sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs, subFps, subMode, subEngine, subRegion, clipAuto, audioDenoise]);
 
   /* 主窗口应用主题 + 外观(CSS 变量即时生效) */
   useWindowTheme("main", theme, appearance, accentColor);
@@ -876,7 +903,14 @@ function MainWindow() {
 
   // 便捷访问:某来源是否运行 / 状态 / 增量文本
   const isSrcOn = (src: string) => !!audioSubOn[src];
-  const srcStatus = (src: string) => audioStatus[src] ?? "";
+  const srcStatus = (src: string) => {
+    const status = audioStatus[src] ?? "";
+    if (status === "loading") return "正在加载识别模型…";
+    if (status === "ready") return "识别就绪";
+    if (status === "stopped") return "已停止";
+    if (status.startsWith("error:")) return `识别失败：${status.slice(6)}`;
+    return status;
+  };
   const srcLevel = (src: string) => audioLevel[src] ?? -100;
 
   /* 读取某语言灵敏度(懒加载:首次从 Rust 拉全部) */
@@ -2053,21 +2087,67 @@ function MainWindow() {
   })();
   const taskIcon: IconName = activeMode === "audio" ? "mic" : activeMode === "subtitle" ? "film" : activeMode === "screenshot" ? "camera" : "pen";
   const statusInfo = (() => {
-    if (sourcesForMode(audioMode).some((s) => isSrcOn(s))) {
+    if (activeMode === "audio" && sourcesForMode(audioMode).some((s) => isSrcOn(s))) {
       const st = sourcesForMode(audioMode).map((s) => srcStatus(s)).filter(Boolean)[0] ?? "";
       return { text: "正在监听" + (st ? " · " + st : ""), tone: "live", icon: "dot" as IconName };
     }
-    if (subtitleOn) return { text: "字幕运行中", tone: "live", icon: "dot" as IconName };
-    if (translating) return { text: apiThinking ? "模型思考中…" : "翻译中…", tone: "work", icon: (apiThinking ? "sparkle" : "clock") as IconName };
+    if (activeMode === "subtitle" && subtitleOn) return { text: "字幕运行中", tone: "live", icon: "dot" as IconName };
+    if (activeMode === "text" && translating) return { text: apiThinking ? "模型思考中…" : "翻译中…", tone: "work", icon: (apiThinking ? "sparkle" : "clock") as IconName };
     return { text: "就绪", tone: "idle", icon: "dot" as IconName };
   })();
 
   /* ---- UI ---- */
+  const studio = uiLayout === "studio";
+  const resolvedDark = theme === "dark" || (theme === "system" && typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  const studioLanguages = activeMode === "text" ? { src: sourceLang, tgt: targetLang } : langFor(activeMode);
+  const textWorking = activeMode === "text" && translating;
+  const modes: { id: typeof activeMode; icon: IconName; label: string; hint: string }[] = [
+    { id: "text", icon: "pen", label: "文本翻译", hint: "写下、粘贴，让语言自然流动。" },
+    { id: "audio", icon: "mic", label: "音频翻译", hint: "听见电脑或麦克风的声音，实时理解。" },
+    { id: "subtitle", icon: "film", label: "视频字幕", hint: "框选字幕区域，让屏幕里的对话更清楚。" },
+    { id: "screenshot", icon: "camera", label: "截图翻译", hint: "选中屏幕上的文字，即刻跨越语言。" },
+  ];
+  const currentOutput = activeMode === "audio" ? audioHist.filter(x => x.result).slice(-2).map(x => x.result).join("\n") : modeOutput[activeMode];
+  const manuallyTranslate = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    void runTranslation(input);
+  };
+  const pasteInput = async () => {
+    const before = inputRef.current;
+    try {
+      const text = await readText();
+      if (inputRef.current !== before) return;
+      if (!text) { setActionNotice("剪贴板中没有文字"); return; }
+      setInput(text);
+      textareaElRef.current?.focus();
+    } catch (error) { setActionNotice(`粘贴失败：${errorMessage(error)}`); }
+  };
+  const copyOutput = async () => {
+    try { await writeText(currentOutput); setActionNotice("译文已复制"); }
+    catch (error) { setActionNotice(`复制失败：${errorMessage(error)}`); }
+  };
   return (
-    <div className="app-main">
+    <div className={`app-main${studio ? " studio" : ""}`} data-mode={activeMode}>
+      {studio && <aside className="studio-rail">
+        <div className="studio-wordmark" onMouseDown={onHeaderMouseDown}>
+          <span className="studio-mark"><Icon name="swap" size={24} /></span>
+          <span className="studio-brand-text"><b>译刻</b><small>YIKE TRANSLATOR</small></span>
+        </div>
+        <div className="rail-caption">翻译工作台</div>
+        <nav className="studio-nav" aria-label="翻译模式">
+          {modes.map((mode, index) => <button key={mode.id} title={mode.label} aria-current={!settingsOpen && activeMode === mode.id ? "page" : undefined} className={`studio-nav-item${!settingsOpen && activeMode === mode.id ? " active" : ""}`} onClick={() => { setActiveMode(mode.id); setSettingsOpen(false); }}>
+            <Icon name={mode.icon} size={18} /><span>{mode.label}</span><small>0{index + 1}</small>
+          </button>)}
+        </nav>
+        <div className="rail-spacer" />
+        <button className={`studio-nav-item${floatingOpen ? " active" : ""}`} onClick={toggleFloating} title={floatingOpen ? "关闭悬浮窗" : "打开悬浮窗"} aria-pressed={floatingOpen}><Icon name="windows" size={18} /><span>划词悬浮窗</span></button>
+        <button className={`studio-nav-item${settingsOpen ? " active" : ""}`} title="设置中心" onClick={() => setSettingsOpen(!settingsOpen)}><Icon name="settings" size={18} /><span>设置中心</span></button>
+        <div className="rail-foot"><span className="rail-foot-line" />让理解，少一点距离。</div>
+      </aside>}
       <header className="app-header" onMouseDown={onHeaderMouseDown} onDoubleClick={onHeaderDoubleClick}>
         <div className="app-brand">
           <h1>译刻</h1>
+          {studio && <span className="studio-header-label">{settingsOpen ? "偏好设置" : "翻译引擎"}</span>}
           <div className="engine-menu-wrap">
             <button className="engine-pill" onClick={() => setEngineMenuOpen(!engineMenuOpen)} title={`切换翻译引擎 / 模型: ${engineLabelText}`} aria-expanded={engineMenuOpen} aria-controls="engine-menu">
               <Icon name={activeApiModel ? "globe" : "dot"} size={13} /> <span className="engine-pill-label">{engineLabelText}</span> <Icon name="chevron" size={11} className="engine-pill-caret" />
@@ -2104,6 +2184,8 @@ function MainWindow() {
           </div>
         </div>
         <div className="toolbar-right">
+          <button className="layout-switch" title={studio ? "切回经典界面，翻译功能保持不变" : "切换到工作台界面"} onClick={() => setUiLayout(studio ? "classic" : "studio")}><Icon name="restore" size={13} /><span>{studio ? "经典界面" : "工作台界面"}</span></button>
+          {studio && <button className="icon-btn" title="切换深浅主题" onClick={() => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark")}><Icon name="sparkle" size={16} /></button>}
           <button className={`icon-btn${settingsOpen ? " active" : ""}`} onClick={() => setSettingsOpen(!settingsOpen)} title="设置中心">
             <Icon name="settings" size={16} />
           </button>
@@ -2138,6 +2220,14 @@ function MainWindow() {
                 <div className="settings-section">
                   <h2>常规</h2>
                   <div className="settings-row">
+                    <span>界面布局</span>
+                    <div className="seg">
+                      <button className={`seg-item${studio ? " active" : ""}`} onClick={() => setUiLayout("studio")}>工作台</button>
+                      <button className={`seg-item${!studio ? " active" : ""}`} onClick={() => setUiLayout("classic")}>经典</button>
+                    </div>
+                    <span className="settings-note">随时切换，保留当前内容与设置</span>
+                  </div>
+                  <div className="settings-row">
                     <span>主题</span>
                     <div className="seg">
                       {([["light", "浅色"], ["dark", "深色"], ["system", "跟随系统"]] as const).map(([v, label]) => (
@@ -2147,7 +2237,7 @@ function MainWindow() {
                   </div>
                   <div className="settings-row">
                     <span>主题颜色</span>
-                    <input type="color" value={accentColor || (theme === "dark" ? "#0a84ff" : "#007aff")} onChange={(e) => setAccentColor(e.target.value)} title="自定义强调色(按钮 / 选中高亮等)" />
+                    <input type="color" value={accentColor || (studio ? (resolvedDark ? "#68dac1" : "#167c6b") : (resolvedDark ? "#0a84ff" : "#007aff"))} onChange={(e) => setAccentColor(e.target.value)} title="自定义强调色(按钮 / 选中高亮等)" />
                     <button className="btn-float" onClick={() => setAccentColor("")}>跟随默认</button>
                     <span className="settings-note">强调色用于按钮、选中高亮等,即时生效</span>
                   </div>
@@ -2606,7 +2696,7 @@ function MainWindow() {
               {settingsPage === "about" && (
                 <div className="settings-section">
                   <h2>关于</h2>
-                  <p>译刻 v1.0.0</p>
+                  <p>译刻 v{appVersion}</p>
                   <p className="settings-note">Copyright © 2026 谨语</p>
                   <p>本地优先的桌面实时翻译工作台:文本 / 划词 / 截图 / 视频字幕 / 音频字幕,支持本地 Ollama 与外接 API 双引擎。</p>
                   <p>杀软(如火绒)可能拦截未签名程序:请加入白名单或信任后再使用;个别老式程序(如 DirectUI、游戏内文本)划词捕获不到。</p>
@@ -2618,6 +2708,19 @@ function MainWindow() {
         </main>
       ) : (
       <main className="app-body workbench">
+        {studio && <>
+          <div className="studio-heading">
+            <div><div className="studio-eyebrow">YOUR WORDS, A LITTLE FURTHER.</div><h2>{taskTitle}</h2><p>{modes.find(mode => mode.id === activeMode)?.hint}</p></div>
+            <span className={`status-pill ${statusInfo.tone}`}><Icon name={statusInfo.icon} size={11} /> {statusInfo.text}</span>
+          </div>
+          <div className="studio-language-bar">
+            <label><span>从</span><select className="lang-sel" aria-label="源语言" value={studioLanguages.src} onChange={e => activeMode === "text" ? setSourceLang(e.target.value) : setModeLang(activeMode, { src: e.target.value })}>{LANGS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}</select></label>
+            <button className="lang-swap" disabled={activeMode !== "text" && studioLanguages.src === "auto"} onClick={() => activeMode === "text" ? swapLangs() : swapModeLang(activeMode)} title="交换语言方向"><Icon name="swap" size={16} /></button>
+            <label><span>到</span><select className="lang-sel" aria-label="目标语言" value={studioLanguages.tgt} onChange={e => activeMode === "text" ? setTargetLang(e.target.value) : setModeLang(activeMode, { tgt: e.target.value })}>{LANGS.filter(l => l.code !== "auto").map(l => <option key={l.code} value={l.code}>{l.label}</option>)}</select></label>
+            <span className="studio-auto"><Icon name="sparkle" size={13} /> {activeMode === "text" ? "输入即译" : independentLang ? "独立语言" : "跟随文本"}</span>
+            {activeMode === "audio" && !AUDIO_ASR_LANGS.includes(studioLanguages.src) && <span className="lang-warn"><Icon name="warn" size={13} /> 音频识别仅支持中文、英语、日语和韩语，请切换源语言。</span>}
+          </div>
+        </>}
         {/* 悬浮窗:细长圆角按钮,单独放在模式卡片上方 */}
         <button className={`float-toggle${floatingOpen ? " active" : ""}`} onClick={toggleFloating} title={floatingOpen ? "关闭翻译悬浮窗" : "打开翻译悬浮窗(Ctrl+Shift+D)"}>
           <Icon name="windows" size={14} /> {floatingOpen ? "关闭悬浮窗" : "打开悬浮窗"}
@@ -2651,8 +2754,8 @@ function MainWindow() {
         <div className="task-card">
           <div className="task-switch" key={activeMode}>
             <div className="task-head">
-              <span className="task-title"><Icon name={taskIcon} size={18} /> {taskTitle}</span>
-              <span className={`status-pill ${statusInfo.tone}`}><Icon name={statusInfo.icon} size={11} /> {statusInfo.text}</span>
+              <span className="task-title"><Icon name={taskIcon} size={18} /> {studio ? "原文" : taskTitle}</span>
+              {studio ? <span className="panel-kicker">SOURCE</span> : <span className={`status-pill ${statusInfo.tone}`}><Icon name={statusInfo.icon} size={11} /> {statusInfo.text}</span>}
             </div>
 
             {/* 文本翻译(默认模式) */}
@@ -2668,18 +2771,25 @@ function MainWindow() {
                     <option key={l.code} value={l.code}>{l.label}</option>
                   ))}
                 </select>
-                <button className="btn-primary" onClick={() => runTranslation(input)} disabled={translating || !input.trim()} title="强制手动重译">
+                <button className="btn-primary" onClick={manuallyTranslate} disabled={translating || !input.trim()} title="强制手动重译">
                   重译
                 </button>
               </div>
               <textarea
                 ref={textareaElRef}
                 className="trans-input"
-                placeholder="输入文字,自动翻译..."
+                placeholder={studio ? "在这里输入或粘贴文字…\n\n无需点击，停笔后自动翻译。" : "输入文字,自动翻译..."}
+                aria-label="待翻译原文"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onKeyDown={e => { if (e.ctrlKey && e.key === "Enter" && !e.nativeEvent.isComposing && !translating && input.trim()) { e.preventDefault(); manuallyTranslate(); } }}
                 rows={1}
               />
+              {studio && <div className="source-actions">
+                <button className="studio-text-btn" onClick={pasteInput}><Icon name="clipboard" size={14} /> 粘贴</button>
+                <button className="studio-text-btn" disabled={!input} onClick={() => { setInput(""); textareaElRef.current?.focus(); }} title="清空原文和译文"><Icon name="trash" size={14} /> 清空</button>
+                <span className="character-count">{Array.from(input).length.toLocaleString()} 字符</span>
+              </div>}
               {conflictHint && conflict && !translating && modeOutput.text && (
                 <div className="conflict-bar">
                   <span>检测到原文已是目标语言,需要交换翻译方向吗?</span>
@@ -2741,6 +2851,7 @@ function MainWindow() {
                 </div>
               </div>
               )}
+              {studio && !audioHist.some(x => x.text) && <div className="studio-source-empty"><Icon name="mic" size={24} /><p>开始监听后，原文会实时显示。</p></div>}
               </div>
             )}
 
@@ -2770,6 +2881,7 @@ function MainWindow() {
                   <div className="subtitle-current-src">{subCurrent.text}</div>
                 </div>
               )}
+              {studio && !subCurrent && <div className="studio-source-empty"><Icon name="film" size={24} /><p>先选好字幕区域，再开始识别。</p></div>}
               </div>
             )}
 
@@ -2790,6 +2902,7 @@ function MainWindow() {
 
         {/* 译文输出:独立于任务卡,每种模式各自一份互不影响 */}
         <div className="trans-output trans-output-standalone">
+          {studio && <div className="studio-output-head"><span className="task-title"><Icon name="globe" size={18} /> 译文</span><span className="panel-kicker">TRANSLATION</span></div>}
           <div className="output-label">译文 {translating && activeMode === "text" && <span className="pulse"><Icon name="dot" size={10} /></span>}{apiThinking && activeMode === "text" && <span className="thinking-hint"><Icon name="sparkle" size={11} /> 模型思考中…</span>}</div>
           {activeMode === "audio" ? (
             /* 音频模式:译文区显示两句(译文第一句已说过 + 译文第二句正在说),与语音窗一致 */
@@ -2805,9 +2918,12 @@ function MainWindow() {
               {!audioHist.some((x) => x.result) && <span className="output-empty-hint">暂无译文</span>}
             </div>
           ) : (
-            <div className="output-text">{modeOutput[activeMode] || (activeMode === "text" ? (translating ? "" : "输入后自动翻译...") : "暂无译文")}</div>
+            <div className="output-text">{modeOutput[activeMode] || (studio ? "" : activeMode === "text" ? (translating ? "" : "输入后自动翻译...") : "暂无译文")}</div>
           )}
+          {studio && !currentOutput && <div className="studio-empty"><span className="studio-empty-symbol"><Icon name={textWorking ? "clock" : "globe"} size={32} /></span><b>{textWorking ? (apiThinking ? "模型正在思考" : "正在翻译") : "另一种语言，同一个意思"}</b><p>{textWorking ? "译文会在这里逐步呈现" : activeMode === "text" ? "从左侧的第一句话开始。" : "开始识别后，译文会出现在这里。"}</p></div>}
+          {studio && <div className="output-actions"><span>{translating && activeMode === "text" ? "正在生成…" : currentOutput ? "译文支持选中复制" : "等待原文"}</span><button className="studio-text-btn" disabled={!currentOutput} onClick={copyOutput}><Icon name="clipboard" size={14} /> 复制译文</button></div>}
         </div>
+        {studio && <div className="studio-bottom-bar"><span role="status" aria-live="polite">{actionNotice || (activeMode === "text" ? "停笔 0.6 秒后自动翻译" : "识别结果与译文同步显示")}</span>{activeMode === "text" && <button className="btn-primary studio-translate" onClick={manuallyTranslate} disabled={translating || !input.trim()}><Icon name="refresh" size={14} /> 重新翻译 <kbd>Ctrl ↵</kbd></button>}</div>}
       </main>
       )}
     </div>

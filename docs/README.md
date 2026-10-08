@@ -25,6 +25,8 @@ The portable executable is `src-tauri/target/release/tauri-app.exe`. Place it al
 
 The repair build is delivered as `E:/TranslatorApp/译刻-修复版.exe`. It supersedes the earlier UI-only trial build. The original executable was retained. This is a local trial build, not a published release.
 
+The redesigned build is delivered separately as `E:/TranslatorApp/译刻-工作台版.exe`. See [workbench controls and preview](WORKBENCH.md) and [source/binary rollback](ROLLBACK.md). The new layout can switch immediately to classic; optional `settings.uiLayout` defaults to `studio` and also accepts `classic`.
+
 ## Configuration and behavior
 
 Configuration version 3 is stored in `config.json` next to the executable. Configure providers through the UI using a base URL, API key and model. Keys are currently stored in plaintext locally. API mode sends translation text to the selected provider. Local mode uses Ollama at `127.0.0.1:11434`. Auto mode selects a complete API provider when available, otherwise local inference; a failed API request is not retried through local inference.
@@ -47,4 +49,4 @@ Pop-Location
 
 `npm test` uses Node's built-in test runner and the existing TypeScript dependency. It checks request supersession, deadlines, queueing/finalization, source/session identity, startup rendering, language detection, asynchronous subtitle restoration and settings migration. Rust tests check locking, silent packets, cropping bounds and SSE decoding; one test runs the real API proxy against a loopback HTTP fixture with a dummy key. Offline Cargo checks require cached dependencies. Browser preview checks use mocked IPC and inference; they do not validate actual Windows audio devices, native window behavior, paid APIs or multi-monitor capture.
 
-See [the review and completed repairs](REVIEW.md) and [architecture and native IPC contracts](ARCHITECTURE.md). The existing machine-specific project memory remains in `E:/TranslatorApp/docs`; this source documentation is kept in Git so contributors can reproduce the build and understand the current limitations.
+See [the review and completed repairs](REVIEW.md), [architecture and native IPC contracts](ARCHITECTURE.md), [the workbench interface](WORKBENCH.md) and [rollback instructions](ROLLBACK.md). The existing machine-specific project memory remains in `E:/TranslatorApp/docs`; this source documentation is kept in Git so contributors can reproduce the build and understand the current limitations.

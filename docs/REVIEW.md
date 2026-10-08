@@ -6,6 +6,8 @@ Reviewed source baseline: `de5a29a7350a3da15857cf9a28eb76b9d764df02` (v1.1.0 wit
 
 All eight reviewed defects have been addressed in source and the new local repair build. This is implementation/regression-test status, not a claim that every Windows device and display configuration has been tested.
 
+The stable repairs are archived at `994ddfa` / `checkpoint/core-repairs-2026-10-08`. The subsequent reversible UI redesign is documented in [the workbench guide](WORKBENCH.md); its separate executable retains these repairs. The original findings and repair-build measurements below remain a record of the review baseline.
+
 | Reviewed area | Repair | Verification |
 | --- | --- | --- |
 | Audio restart deadlock | Snapshot the engine map before iterating; release its lock before joining capture; serialize lifecycle operations with a separate mutex and dispatch start/stop off IPC threads. | Rust tests check map availability during iteration and capture-thread join. |

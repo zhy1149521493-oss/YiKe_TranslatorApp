@@ -30,7 +30,7 @@ function harness(config) {
       return Promise.resolve();
     },
   };
-  for (const name of ['EngineMode', 'MainClose', 'Theme', 'AccentColor', 'Appearance', 'Shortcuts', 'ConflictHint', 'SourceLang', 'TargetLang', 'StreamOn', 'NumCtx', 'IndependentLang', 'ModeLangs', 'ClipAuto', 'AudioDenoise', 'Providers', 'ActiveProviderId', 'SubFps', 'SubMode', 'SubEngine', 'SubRegion']) ctx['set' + name] = v => { states[name] = v; };
+  for (const name of ['EngineMode', 'MainClose', 'UiLayout', 'Theme', 'AccentColor', 'Appearance', 'Shortcuts', 'ConflictHint', 'SourceLang', 'TargetLang', 'StreamOn', 'NumCtx', 'IndependentLang', 'ModeLangs', 'ClipAuto', 'AudioDenoise', 'Providers', 'ActiveProviderId', 'SubFps', 'SubMode', 'SubEngine', 'SubRegion']) ctx['set' + name] = v => { states[name] = v; };
   vm.createContext(ctx);
   vm.runInContext(code, ctx);
   const cleanup = ctx.hydrate();
@@ -45,6 +45,15 @@ test('subtitle settings hydrate after IPC resolves, including the saved region',
   assert.equal(h.states.SubMode, 'ocr-first');
   assert.equal(h.states.SubEngine, 'rapid');
   assert.equal(JSON.stringify(h.ctx.subRegionRef.current), JSON.stringify({ x: 20, y: 30, w: 400, h: 100 }));
+});
+
+test('classic layout restores after restart and older configs default to studio', async () => {
+  const classic = harness({ configVersion: 3, settings: { uiLayout: 'classic' } });
+  await classic.load();
+  assert.equal(classic.states.UiLayout, 'classic');
+  const old = harness({ configVersion: 3, settings: {} });
+  await old.load();
+  assert.equal(old.states.UiLayout, 'studio');
 });
 
 test('an unmounted window ignores late config hydration and migration', async () => {
