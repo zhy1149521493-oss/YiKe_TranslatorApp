@@ -2,7 +2,15 @@ import { useEffect, useRef, useState, useCallback, type CSSProperties } from "re
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { currentMonitor } from "@tauri-apps/api/window";
 import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import { LatestTask, errorMessage } from "./latest-task";
+import { detectLang, similarity } from "./text-tools";
+import { boundedRequest } from "./request";
+import { AudioTaskQueue, updateAudioLine, applyAudioResult } from "./audio-tasks";
+import type { AudioLine, AudioJob } from "./audio-tasks";
+type AudioEvent = { source: string; text: string; id: string; session: number };
+type ScreenCapture = { b64: string; x: number; y: number };
 import "./App.css";
 
 const appWindow = getCurrentWebviewWindow();
@@ -253,25 +261,15 @@ LANGS.forEach((l) => {
 const AUDIO_ASR_LANGS = ["auto", "zh", "en", "ja", "ko"];
 
 /* ============ 工具 ============ */
-function detectLang(text: string): string {
-  if (/[\u3040-\u309f\u30a0-\u30ff]/.test(text)) return "ja"; // 日文假名优先
-  if (/[\u4e00-\u9fff\u3400-\u4dbf]/.test(text)) return "zh";
-  if (/[a-zA-Z]{3,}/.test(text)) return "en";
-  if (/[\uac00-\ud7af]/.test(text)) return "ko";
-  if (/[À-ÿ]/.test(text)) return "fr";
-  if (/[\u0400-\u04ff]/.test(text)) return "ru";
-  if (/[\u0600-\u06ff]/.test(text)) return "ar";
-  return "en";
-}
-
-/* 字符级 Jaccard 相似度:用于视频字幕去重(同一句被连续截到多次时跳过) */
-function similarity(a: string, b: string): number {
-  if (!a || !b) return 0;
-  const sa = new Set(a.replace(/\s+/g, ""));
-  const sb = new Set(b.replace(/\s+/g, ""));
-  let inter = 0;
-  for (const ch of sa) if (sb.has(ch)) inter++;
-  return inter / Math.max(sa.size, sb.size);
+function useWindowTheme(surface: SurfaceKey, theme: string, appearance: Record<SurfaceKey, AppearanceItem>, accent?: string) {
+  useEffect(() => {
+    const apply = () => applyWindowTheme(surface, theme, appearance, accent);
+    apply();
+    if (theme !== "system") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [surface, theme, appearance, accent]);
 }
 
 /* 本地模型大小显示:字节 → MB / GB */
@@ -308,7 +306,7 @@ function buildPrompt(
   source: string,
   target: string,
   text: string
-): string {  const srcName = LANG_MAP[source] || source;
+): string {  const srcName = source === "auto" ? "its original language (detect it automatically)" : LANG_MAP[source] || source;
   const tgtName = LANG_MAP[target] || target;
   return `Translate the following text from ${srcName} to ${tgtName}. Only output the translated text, no explanations, no notes: ${text}`;
 }
@@ -363,7 +361,8 @@ async function fetchOllamaFull(
   source: string,
   target: string,
   text: string,
-  numCtx: number
+  numCtx: number,
+  signal?: AbortSignal
 ): Promise<string> {
   const resp = await fetch(OLLAMA_API, {
     method: "POST",
@@ -374,6 +373,7 @@ async function fetchOllamaFull(
       stream: false,
       options: { temperature: 0.1, num_ctx: numCtx, enable_thinking: false },
     }),
+    signal,
   });
   if (!resp.ok) throw new Error(`Ollama API ${resp.status}`);
   const data = await resp.json();
@@ -459,11 +459,12 @@ async function fetchApiStream(
   target: string,
   text: string,
   onToken: (t: string) => void,
-  _signal?: AbortSignal,
+  signal?: AbortSignal,
   onReasoning?: (r: string) => void
 ) {
   const ch = new Channel<string>();
   ch.onmessage = (t) => {
+    if (signal?.aborted) return;
     try {
       const m = JSON.parse(t);
       if (m && typeof m.c === "string") onToken(m.c);
@@ -525,8 +526,9 @@ async function translateStream(
   signal?: AbortSignal,
   onReasoning?: (r: string) => void
 ) {
+  return boundedRequest(async (requestSignal) => {
   const eng = resolveEngine();
-  if (eng.kind === "api") return fetchApiStream(eng.provider, source, target, text, onToken, signal, onReasoning);
+  if (eng.kind === "api") return fetchApiStream(eng.provider, source, target, text, onToken, requestSignal, onReasoning);
   /* 无本地模型守卫:给友好提示而不是裸 API 报错(列表加载完才开始拦截,避免启动瞬间误报) */
   if (localModelsReady) {
     if (localModelStore.length === 0) {
@@ -537,10 +539,12 @@ async function translateStream(
     }
     if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载/导入,或切换到外接 API 模型`);
   }
-  return fetchOllamaStream(model, source, target, text, numCtx, onToken, signal);
+  return fetchOllamaStream(model, source, target, text, numCtx, onToken, requestSignal);
+  }, signal);
 }
 
-async function translateFull(model: string, source: string, target: string, text: string, numCtx: number): Promise<string> {
+async function translateFull(model: string, source: string, target: string, text: string, numCtx: number, signal?: AbortSignal): Promise<string> {
+  return boundedRequest(async (requestSignal) => {
   const eng = resolveEngine();
   if (eng.kind === "api") return fetchApiFull(eng.provider, source, target, text);
   if (localModelsReady) {
@@ -552,7 +556,8 @@ async function translateFull(model: string, source: string, target: string, text
     }
     if (!model || !localModelStore.some((m) => m.name === model)) throw new Error(`本地模型「${model || "未选择"}」未安装:请到「设置 → 模型」下载/导入,或切换到外接 API 模型`);
   }
-  return fetchOllamaFull(model, source, target, text, numCtx);
+  return fetchOllamaFull(model, source, target, text, numCtx, requestSignal);
+  }, signal);
 }
 
 /* ============ 主窗口 ============ */
@@ -606,7 +611,6 @@ function MainWindow() {
   const [confirmDeleteModel, setConfirmDeleteModel] = useState<string | null>(null);
   const [mainClose, setMainClose] = useState<"hide" | "quit">("hide"); // 主窗口 ✕ 行为(Wave 9 设置面板提供 UI,默认隐藏到托盘)
   const configLoadedRef = useRef(false);
-  const loadedCfgRef = useRef<any>(null);
   /* ollama 实际推理后端(GPU/CPU):CPU 时提示本地翻译较慢(无 GPU 回退提示) */
   const [ollamaBackend, setOllamaBackend] = useState("");
   /* Wave 9: 设置中心 / 主题 / 外观 / 快捷键 */
@@ -719,14 +723,24 @@ function MainWindow() {
 
   /* 启动时加载配置(config.json,含引擎 + Wave 9 设置) */
   useEffect(() => {
+    let cancelled = false;
     invoke<any>("load_app_config")
       .then((cfg) => {
+        if (cancelled) return;
         configLoadedRef.current = true;
         if (!cfg) return;
-        loadedCfgRef.current = cfg;
         if (cfg.engineMode) setEngineMode(cfg.engineMode);
         if (cfg.mainClose === "quit") setMainClose("quit");
         const s = cfg.settings ?? {};
+        // Restore subtitle state after the asynchronous config request resolves.
+        if (s.subtitle?.fps) setSubFps(Number(s.subtitle.fps));
+        if (s.subtitle?.mode) setSubMode(s.subtitle.mode);
+        if (s.subtitle?.engine) setSubEngine(s.subtitle.engine);
+        const region = s.subtitle?.region;
+        if (region && typeof region.x === "number" && typeof region.y === "number" && region.w > 0 && region.h > 0) {
+          subRegionRef.current = { x: region.x, y: region.y, w: region.w, h: region.h };
+          setSubRegion(subRegionRef.current);
+        }
         setTheme(s.theme === "dark" || s.theme === "system" ? s.theme : "light");
         setAccentColor(typeof s.accentColor === "string" ? s.accentColor : "");
         setAppearance(mergeAppearance(DEFAULT_APPEARANCE, s.appearance));
@@ -761,27 +775,9 @@ function MainWindow() {
             list = list.map((p: ProviderCfg) => ({ ...p, models: p.model && p.model.trim() ? [p.model] : [] }));
             invoke("save_app_config", {
               config: {
+                ...cfg,
                 configVersion: 3,
-                mainClose: cfg.mainClose ?? "hide",
-                engineMode: cfg.engineMode,
-                activeProviderId: cfg.activeProviderId,
                 providers: list,
-                settings: {
-                  theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light",
-                  accentColor: typeof s.accentColor === "string" ? s.accentColor : "",
-                  appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance),
-                  shortcuts: { ...DEFAULT_SHORTCUTS, ...(s.shortcuts ?? {}) },
-                  translate: {
-                    sourceLang: s.translate?.sourceLang ?? "auto",
-                    targetLang: s.translate?.targetLang ?? "zh",
-                    streamOn: s.translate?.streamOn ?? true,
-                    numCtx: s.translate?.numCtx ?? 1024,
-                    conflictHint: s.translate?.conflictHint !== false,
-                    independentLang: s.translate?.independentLang === true,
-                  },
-                  subtitle: { fps: s.subtitle?.fps ?? 2, mode: s.subtitle?.mode ?? "trans-first", engine: s.subtitle?.engine ?? "win" },
-                  clipboard: { auto: s.clipboard?.auto ?? false },
-                },
               },
             }).catch(() => {});
           }
@@ -791,12 +787,13 @@ function MainWindow() {
           }
         }
       })
-      .catch(() => { configLoadedRef.current = true; });
+      .catch(() => { if (!cancelled) configLoadedRef.current = true; });
+    return () => { cancelled = true; };
   }, []);
 
-  const abortRef = useRef<AbortController | null>(null);
-  const busyRef = useRef(false);
-  const screenshotSource = useRef<string>("main"); // 截图发起方: main=桌面端 / floating=悬浮窗
+  const [translationTask] = useState(() => new LatestTask<string>());
+  const [screenshotTask] = useState(() => new LatestTask<{ source: string; b64?: string; x: number; y: number; w: number; h: number }>());
+  const [clipboardTask] = useState(() => new LatestTask<string>());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef(input);
   inputRef.current = input;
@@ -823,20 +820,6 @@ function MainWindow() {
   const [subStatus, setSubStatus] = useState("");               // 字幕状态提示
   const [subRegion, setSubRegion] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const subRegionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
-
-  /* 从配置恢复字幕参数(须在 subFps/subMode/subEngine 声明之后执行) */
-  useEffect(() => {
-    const s = loadedCfgRef.current?.settings ?? {};
-    if (s.subtitle?.fps) setSubFps(Number(s.subtitle.fps));
-    if (s.subtitle?.mode) setSubMode(s.subtitle.mode);
-    if (s.subtitle?.engine) setSubEngine(s.subtitle.engine);
-    // 字幕区域持久化:重启后恢复上次框选的区域(否则回到默认底部 1/4,可能对不上视频)
-    const r = s.subtitle?.region;
-    if (r && typeof r.x === "number" && typeof r.y === "number" && r.w > 0 && r.h > 0) {
-      subRegionRef.current = { x: r.x, y: r.y, w: r.w, h: r.h };
-      setSubRegion({ x: r.x, y: r.y, w: r.w, h: r.h });
-    }
-  }, []);
 
   /* mainClose 立即落盘:用户可能马上点 ✕(Rust 直接从文件读,不能等 400ms 防抖) */
   useEffect(() => {
@@ -878,7 +861,7 @@ function MainWindow() {
   }, [engineMode, activeProviderId, providers, mainClose, theme, accentColor, appearance, shortcuts, sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs, subFps, subMode, subEngine, subRegion, clipAuto, audioDenoise]);
 
   /* 主窗口应用主题 + 外观(CSS 变量即时生效) */
-  useEffect(() => { applyWindowTheme("main", theme, appearance, accentColor); }, [theme, appearance, accentColor]);
+  useWindowTheme("main", theme, appearance, accentColor);
   const [subCurrent, setSubCurrent] = useState<{ text: string; result: string } | null>(null); // 当前字幕(主窗口显示)
 
   /* ===== 音频实时字幕(第 7 波:系统内部音频 → ASR → 翻译) ===== */
@@ -889,7 +872,7 @@ function MainWindow() {
   const [audioLevel, setAudioLevel] = useState<Record<string, number>>({});        // 各来源实时音量(dB)
   const [sensitivities, setSensitivities] = useState<Record<string, number>>({}); // 各语言断句灵敏度(秒)
   /* 主窗口音频 hist:原文区/译文区四行显示(与语音窗一致,跨来源合并按时间推进) */
-  const [audioHist, setAudioHist] = useState<{ text: string; result: string }[]>([{ text: "", result: "" }]);
+  const [audioHist, setAudioHist] = useState<AudioLine[]>([]);
 
   // 便捷访问:某来源是否运行 / 状态 / 增量文本
   const isSrcOn = (src: string) => !!audioSubOn[src];
@@ -924,95 +907,74 @@ function MainWindow() {
     (window as any).__audioSensChanged = handler;
     return () => { delete (window as any).__audioSensChanged; };
   }, []);
-  const audioTranslatingRef = useRef<Record<string, boolean>>({});  // 各来源翻译串行标志
-  const audioPendingRef = useRef<Record<string, string>>({});       // 各来源待翻译的最新文本
-  const audioTranslateStartRef = useRef<Record<string, number>>({}); // 各来源当前翻译开始时间(看门狗)
-  const audioFinalRef = useRef<Record<string, string>>({});         // 各来源当前定稿句
-  const lastAudioTranslatedRef = useRef<Record<string, string>>({}); // 各来源去重
+  const [audioQueues] = useState<Record<string, AudioTaskQueue>>(() => ({ system: new AudioTaskQueue(), mic: new AudioTaskQueue() }));
+  const audioDesiredRef = useRef<Record<string, boolean>>({});
+  const audioSessionsRef = useRef<Record<string, number>>({});
+  const audioAcceptRef = useRef<Record<string, boolean>>({});
+  const invalidateAudio = useCallback((source: string, desired?: boolean) => {
+    audioQueues[source]?.invalidate();
+    audioAcceptRef.current[source] = false;
+    if (desired !== undefined) audioDesiredRef.current[source] = desired;
+  }, [audioQueues]);
 
   const subTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const ocrInFlightRef = useRef(false);                         // 上一帧 OCR 未返回则跳过
-  const subTranslatingRef = useRef(false);                      // 翻译串行:翻译中跳过新帧
+  const [subtitleTask] = useState(() => new LatestTask<string>());
   const lastSubOcrRef = useRef("");                             // 去重:上次 OCR 文本
   const lastSubTranslatedRef = useRef("");                      // 去重:上次已翻译文本
   const subModeRef = useRef(subMode);
   useEffect(() => { subModeRef.current = subMode; }, [subMode]);
-  const subPendingRef = useRef("");                             // 待翻译的最新文本(去抖用)
   const subDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null); // 句子稳定延迟
-  const subDirtyRef = useRef(false);                            // 翻译期间来了新句子
 
-  /* 默认字幕区域:画面底部 1/4(物理像素) */
-  const ensureSubRegion = () => {
+  /* Default to the monitor containing the main window, in physical desktop coordinates. */
+  const ensureSubRegion = async () => {
+    if (subRegionRef.current) return;
+    const monitor = await currentMonitor().catch(() => null);
     if (subRegionRef.current) return;
     const dpr = window.devicePixelRatio || 1;
-    const W = Math.round(window.screen.width * dpr);
-    const H = Math.round(window.screen.height * dpr);
-    const region = { x: 0, y: Math.round(H * 0.75), w: W, h: Math.round(H * 0.25) };
+    const width = monitor?.size.width ?? Math.round(window.screen.width * dpr);
+    const height = monitor?.size.height ?? Math.round(window.screen.height * dpr);
+    const region = {
+      x: monitor?.position.x ?? 0, y: (monitor?.position.y ?? 0) + Math.round(height * 0.75),
+      w: width, h: Math.floor(height * 0.25),
+    };
     subRegionRef.current = region;
     setSubRegion(region);
   };
 
-  /* 字幕引擎:定时截帧 → subtitle_frame(Rust OCR)→ subtitle-ocr 事件回调 */
-  useEffect(() => {
-    if (!subtitleOn) return;
-    ensureSubRegion();
-    setSubStatus("字幕运行中,区域: " + (subRegionRef.current ? `(${subRegionRef.current.x},${subRegionRef.current.y} ${subRegionRef.current.w}x${subRegionRef.current.h})` : "未设置"));
-    subTimerRef.current = setInterval(() => {
-      const r = subRegionRef.current;
-      if (!r || ocrInFlightRef.current) return;
-      ocrInFlightRef.current = true;
-      invoke("subtitle_frame", { x: r.x, y: r.y, w: r.w, h: r.h, engine: subEngine }).catch(() => { ocrInFlightRef.current = false; });
-    }, 1000 / subFps);
-    return () => { if (subTimerRef.current) clearInterval(subTimerRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subtitleOn, subFps, subEngine]);
-
   /* 提交翻译(句子已稳定):流式输出译文,最多滞后一句 */
   const submitSubtitle = useCallback(async (text: string) => {
-    if (subTranslatingRef.current) { subDirtyRef.current = true; return; }
-    subTranslatingRef.current = true;
-    subDirtyRef.current = false;
-    try {
-      let src = langFor("subtitle").src;
-      let tgt = langFor("subtitle").tgt;
-      if (src === "auto") src = detectLang(text);
-      if (src === tgt) tgt = src === "zh" ? "en" : "zh";
-      lastSubTranslatedRef.current = text;
-      // 原文优先:先显示原文,译文流式替换
-      if (subModeRef.current === "ocr-first") {
-        const first = { text, result: "" };
-        appWindow.emitTo("floating", "subtitle-text", first).catch(() => {});
-        setSubCurrent(first);
+    await subtitleTask.submit(text, async (text, { signal, isCurrent }) => {
+      try {
+        let src = langFor("subtitle").src;
+        let tgt = langFor("subtitle").tgt;
+        if (src === "auto") src = detectLang(text);
+        if (src === tgt) tgt = src === "zh" ? "en" : "zh";
+        lastSubTranslatedRef.current = text;
+        const publish = (result: string) => {
+          if (!isCurrent()) return;
+          appWindow.emitTo("floating", "subtitle-text", { text, result }).catch(() => {});
+          setSubCurrent({ text, result });
+          setModeOutput(prev => ({ ...prev, subtitle: result }));
+        };
+        if (subModeRef.current === "ocr-first") publish("");
+        let result = "";
+        await translateStream(model, src, tgt, text, numCtx, token => {
+          result += token;
+          publish(result);
+        }, signal);
+        publish(result.trim() || "(空响应)");
+        if (isCurrent()) setSubStatus("");
+      } catch (error) {
+        if (isCurrent()) {
+          setSubStatus(`翻译失败: ${errorMessage(error)}`);
+          setModeOutput(prev => ({ ...prev, subtitle: `翻译失败: ${errorMessage(error)}` }));
+          // A failed sentence can be retried if it remains on screen.
+          lastSubOcrRef.current = "";
+          lastSubTranslatedRef.current = "";
+        }
       }
-      let result = "";
-      await translateStream(model, src, tgt, text, numCtx, (tok) => {
-        result += tok;
-        const p = { text, result };
-        appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
-        setSubCurrent(p);
-        setModeOutput((prev) => ({ ...prev, subtitle: result }));
-      });
-      if (!result.trim()) result = "(空响应)";
-      const p = { text, result };
-      await appWindow.emitTo("floating", "subtitle-text", p).catch(() => {});
-      setSubCurrent(p);
-      setModeOutput((prev) => ({ ...prev, subtitle: result }));
-      setSubStatus("");
-    } catch (e: any) {
-      setSubStatus(`翻译失败: ${e}`);
-      setModeOutput((prev) => ({ ...prev, subtitle: `翻译失败: ${e}` }));
-    } finally {
-      subTranslatingRef.current = false;
-      // 翻译期间来了新句子:翻译最新的(跳过中间态)
-      if (subDirtyRef.current && subPendingRef.current) {
-        const t = subPendingRef.current;
-        subPendingRef.current = "";
-        submitSubtitle(t);
-      }
-    }
-    // 依赖必须包含 sourceLang/targetLang:independentLang=false 时语言方向取自它们,
-    // 否则闭包捕获旧值,用户改语言方向后字幕/音频/截图翻译仍走旧方向(修复 2026-08-13)
-  }, [model, numCtx, independentLang, modeLangs, sourceLang, targetLang]);
+    });
+  }, [subtitleTask, model, numCtx, independentLang, modeLangs, sourceLang, targetLang, engineMode, activeProviderId, providers]);
 
   /* 字幕 OCR 结果:去重 → 句子稳定(500ms 去抖)→ 提交翻译 */
   const handleSubtitleOcr = useCallback((text: string) => {
@@ -1025,83 +987,74 @@ function MainWindow() {
     if (text === lastSubTranslatedRef.current) return;            // 已翻译过,跳过
     // 去抖:字幕逐字增长(Hello→Hello World→...),等句子稳定再翻,避免中间态反复翻译
     if (subDebounceRef.current) clearTimeout(subDebounceRef.current);
-    subPendingRef.current = text;
     subDebounceRef.current = setTimeout(() => {
-      const t = subPendingRef.current;
-      if (!t) return;
-      submitSubtitle(t);
+      void submitSubtitle(text);
     }, 500);
   }, [submitSubtitle]);
 
   const subtitleOcrHandlerRef = useRef(handleSubtitleOcr);
   useEffect(() => { subtitleOcrHandlerRef.current = handleSubtitleOcr; }, [handleSubtitleOcr]);
 
+  useEffect(() => {
+    let cancelled = false;
+    let busy = false;
+    subtitleTask.invalidate();
+    lastSubOcrRef.current = "";
+    lastSubTranslatedRef.current = "";
+    if (subDebounceRef.current) clearTimeout(subDebounceRef.current);
+    if (subtitleOn) {
+      void ensureSubRegion();
+      subTimerRef.current = setInterval(() => {
+        const region = subRegionRef.current;
+        if (!region || busy) return;
+        busy = true;
+        invoke<string>("subtitle_frame", { ...region, engine: subEngine })
+          .then(text => { if (!cancelled) subtitleOcrHandlerRef.current(text); })
+          .catch(error => { if (!cancelled) setSubStatus(`字幕OCR: ${errorMessage(error)}`); })
+          .finally(() => { busy = false; });
+      }, 1000 / subFps);
+    }
+    return () => {
+      cancelled = true;
+      if (subTimerRef.current) clearInterval(subTimerRef.current);
+      if (subDebounceRef.current) clearTimeout(subDebounceRef.current);
+      subtitleTask.invalidate();
+    };
+  }, [subtitleOn, subFps, subEngine, subRegion, submitSubtitle, subtitleTask]);
+
   /* 音频字幕翻译(source: 来源):原文实时增长 + 译文完成后整体替换(保留旧译文,不闪)
      增量时 result="" 只更新原文;译文完成时 result 非空整体替换 */
-  const submitAudioSubtitle = useCallback(async (source: string, text: string, isFinal = false) => {
-    if (!text.trim()) return;
-    if (audioTranslatingRef.current[source]) {
-      // 看门狗:同一句翻译超过 65s 未完成 → 强制放锁,让后续句子继续(防外接 API 卡住后"无响应")
-      const started = audioTranslateStartRef.current[source] ?? 0;
-      if (Date.now() - started > 65000) {
-        audioTranslatingRef.current[source] = false;
-        audioTranslateStartRef.current[source] = 0;
-        setAudioStatus((prev) => ({ ...prev, [source]: "上句翻译超时,已跳过" }));
-      } else {
-        audioPendingRef.current[source] = text;
-        return;
-      }
-    }
-    audioTranslatingRef.current[source] = true;
-    audioTranslateStartRef.current[source] = Date.now();
-    try {
-      let src = langFor("audio").src;
-      let tgt = langFor("audio").tgt;
-      if (src === "auto") src = detectLang(text);
-      if (src === tgt) tgt = src === "zh" ? "en" : "zh";
-      lastAudioTranslatedRef.current[source] = text;
-      // 只更新原文(保留旧译文),译文完成后再整体替换
-      const role = isFinal ? "prev" : "cur"; // prev=定稿句(滚为上一句), cur=当前句(增量)
-      const send = (result: string) =>
-        invoke("audio_forward_to_floating", { source, text, src, tgt, result, role }).catch((e) => {
-          setAudioStatus((prev) => ({ ...prev, [source]: `转发失败: ${JSON.stringify(e)}` }));
+  const submitAudioSubtitle = useCallback((job: AudioJob) => {
+    if (!job.text.trim()) return;
+    audioQueues[job.source]?.enqueue(job, async (job, { signal, isCurrent }) => {
+      const current = () => isCurrent() && audioDesiredRef.current[job.source]
+        && audioSessionsRef.current[job.source] === job.session;
+      try {
+        let src = langFor("audio").src;
+        let tgt = langFor("audio").tgt;
+        if (src === "auto") src = detectLang(job.text);
+        if (src === tgt) tgt = src === "zh" ? "en" : "zh";
+        const result = (await translateFull(model, src, tgt, job.text, numCtx, signal)).trim() || "(空响应)";
+        if (!current()) return;
+        setAudioHist(history => applyAudioResult(history, job, result));
+        // Finalization happens on the recognition event, never when queued work starts.
+        await invoke("audio_forward_to_floating", {
+          source: job.source, text: job.text, src, tgt, result,
+          role: job.isFinal ? "prev" : "cur", id: job.id, session: job.session,
         });
-      // 仅定稿(final)才向语音窗滚动(压入上一句):partial 的原文已由 __audioPartial 实时更新,
-      // 若每次增量都 send("") 会让语音窗每识别一个新词就滚动一次(第一句第二句重复/乱窜)。
-      if (isFinal) await send("");
-      let result = await translateFull(model, src, tgt, text, numCtx);
-      if (!result.trim()) result = "(空响应)";
-      // partial/final 都向语音窗发译文:partial = 当前句边说边出, final = 定稿句(已滚为上一句)。
-      await send(result);
-      // 主窗口 hist:译文按角色直接更新(不依赖 text 匹配——识别增量变化快,匹配会导致译文丢失/滞后)
-      setAudioHist((h) => {
-        if (isFinal) {
-          if (h.length < 2) return h;
-          const i = h.length - 2; // 上一句(定稿句)
-          return h.map((x, j) => (j === i ? { ...x, result } : x));
-        }
-        const i = h.length - 1; // 当前句
-        if (!h[i].text) return h; // 当前句为空(刚定稿滚动)时丢弃 partial 译文,等 final 翻译补
-        return h.map((x, j) => (j === i ? { ...x, result } : x));
-      });
-      setModeOutput((prev) => ({ ...prev, audio: result }));
-      setAudioStatus((prev) => ({ ...prev, [source]: "" }));
-    } catch (e: any) {
-      setAudioStatus((prev) => ({ ...prev, [source]: `翻译失败: ${e}` }));
-      setModeOutput((prev) => ({ ...prev, audio: `翻译失败: ${e}` }));
-    } finally {
-      audioTranslatingRef.current[source] = false;
-      audioTranslateStartRef.current[source] = 0;
-      // 翻译期间来了新字:立刻翻译最新的(最新优先,跳过中间态)
-      if (audioPendingRef.current[source]) {
-        const t = audioPendingRef.current[source];
-        audioPendingRef.current[source] = "";
-        submitAudioSubtitle(source, t);
+        if (!current()) return;
+        setAudioStatus(prev => ({ ...prev, [job.source]: "" }));
+      } catch (error) {
+        if (current()) setAudioStatus(prev => ({ ...prev, [job.source]: `翻译失败: ${errorMessage(error)}` }));
       }
-    }
-    // 依赖必须包含 sourceLang/targetLang:independentLang=false 时语言方向取自它们,
-    // 否则闭包捕获旧值,用户改语言方向后仍走旧方向(修复 2026-08-13)
-  }, [model, numCtx, independentLang, modeLangs, sourceLang, targetLang]);
+    });
+  }, [audioQueues, model, numCtx, independentLang, modeLangs, sourceLang, targetLang, engineMode, activeProviderId, providers]);
+
+  useEffect(() => {
+    // Changing translation settings cancels old jobs without stopping capture.
+    for (const queue of Object.values(audioQueues)) queue.invalidate();
+    return () => { for (const queue of Object.values(audioQueues)) queue.invalidate(); };
+  }, [audioQueues, submitAudioSubtitle]);
 
   /* 模式对应的来源列表 */
   const sourcesForMode = useCallback((mode: string): string[] => {
@@ -1142,10 +1095,12 @@ function MainWindow() {
       for (const src of sourcesForMode(audioMode)) {
         setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
         try {
+          invalidateAudio(src, true);
           await invoke("audio_subtitle_start", { source: src, lang: asrLang });
           setAudioSubOn((prev) => ({ ...prev, [src]: true }));
           await invoke("open_audio_floating_window", { source: src }).catch(() => {});
         } catch (e: any) {
+          invalidateAudio(src, false);
           setAudioStatus((prev) => ({ ...prev, [src]: `启动失败: ${e}` }));
           setAudioSubOn((prev) => ({ ...prev, [src]: false }));
         }
@@ -1153,15 +1108,15 @@ function MainWindow() {
     } else {
       // 停止当前模式的所有来源
       for (const src of sourcesForMode(audioMode)) {
+        invalidateAudio(src, false);
         try { await invoke("audio_subtitle_stop", { source: src }); } catch {}
         setAudioSubOn((prev) => ({ ...prev, [src]: false }));
         setAudioPartial((prev) => ({ ...prev, [src]: "" }));
-        audioFinalRef.current[src] = "";
         setAudioStatus((prev) => ({ ...prev, [src]: "已停止" }));
         await invoke("close_audio_floating_window", { source: src }).catch(() => {});
       }
     }
-  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus, localModels, providers]);
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus, localModels, providers, invalidateAudio]);
 
   /* 切换音频来源模式:运行中切换 = 自动关旧来源+启新来源(不停止);
      停止状态切换 = 仅改模式选择 */
@@ -1174,10 +1129,10 @@ function MainWindow() {
     const newSrcs = sourcesForMode(mode);
     for (const src of oldSrcs) {
       if (!newSrcs.includes(src)) {
+        invalidateAudio(src, false);
         try { await invoke("audio_subtitle_stop", { source: src }); } catch {}
         setAudioSubOn((prev) => ({ ...prev, [src]: false }));
         setAudioPartial((prev) => ({ ...prev, [src]: "" }));
-        audioFinalRef.current[src] = "";
         setAudioStatus((prev) => ({ ...prev, [src]: "已停止" }));
         await invoke("close_audio_floating_window", { source: src }).catch(() => {});
       }
@@ -1212,77 +1167,64 @@ function MainWindow() {
       if (!oldSrcs.includes(src)) {
         setAudioStatus((prev) => ({ ...prev, [src]: "正在加载 ASR 模型…" }));
         try {
+          invalidateAudio(src, true);
           await invoke("audio_subtitle_start", { source: src, lang: asrLang });
           setAudioSubOn((prev) => ({ ...prev, [src]: true }));
           await invoke("open_audio_floating_window", { source: src }).catch(() => {});
         } catch (e: any) {
+          invalidateAudio(src, false);
           setAudioStatus((prev) => ({ ...prev, [src]: `启动失败: ${e}` }));
           setAudioSubOn((prev) => ({ ...prev, [src]: false }));
         }
       }
     }
-  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus, localModels, providers]);
+  }, [audioMode, audioSubOn, sourceLang, sourcesForMode, independentLang, modeLangs, componentStatus, localModels, providers, invalidateAudio]);
 
-  /* 监听音频字幕事件(带 source):status/partial/final */
+  const submitAudioRef = useRef(submitAudioSubtitle);
+  submitAudioRef.current = submitAudioSubtitle;
+
+  /* Native IDs isolate sources, utterances and recognizer restart sessions. */
   useEffect(() => {
-    const s = appWindow.listen<{ source: string; status: string }>("audio-status", (e) => {
-      const { source, status } = e.payload;
-      setAudioStatus((prev) => ({ ...prev, [source]: status }));
-      if (status.startsWith("error")) setAudioSubOn((prev) => ({ ...prev, [source]: false }));
-      if (status === "stopped") { setAudioSubOn((prev) => ({ ...prev, [source]: false })); setAudioPartial((prev) => ({ ...prev, [source]: "" })); }
-      // apply 灵敏度重启识别器后会再发 ready,恢复运行状态(不误显示"已停止")
-      if (status === "ready") { setAudioSubOn((prev) => ({ ...prev, [source]: true })); }
-    });
-    const p = appWindow.listen<{ source: string; text: string }>("audio-partial", (e) => {
-      const { source, text } = e.payload;
-      const trimmed = text.trim();
-      setAudioPartial((prev) => ({ ...prev, [source]: trimmed }));
-      if (!trimmed) return;
-      // 主窗口 hist:当前句原文实时更新
-      setAudioHist((h) => {
-        if (h.length === 0) return [{ text: trimmed, result: "" }];
-        const last = h[h.length - 1];
-        return [...h.slice(0, -1), { ...last, text: trimmed }];
-      });
-      // 与当前定稿句不同才触发累积翻译(同一句内增量变化都要翻,译文跟着增长)
-      if (trimmed !== audioFinalRef.current[source]) {
-        submitAudioSubtitle(source, trimmed, false);
+    const status = appWindow.listen<{ source: string; status: string; session: number }>("audio-status", ({ payload: event }) => {
+      const { source, session } = event;
+      if (!audioDesiredRef.current[source] || session < (audioSessionsRef.current[source] ?? 0)) return;
+      if (event.status === "loading") {
+        invalidateAudio(source);
+        audioSessionsRef.current[source] = session;
+        audioAcceptRef.current[source] = true;
+        setAudioHist(history => history.filter(line => line.source !== source));
       }
+      if (session !== audioSessionsRef.current[source]) return;
+      setAudioStatus(prev => ({ ...prev, [source]: event.status }));
+      if (event.status.startsWith("error") || event.status === "stopped") {
+        invalidateAudio(source, event.status.startsWith("error") ? false : undefined);
+        setAudioSubOn(prev => ({ ...prev, [source]: false }));
+      }
+      if (event.status === "ready") setAudioSubOn(prev => ({ ...prev, [source]: true }));
     });
-    const f = appWindow.listen<{ source: string; text: string }>("audio-final", (e) => {
-      const { source, text } = e.payload;
-      const trimmed = text.trim();
-      if (!trimmed) return;
-      audioFinalRef.current[source] = trimmed;
-      // 立即定稿滚动(不依赖翻译完成):当前句(用 final 完整文本)滚为上一句,压入空当前句。
-      // 译文完成后由 submitAudioSubtitle 按 text 匹配补回,保证上一句译文可靠显示。
-      setAudioHist((h) => {
-        const rest = h.slice(0, -1);
-        const cur = h[h.length - 1];
-        const finalized = { text: trimmed, result: cur && cur.text === trimmed ? cur.result : "" };
-        return [...rest, finalized, { text: "", result: "" }].slice(-3);
-      });
-      submitAudioSubtitle(source, trimmed, true);
-      // 保留最后一句显示(暂停/停顿不清空),新句子到来时自动替换
-      setAudioPartial((prev) => ({ ...prev, [source]: trimmed }));
-    });
-    // 实时音量事件(辅助调试麦克风/电脑音频是否有声音)
-    const lv = appWindow.listen<{ source: string; level: number }>("audio-level", (e) => {
-      setAudioLevel((prev) => ({ ...prev, [e.payload.source]: e.payload.level }));
-    });
-    // 语音窗关闭:同步停止该来源
-    const closed = appWindow.listen<{ source?: string }>("audio-floating-closed", (e) => {
-      const src = e.payload?.source ?? "system";
-      setAudioSubOn((prev) => ({ ...prev, [src]: false }));
-      setAudioPartial((prev) => ({ ...prev, [src]: "" }));
-      audioFinalRef.current[src] = "";
-      setAudioStatus((prev) => ({ ...prev, [src]: "已停止(语音窗关闭)" }));
-      invoke("audio_subtitle_stop", { source: src }).catch(() => {});
-    });
-    return () => {
-      s.then((fn) => fn()); p.then((fn) => fn()); f.then((fn) => fn()); closed.then((fn) => fn()); lv.then((fn) => fn());
+    const receive = (event: AudioEvent, isFinal: boolean) => {
+      if (!audioDesiredRef.current[event.source] || !audioAcceptRef.current[event.source]
+        || event.session !== audioSessionsRef.current[event.source] || !event.text.trim()) return;
+      const job = { ...event, text: event.text.trim(), isFinal };
+      setAudioPartial(prev => ({ ...prev, [event.source]: job.text }));
+      setAudioHist(history => updateAudioLine(history, job));
+      submitAudioRef.current(job);
     };
-  }, [submitAudioSubtitle]);
+    const partial = appWindow.listen<AudioEvent>("audio-partial", ({ payload }) => receive(payload, false));
+    const final = appWindow.listen<AudioEvent>("audio-final", ({ payload }) => receive(payload, true));
+    const level = appWindow.listen<{ source: string; level: number }>("audio-level", ({ payload }) => {
+      if (audioDesiredRef.current[payload.source]) setAudioLevel(prev => ({ ...prev, [payload.source]: payload.level }));
+    });
+    const closed = appWindow.listen<{ source?: string }>("audio-floating-closed", ({ payload }) => {
+      const source = payload?.source ?? "system";
+      invalidateAudio(source, false);
+      setAudioSubOn(prev => ({ ...prev, [source]: false }));
+      setAudioPartial(prev => ({ ...prev, [source]: "" }));
+      setAudioStatus(prev => ({ ...prev, [source]: "已停止(语音窗关闭)" }));
+      invoke("audio_subtitle_stop", { source }).catch(() => {});
+    });
+    return () => { for (const listener of [status, partial, final, level, closed]) listener.then(unlisten => unlisten()); };
+  }, [invalidateAudio]);
 
   const toggleAudioSubtitleRef = useRef(toggleAudioSubtitle);
   useEffect(() => { toggleAudioSubtitleRef.current = toggleAudioSubtitle; }, [toggleAudioSubtitle]);
@@ -1290,6 +1232,8 @@ function MainWindow() {
   /* 切换字幕开关(Ctrl+Shift+U、主界面按钮、悬浮窗按钮共用);
      开启时自动弹出悬浮窗并同步状态,悬浮窗切到字幕页;与音频字幕互斥 */
   const stopAllAudio = useCallback(() => {
+    invalidateAudio("system", false);
+    invalidateAudio("mic", false);
     // 停所有来源音频字幕 + 关所有语音窗
     invoke("audio_subtitle_stop", { source: "system" }).catch(() => {});
     invoke("audio_subtitle_stop", { source: "mic" }).catch(() => {});
@@ -1298,7 +1242,7 @@ function MainWindow() {
     setAudioSubOn({});
     setAudioPartial({});
     setAudioStatus({});
-  }, []);
+  }, [invalidateAudio]);
 
   const toggleSubtitle = useCallback(() => {
     /* OCR 组件未安装且选的是 RapidOCR → 引导去设置下载(纯文字版) */
@@ -1364,8 +1308,8 @@ function MainWindow() {
   const testWinOcr = async () => {
     setSubStatus("系统 OCR 测试中…");
     try {
-      const b64 = await invoke<string>("capture_fullscreen");
-      const text = await invoke<string>("win_ocr_b64", { b64 });
+      const capture = await invoke<ScreenCapture>("capture_fullscreen");
+      const text = await invoke<string>("win_ocr_b64", { b64: capture.b64 });
       setSubStatus(`系统 OCR 成功: ${text.slice(0, 120) || "(无文字)"}`);
     } catch (e: any) {
       const msg = typeof e === "string" ? e : JSON.stringify(e);
@@ -1375,9 +1319,9 @@ function MainWindow() {
 
   /* ---- 悬浮窗 ---- */
   useEffect(() => {
-    const u = appWindow.listen("floating-closed", () => { setFloatingOpen(false); });
+    const u = appWindow.listen("floating-closed", () => { setFloatingOpen(false); clipboardTask.invalidate(); screenshotTask.invalidate(); });
     return () => { u.then((f) => f()); };
-  }, []);
+  }, [clipboardTask, screenshotTask]);
 
   const swapLangs = () => {
     if (sourceLang === "auto") return;
@@ -1427,17 +1371,11 @@ function MainWindow() {
   };
 
   /* ---- 翻译核心 ---- */
-  const pendingTextRef = useRef("");
   const runTranslation = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed) { setModeOutput((prev) => ({ ...prev, text: "" })); return; }
-      // 单飞 + 排队:上一轮还没结束就来新输入 → 记住最新文本,结束后立刻翻
-      if (busyRef.current) { pendingTextRef.current = trimmed; return; }
-      busyRef.current = true;
-      abortRef.current?.abort();
-      const ctrl = new AbortController();
-      abortRef.current = ctrl;
+      if (!trimmed) return;
+      await translationTask.submit(trimmed, async (text, { signal, isCurrent }) => {
 
       // 自动检测语言
       let src = sourceLang;
@@ -1459,61 +1397,55 @@ function MainWindow() {
       setConflict(hasConflict);
 
       setTranslating(true);
-      if (streamOn) {
-        setModeOutput((prev) => ({ ...prev, text: "" }));
-        try {
+      setApiThinking(false);
+      setModeOutput((prev) => ({ ...prev, text: streamOn ? "" : "翻译中..." }));
+      try {
+        if (streamOn) {
           await translateStream(model, src, tgt, text, numCtx, (token) => {
-            // 外接 API 走 Rust invoke 无法中途中止:过期流的 token 直接丢弃
-            if (ctrl.signal.aborted) return;
+            if (!isCurrent()) return;
             setApiThinking(false);
             setModeOutput((prev) => ({ ...prev, text: prev.text + token }));
           },
-            ctrl.signal,
-            () => { if (!ctrl.signal.aborted) setApiThinking(true); } // 推理帧 → "思考中"提示
+            signal,
+            () => { if (isCurrent()) setApiThinking(true); }
           );
-        } catch (e: any) {
-          if (e.name !== "AbortError")
-            setModeOutput((prev) => ({ ...prev, text: prev.text + "\n\n" + e.message }));
-        } finally {
-          setApiThinking(false);
-          busyRef.current = false;
-          setTranslating(false);
-          if (pendingTextRef.current) {
-            const t = pendingTextRef.current;
-            pendingTextRef.current = "";
-            runTranslation(t);
-          }
+        } else {
+          const result = await translateFull(model, src, tgt, text, numCtx, signal);
+          if (isCurrent()) setModeOutput((prev) => ({ ...prev, text: result }));
         }
-      } else {
-        setModeOutput((prev) => ({ ...prev, text: "翻译中..." }));
-        try {
-          const result = await translateFull(model, src, tgt, text, numCtx);
-          if (!ctrl.signal.aborted) setModeOutput((prev) => ({ ...prev, text: result }));
-        } catch (e: any) {
-          setModeOutput((prev) => ({ ...prev, text: "翻译失败:" + e.message }));
-        } finally {
+      } catch (error: unknown) {
+        if (isCurrent()) {
+          setModeOutput((prev) => ({ ...prev, text: `翻译失败: ${errorMessage(error)}` }));
+        }
+      } finally {
+        if (isCurrent()) {
           setApiThinking(false);
-          busyRef.current = false;
           setTranslating(false);
-          if (pendingTextRef.current) {
-            const t = pendingTextRef.current;
-            pendingTextRef.current = "";
-            runTranslation(t);
-          }
         }
       }
+      });
     },
-    [model, sourceLang, targetLang, numCtx, streamOn]
+    [translationTask, model, sourceLang, targetLang, numCtx, streamOn, engineMode, activeProviderId, providers]
   );
 
   /* ---- 实时翻译 ---- */
   useEffect(() => {
+    // Invalidate immediately, including during the debounce interval.
+    translationTask.invalidate();
+    setTranslating(false);
+    setApiThinking(false);
     if (timerRef.current) clearTimeout(timerRef.current);
+    if (!input.trim()) {
+      setModeOutput((prev) => ({ ...prev, text: "" }));
+      setConflict(false);
+      return;
+    }
     timerRef.current = setTimeout(() => runTranslation(inputRef.current), DEBOUNCE_MS);
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);
+      translationTask.invalidate();
     };
-  }, [input, runTranslation]);
+  }, [input, runTranslation, translationTask]);
 
   /* ---- 全局快捷键事件(Rust 侧注册,统一投递到主窗口) ---- */
   useEffect(() => {
@@ -1537,18 +1469,12 @@ function MainWindow() {
     return () => { u.then((f) => f()); };
   }, []);
 
-  /* ---- 字幕 OCR 结果事件 ---- */
   useEffect(() => {
-    const u = appWindow.listen<string>("subtitle-ocr", (e) => {
-      ocrInFlightRef.current = false;   // 允许下一帧
-      subtitleOcrHandlerRef.current(e.payload);
-    });
-    const t = appWindow.listen("subtitle-start", () => { startSubtitleRef.current(); }); // 悬浮窗 🎬 开始
-    const p = appWindow.listen("subtitle-stop", () => { stopSubtitleRef.current(); });   // 悬浮窗 🎬 停止
-    return () => { u.then((f) => f()); t.then((f) => f()); p.then((f) => f()); };
+    const start = appWindow.listen("subtitle-start", () => startSubtitleRef.current());
+    const stop = appWindow.listen("subtitle-stop", () => stopSubtitleRef.current());
+    return () => { start.then(unlisten => unlisten()); stop.then(unlisten => unlisten()); };
   }, []);
 
-  /* ---- 截图 ---- */
   const startScreenshot = async () => {
     if (!componentStatus.ocr.installed) {
       setScreenshotSrc("OCR 组件未安装(约30MB):请到 设置 → 模型 → 识别组件 下载后再试");
@@ -1558,135 +1484,84 @@ function MainWindow() {
     try { await invoke("open_screenshot_overlay", { from: "main" }); } catch (e) { console.error(e); }
   };
 
-  /* ---- 截图结果监听:主窗口接收坐标 → OCR(后台) → 按来源路由显示 ---- */
+  /* Each capture owns its OCR result and request lifecycle; no shared source slot. */
   useEffect(() => {
-    const u = appWindow.listen<{ x: number; y: number; w: number; h: number; source?: string; b64?: string }>(
-      "screenshot-done",
-      (e) => {
-        const source = e.payload.source || "main";
-        screenshotSource.current = source;
-        // 字幕区域选择:框选结果存为字幕区域,不触发截图翻译
-        if (source === "subtitle") {
-          const region = {
-            x: Math.round(e.payload.x), y: Math.round(e.payload.y),
-            w: Math.round(e.payload.w), h: Math.round(e.payload.h),
-          };
-          subRegionRef.current = region;
-          setSubRegion(region);
-          setSubStatus(`字幕区域已更新 (${region.x},${region.y} ${region.w}x${region.h})`);
-          return;
-        }
-        // 状态提示按来源路由:悬浮窗截图 → 悬浮窗显示;桌面端截图 → 主窗口显示
-        if (source === "floating") {
-          appWindow.emitTo("floating", "screenshot-status", "正在 OCR 识别…").catch(() => {});
-        } else {
-          setScreenshotSrc("正在 OCR 识别…");
-          setModeOutput((prev) => ({ ...prev, screenshot: "" }));
-        }
-        // 优先用 overlay 从缓存背景图裁剪的选区(b64,不二次截屏,避免残影);否则回退截屏
-        if (e.payload.b64) {
-          invoke<string>("ocr_image_b64", { b64: e.payload.b64 })
-            .then((text) => { handleOcrResult(source, text); })   // 直接接返回值(同步 command)
-            .catch((err: any) => {
-              const msg = typeof err === "string" ? err : JSON.stringify(err);
-              console.error("ocr_image_b64 失败:", err);
-              if (source === "floating") {
-                appWindow.emitTo("floating", "screenshot-status", `OCR 失败: ${msg}`).catch(() => {});
-              } else {
-                setScreenshotSrc(`OCR 失败: ${msg}`);
-                setModeOutput((prev) => ({ ...prev, screenshot: "" }));
-              }
-            });
-        } else {
-          invoke("screenshot_ocr", { x: Math.round(e.payload.x), y: Math.round(e.payload.y), w: Math.round(e.payload.w), h: Math.round(e.payload.h) }).catch(() => {});
-        }
-      }
-    );
-    /* OCR 结果统一处理:识别文本 → 语言检测 → 翻译 → 按来源路由显示 */
-    const handleOcrResult = async (source: string, ocrText: string) => {
-      // 按来源显示状态/结果:floating → 悬浮窗事件;main → 主窗口输出区
-      const showStatus = (msg: string) => {
-        if (source === "floating") {
-          appWindow.emitTo("floating", "screenshot-status", msg).catch(() => {});
-        } else {
-          setScreenshotSrc(msg);
-        }
-      };
-      if (!ocrText || ocrText.startsWith("ERROR:")) {
-        showStatus(ocrText || "未识别到文字");
+    const listener = appWindow.listen<{ x: number; y: number; w: number; h: number; source?: string; b64?: string }>("screenshot-done", ({ payload }) => {
+      const source = payload.source ?? "main";
+      if (source === "subtitle") {
+        subtitleTask.invalidate();
+        const region = { x: Math.round(payload.x), y: Math.round(payload.y), w: Math.round(payload.w), h: Math.round(payload.h) };
+        subRegionRef.current = region;
+        setSubRegion(region);
+        setSubStatus(`字幕区域已更新 (${region.x},${region.y} ${region.w}x${region.h})`);
         return;
       }
-      if (!ocrText.trim()) { showStatus("未识别到文字"); return; }
-      let src = langFor("screenshot").src;
-      let tgt = langFor("screenshot").tgt;
-      if (src === "auto") { src = detectLang(ocrText); }
-      if (src === tgt) tgt = src === "zh" ? "en" : "zh";
-      if (source === "floating") {
-        appWindow.emitTo("floating", "screenshot-status", "正在翻译…").catch(() => {});
-      } else {
-        setScreenshotSrc(ocrText); // 灰框固定显示截到的原文,翻译中不覆盖
-      }
-      try {
-        const result = await translateFull(model, src, tgt, ocrText, numCtx);
-        if (source === "floating") {
-          await appWindow.emitTo("floating", "show-translation", { text: ocrText, src, tgt, result }).catch(() => {});
-        } else {
-          setModeOutput((prev) => ({ ...prev, screenshot: result }));
+      void screenshotTask.submit({ ...payload, source }, async (capture, { signal, isCurrent }) => {
+        const showStatus = (message: string) => {
+          if (!isCurrent()) return;
+          if (source === "floating") appWindow.emitTo("floating", "screenshot-status", message).catch(() => {});
+          else setScreenshotSrc(message);
+        };
+        showStatus("正在 OCR 识别…");
+        if (source !== "floating") setModeOutput(prev => ({ ...prev, screenshot: "" }));
+        try {
+          const text = await boundedRequest(() => capture.b64
+            ? invoke<string>("ocr_image_b64", { b64: capture.b64 })
+            : invoke<string>("screenshot_ocr", { x: Math.round(capture.x), y: Math.round(capture.y), w: Math.round(capture.w), h: Math.round(capture.h) }), signal);
+          if (!isCurrent()) return;
+          if (!text.trim() || text.startsWith("ERROR:")) { showStatus(text || "未识别到文字"); return; }
+          let src = langFor("screenshot").src;
+          let tgt = langFor("screenshot").tgt;
+          if (src === "auto") src = detectLang(text);
+          if (src === tgt) tgt = src === "zh" ? "en" : "zh";
+          showStatus(source === "floating" ? "正在翻译…" : text);
+          const result = await translateFull(model, src, tgt, text, numCtx, signal);
+          if (!isCurrent()) return;
+          if (source === "floating") await appWindow.emitTo("floating", "show-translation", { text, src, tgt, result });
+          else setModeOutput(prev => ({ ...prev, screenshot: result }));
+        } catch (error) {
+          showStatus(`识别/翻译失败: ${errorMessage(error)}`);
         }
-      } catch (e: any) {
-        if (source === "floating") {
-          appWindow.emitTo("floating", "screenshot-status", `翻译失败: ${e}`).catch(() => {});
-        } else {
-          setScreenshotSrc(`翻译失败: ${e}`);
-          setModeOutput((prev) => ({ ...prev, screenshot: "" }));
-        }
-      }
-    };
-    const o = appWindow.listen<string>(
-      "ocr-done",
-      (e) => { handleOcrResult(screenshotSource.current, e.payload); }
-    );
-    return () => { u.then((f) => f()); o.then((f) => f()); };
-    // 依赖必须包含 sourceLang/targetLang:independentLang=false 时语言方向取自它们,
-    // 否则闭包捕获旧值,用户改语言方向后截图翻译仍走旧方向(修复 2026-08-13)
-  }, [model, numCtx, independentLang, modeLangs, sourceLang, targetLang]);
+      });
+    });
+    return () => { screenshotTask.invalidate(); listener.then(unlisten => unlisten()); };
+  }, [screenshotTask, subtitleTask, model, numCtx, independentLang, modeLangs, sourceLang, targetLang, engineMode, activeProviderId, providers]);
 
-  /* ---- 剪贴板监听:复制即译 ---- */
+  /* Polling keeps noticing new copies while the latest-task queue translates. */
   useEffect(() => {
     let lastText = "";
-    let busy = false;
+    let reading = false;
+    let cancelled = false;
     const timer = setInterval(async () => {
-      if (busy) return;
+      if (reading || (!clipAuto && !floatingRef.current)) return;
+      reading = true;
       try {
         const text = await readText();
-        if (!text || text === lastText || text.length < 2) return;
+        if (cancelled || !text || text === lastText || text.length < 2) return;
         lastText = text;
-        const words = text.split(/\s+/).filter((w) => w.length > 1);
-        if (words.length > 50) return;
-        busy = true;
-        // 跟随主窗口语言设置 + 模型
-        let src = sourceLang;
-        let tgt = targetLang;
-        if (src === "auto") {
-          src = detectLang(text);
-          // 只有在目标也是 auto 时才自动决定,否则保留用户选择
-          if (tgt === "auto" || tgt === src) {
-            tgt = src === "zh" ? "en" : src === "en" ? "zh" : "en";
+        if (text.split(/\s+/).filter(word => word.length > 1).length > 50) return;
+        void clipboardTask.submit(text, async (text, { signal, isCurrent }) => {
+          try {
+            let src = sourceLang;
+            let tgt = targetLang;
+            if (src === "auto") {
+              src = detectLang(text);
+              if (tgt === "auto" || tgt === src) tgt = src === "zh" ? "en" : "zh";
+            }
+            await invoke("open_floating_window");
+            if (!isCurrent()) return;
+            setFloatingOpen(true);
+            const result = await translateFull(model, src, tgt, text, numCtx, signal);
+            if (isCurrent()) await appWindow.emitTo("floating", "show-translation", { text, src, tgt, result });
+          } catch (error) {
+            if (isCurrent()) appWindow.emitTo("floating", "screenshot-status", `翻译失败: ${errorMessage(error)}`).catch(() => {});
           }
-        }
-        // 模式检查:手动模式下悬浮窗未开则跳过
-        if (!clipAuto && !floatingRef.current) return;
-        try { await invoke("open_floating_window"); setFloatingOpen(true); } catch { /* ok */ }
-        const result = await translateFull(model, src, tgt, text, 1024);
-        await appWindow.emitTo("floating", "show-translation", { text, src, tgt, result });
-      } catch {
-        /* ignore */
-      } finally {
-        busy = false;
-      }
+        });
+      } catch { /* Clipboard can temporarily be locked by another process. */ }
+      finally { reading = false; }
     }, 600);
-    return () => clearInterval(timer);
-  }, [sourceLang, targetLang, model, clipAuto]);
+    return () => { cancelled = true; clearInterval(timer); clipboardTask.invalidate(); };
+  }, [clipboardTask, sourceLang, targetLang, model, numCtx, clipAuto, engineMode, activeProviderId, providers]);
 
   /* ---- 本地模型管理(Wave 10.5:模型页 列表/下载/删除/导入) ---- */
   const refreshLocalModels = async (silent = false): Promise<LocalModelInfo[]> => {
@@ -2194,12 +2069,12 @@ function MainWindow() {
         <div className="app-brand">
           <h1>译刻</h1>
           <div className="engine-menu-wrap">
-            <button className="engine-pill" onClick={() => setEngineMenuOpen(!engineMenuOpen)} title="切换翻译引擎 / 模型">
-              <Icon name={activeApiModel ? "globe" : "dot"} size={13} /> {engineLabelText} <Icon name="chevron" size={11} className="engine-pill-caret" />
+            <button className="engine-pill" onClick={() => setEngineMenuOpen(!engineMenuOpen)} title={`切换翻译引擎 / 模型: ${engineLabelText}`} aria-expanded={engineMenuOpen} aria-controls="engine-menu">
+              <Icon name={activeApiModel ? "globe" : "dot"} size={13} /> <span className="engine-pill-label">{engineLabelText}</span> <Icon name="chevron" size={11} className="engine-pill-caret" />
             </button>
             {engineMenuOpen && (
               <>
-                <div className="engine-menu">
+                <div className="engine-menu" id="engine-menu" aria-label="翻译引擎">
                   <div className="engine-menu-title">翻译引擎</div>
                   {localModelsLoaded && menuLocalModels.length === 0 && (
                     <div className="engine-menu-empty">还没有本地模型:到 设置 → 模型 下载/导入,或配置外接 API</div>
@@ -2208,14 +2083,14 @@ function MainWindow() {
                     const mn = m.name;
                     const label = mn === "maternion/hy-mt2:1.8b" ? "HY-MT2-1.8B (本地 · 推荐)" : mn === "gemma3:4b" ? "gemma3:4b (本地)" : `${mn} (本地)`;
                     return (
-                      <button key={mn} className={`engine-menu-item${headerEngineValue === mn ? " active" : ""}`} onClick={() => selectHeaderEngine(mn)}>
+                      <button key={mn} title={label} aria-pressed={headerEngineValue === mn} className={`engine-menu-item${headerEngineValue === mn ? " active" : ""}`} onClick={() => selectHeaderEngine(mn)}>
                         {headerEngineValue === mn ? <Icon name="check" size={13} /> : <Icon name="dot" size={13} />} {label}
                       </button>
                     );
                   })}
                   {(localModels.length > 0 || !localModelsLoaded) && apiModelOptions.length > 0 && <div className="engine-menu-divider" />}
                   {apiModelOptions.map((o) => (
-                    <button key={`${o.providerId}::${o.model}`} className={`engine-menu-item${headerEngineValue === `api:${o.providerId}::${o.model}` ? " active" : ""}`} onClick={() => selectHeaderEngine(`api:${o.providerId}::${o.model}`)}>
+                    <button key={`${o.providerId}::${o.model}`} title={o.label} aria-pressed={headerEngineValue === `api:${o.providerId}::${o.model}`} className={`engine-menu-item${headerEngineValue === `api:${o.providerId}::${o.model}` ? " active" : ""}`} onClick={() => selectHeaderEngine(`api:${o.providerId}::${o.model}`)}>
                       {headerEngineValue === `api:${o.providerId}::${o.model}` ? <Icon name="check" size={13} /> : <Icon name="globe" size={13} />} {o.label}
                     </button>
                   ))}
@@ -2860,8 +2735,8 @@ function MainWindow() {
                       {audioHist[audioHist.length - 2].text}
                     </div>
                   )}
-                  {audioHist[audioHist.length - 1].text && (
-                    <div className="voice-line voice-line-cur">{audioHist[audioHist.length - 1].text}</div>
+                  {audioHist[audioHist.length - 1]?.text && (
+                    <div className="voice-line voice-line-cur">{audioHist[audioHist.length - 1]?.text}</div>
                   )}
                 </div>
               </div>
@@ -2924,8 +2799,8 @@ function MainWindow() {
                   {audioHist[audioHist.length - 2].result}
                 </div>
               )}
-              {audioHist[audioHist.length - 1].result && (
-                <div className="voice-line voice-line-cur voice-line-result">{audioHist[audioHist.length - 1].result}</div>
+              {audioHist[audioHist.length - 1]?.result && (
+                <div className="voice-line voice-line-cur voice-line-result">{audioHist[audioHist.length - 1]?.result}</div>
               )}
               {!audioHist.some((x) => x.result) && <span className="output-empty-hint">暂无译文</span>}
             </div>
@@ -2980,10 +2855,7 @@ function FloatingWindow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   /* 翻译页/字幕页切换时按当前界面重新应用外观 */
-  useEffect(() => {
-    if (appr) applyWindowTheme(surfaceKey, appr.theme, appr.appearance, appr.accent);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, appr]);
+  useWindowTheme(surfaceKey, appr?.theme ?? "light", appr?.appearance ?? DEFAULT_APPEARANCE, appr?.accent);
 
   useEffect(() => {
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string; role?: string }>(
@@ -3113,7 +2985,7 @@ function AudioFloatingWindow() {
   const isMic = source === "mic";
   /* 两句显示:hist 保留最近几句(最后一项=当前句,可能为空)。
      译文异步到达时按 text 匹配历史中的句子补上,避免"滚动后句子被覆盖导致译文丢失"。 */
-  const [hist, setHist] = useState<{ text: string; result: string }[]>([{ text: "", result: "" }]);
+  const [hist, setHist] = useState<AudioLine[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   // 断句灵敏度(共享):语言 → 秒
@@ -3147,10 +3019,7 @@ function AudioFloatingWindow() {
     return () => { delete (window as any).__applyAppSettings; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  useEffect(() => {
-    if (appr) applyWindowTheme(surfaceKey, appr.theme, appr.appearance, appr.accent);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appr]);
+  useWindowTheme(surfaceKey, appr?.theme ?? "light", appr?.appearance ?? DEFAULT_APPEARANCE, appr?.accent);
 
   useEffect(() => {
     invoke<Record<string, number>>("audio_get_sensitivities").then((s) => setSens(s)).catch(() => {});
@@ -3180,72 +3049,50 @@ function AudioFloatingWindow() {
   };
 
   useEffect(() => {
-    // Rust 侧通过 eval 调用 window.__audioShow(payload) 注入定稿/译文数据:
-    //   result 为空 = 一句定稿开始翻译 → 当前句滚入历史(成为上一句),追加空的当前句;
-    //   result 非空 = 译文完成 → 按 text 匹配历史中的句子补上译文(即使期间又滚动了也不丢)。
-    const show = (p: { text: string; src: string; tgt: string; result: string; role?: string }) => {
-      if (!p.text) { setHist([{ text: "", result: "" }]); setStatus(null); return; } // 空 payload = 清空,准备下一句
-      if (!p.result) {
-        // 定稿:当前句(用 final 完整文本)滚为上一句,追加空的当前句;
-        // 不能压入 {text:p.text} 副本——那会让"第一句=第二句"重复。
-        setHist((h) => {
-          const rest = h.slice(0, -1);
-          const cur = h[h.length - 1];
-          const finalized = { text: p.text, result: cur && cur.text === p.text ? cur.result : "" };
-          return [...rest, finalized, { text: "", result: "" }].slice(-3);
-        });
-      } else {
-        // 译文完成:按角色直接更新(不依赖 text 匹配——识别增量变化快,匹配会导致译文丢失/滞后)
-        if (p.role === "prev") {
-          setHist((h) => {
-            if (h.length < 2) return h;
-            const i = h.length - 2; // 上一句(定稿句)
-            return h.map((x, j) => (j === i ? { ...x, result: p.result } : x));
-          });
-        } else {
-          setHist((h) => {
-            const i = h.length - 1; // 当前句
-            if (!h[i].text) return h; // 当前句为空(刚定稿滚动)时丢弃 partial 译文,等 final 翻译补
-            return h.map((x, j) => (j === i ? { ...x, result: p.result } : x));
-          });
-        }
-      }
+    let session = 0;
+    const accept = (event: AudioEvent) => {
+      if (event.session < session) return false;
+      if (event.session > session) { session = event.session; setHist([]); }
+      return true;
+    };
+    const show = (event: AudioEvent & { src: string; tgt: string; result: string; role?: string }) => {
+      if (!event.text) { setHist([]); setStatus(null); return; }
+      if (!accept(event)) return;
+      const job = { ...event, isFinal: event.role === "prev" };
+      // Do not create/roll a line from a late translation; recognition owns the history.
+      if (event.result) setHist(history => applyAudioResult(history, job, event.result));
       setStatus(null);
     };
     (window as any).__audioShow = show;
-    // Rust 实时转发 partial:正在识别的一句原文实时增长
-    (window as any).__audioPartial = (text: string) => {
-      // 更新最后一项(当前句)的原文
-      setHist((h) => {
-        if (h.length === 0) return [{ text, result: "" }];
-        const last = h[h.length - 1];
-        return [...h.slice(0, -1), { ...last, text }];
-      });
+    (window as any).__audioPartial = (event: AudioEvent) => {
+      if (accept(event)) setHist(history => updateAudioLine(history, { ...event, isFinal: false }));
       setStatus(null);
     };
-    const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string }>(
-      "audio-show-translation",
-      (e) => show(e.payload)
-    );
+    (window as any).__audioFinal = (event: AudioEvent) => {
+      if (accept(event)) setHist(history => updateAudioLine(history, { ...event, isFinal: true }));
+      setStatus(null);
+    };
+    const u = appWindow.listen<AudioEvent & { src: string; tgt: string; result: string }>("audio-show-translation", ({ payload }) => show(payload));
     const s = appWindow.listen<string>(
       "audio-floating-status",
       (e) => setStatus(e.payload)
     );
     const c = appWindow.listen("audio-close-me", () => {
-      setHist([{ text: "", result: "" }]);
+      setHist([]);
       closeAndStop();
     });
     return () => {
       u.then((f) => f()); s.then((f) => f()); c.then((f) => f());
       delete (window as any).__audioShow;
       delete (window as any).__audioPartial;
+      delete (window as any).__audioFinal;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /* 关闭语音窗并同步停止音频字幕 */
   const closeAndStop = () => {
-    setHist([{ text: "", result: "" }]);
+    setHist([]);
     // 通知主窗口更新状态(音频字幕已关)
     appWindow.emitTo("main", "audio-floating-closed", { source }).catch(() => {});
     invoke("close_audio_floating_window", { source }).catch(() => {});
@@ -3301,7 +3148,7 @@ function AudioFloatingWindow() {
         <div className="floating-body">
           {status ? (
             <div className="floating-status">{status}</div>
-          ) : hist.length === 1 && !hist[0].text ? (
+          ) : !hist.some(line => line.text) ? (
             <div className="floating-hint">
               <p><Icon name="mic" size={18} /> 音频识别</p>
               <span>在主窗口点击「音频翻译」开始音频字幕</span>
@@ -3316,9 +3163,9 @@ function AudioFloatingWindow() {
                   {hist[hist.length - 2].text}
                 </div>
               )}
-                {hist[hist.length - 1].text && (
+                {hist[hist.length - 1]?.text && (
                   <div className="voice-line voice-line-cur">
-                    {hist[hist.length - 1].text}
+                    {hist[hist.length - 1]?.text}
                   </div>
                 )}
               </div>
@@ -3331,9 +3178,9 @@ function AudioFloatingWindow() {
                     {hist[hist.length - 2].result}
                   </div>
                 )}
-                {hist[hist.length - 1].result && (
+                {hist[hist.length - 1]?.result && (
                   <div className="voice-line voice-line-cur voice-line-result">
-                    {hist[hist.length - 1].result}
+                    {hist[hist.length - 1]?.result}
                   </div>
                 )}
               </div>
@@ -3368,7 +3215,8 @@ function ScreenshotOverlay() {
     const c = canvasRef.current;
     if (!c) return;
     const ctx = c.getContext("2d")!;
-    const W = window.innerWidth, H = window.innerHeight;
+    let W = window.innerWidth, H = window.innerHeight;
+    let origin = { x: 0, y: 0 };
 
     /* 重绘:全屏半透明遮罩 → 选区 clearRect 挖空(露出 CSS 背景图,不透明不重影) */
     const drawScene = () => {
@@ -3389,10 +3237,11 @@ function ScreenshotOverlay() {
     };
 
     /* CSS 坐标 → 物理坐标(背景图物理尺寸 / 窗口 CSS 尺寸,实测比) */
-    const toPhys = (v: number) => Math.round(v * (bgPhysRef.current.w / W));
+    const toPhys = (v: number, vertical = false) => Math.round(v * (vertical ? bgPhysRef.current.h / H : bgPhysRef.current.w / W));
 
     /* 收到 overlay-start 时初始化;from 由 Rust 事件传入 */
     const start = async (payload: string) => {
+      W = window.innerWidth; H = window.innerHeight;
       sourceRef.current = payload || "main";
       setBgUrl("");                       // 清空旧背景,避免第二次显示第一次画面
       const token = ++loadTokenRef.current;
@@ -3405,11 +3254,16 @@ function ScreenshotOverlay() {
       await new Promise((r) => setTimeout(r, 60)); // 给 DWM 一帧刷新时间
       drawScene();                        // 遮罩先画(窗口未显示,无妨)
       /* 静态截图当背景:div CSS 拉伸铺满窗口,与窗口严丝合缝,不依赖任何 DPR 计算 */
-      invoke<string>("capture_fullscreen")
-        .then((b64) => {
+      invoke<ScreenCapture>("capture_fullscreen")
+        .then(({ b64, x, y }) => {
+          origin = { x, y };
           if (loadTokenRef.current !== token) return;
           const img = new Image();
           img.onload = () => {
+            if (loadTokenRef.current !== token) return;
+            W = window.innerWidth; H = window.innerHeight;
+            c.width = W; c.height = H;
+            drawScene();
             bgImageRef.current = img;                       // 缓存 img,框选后从它裁剪(不二次截屏)
             bgPhysRef.current = { w: img.naturalWidth, h: img.naturalHeight };
             setBgUrl("data:image/png;base64," + b64); // div 背景异步解码,解码完成自动显示
@@ -3424,7 +3278,7 @@ function ScreenshotOverlay() {
 
     /* 隐藏而非关闭:窗口启动时已预建,保留复用 */
     const hide = () => { appWindow.hide(); };
-    const cancel = () => hide();
+    const cancel = () => { loadTokenRef.current++; hide(); };
 
     const onDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
@@ -3444,9 +3298,9 @@ function ScreenshotOverlay() {
       drawing.current = false;
       const { sx, sy, ex, ey } = rect.current;
       const x = toPhys(Math.min(sx, ex));
-      const y = toPhys(Math.min(sy, ey));
+      const y = toPhys(Math.min(sy, ey), true);
       const w = toPhys(Math.abs(ex - sx));
-      const h = toPhys(Math.abs(ey - sy));
+      const h = toPhys(Math.abs(ey - sy), true);
       if (w < 10 || h < 10) { hide(); return; }
       /* 从启动时缓存的背景图裁剪选区(不二次截屏,避免框选完成瞬间混入 overlay 残影) */
       let b64 = "";
@@ -3462,7 +3316,7 @@ function ScreenshotOverlay() {
           b64 = off.toDataURL("image/png").split(",")[1] || "";
         }
       }
-      appWindow.emitTo("main", "screenshot-done", { x, y, w, h, source: sourceRef.current, b64 });
+      appWindow.emitTo("main", "screenshot-done", { x: x + origin.x, y: y + origin.y, w, h, source: sourceRef.current, b64 });
       hide();
     };
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancel(); };
@@ -3502,8 +3356,8 @@ function ScreenshotOverlay() {
 
 /* ============ 应用路由 ============ */
 export default function App() {
-  const [label, setLabel] = useState<string>("main");
-  useEffect(() => { setLabel(appWindow.label); }, []);
+  // The native label is already available before the first render.
+  const label = appWindow.label;
 
   if (label === "floating") return <FloatingWindow />;
   if (label === "audio-floating" || label === "audio-floating-mic") return <AudioFloatingWindow />;

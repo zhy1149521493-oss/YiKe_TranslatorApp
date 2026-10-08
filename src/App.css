@@ -1,5 +1,8 @@
 /* ============ iOS 设计 tokens ============ */
 :root {
+  color-scheme: light;
+  --scrollbar-thumb: rgba(60, 60, 67, 0.32);
+  --scrollbar-thumb-hover: rgba(60, 60, 67, 0.5);
   --ios-bg: #f2f2f7;
   --ios-card: #ffffff;
   --ios-text: #1c1c1e;
@@ -28,6 +31,9 @@
 
 /* Wave 9: 深色主题(设置中心切换;跟随系统时由 JS 解析) */
 :root[data-theme="dark"] {
+  color-scheme: dark;
+  --scrollbar-thumb: rgba(235, 235, 245, 0.3);
+  --scrollbar-thumb-hover: rgba(235, 235, 245, 0.48);
   --ios-bg: #1c1c1e;
   --ios-card: #2c2c2e;
   --ios-text: #f2f2f7;
@@ -82,6 +88,25 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+/* WebView2 versions without the standard scrollbar properties. */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--ios-blue);
+  outline-offset: 2px;
 }
 
 svg {
@@ -127,6 +152,7 @@ body,
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
 }
 
 .engine-menu-wrap {
@@ -156,6 +182,12 @@ body,
   font-size: 10px;
   color: var(--ios-secondary);
 }
+.engine-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.engine-pill > svg { flex-shrink: 0; }
 .engine-menu-backdrop {
   position: fixed;
   inset: 0;
@@ -167,6 +199,7 @@ body,
   left: 0;
   z-index: 41;
   min-width: 250px;
+  width: min(420px, calc(100vw - 56px));
   max-height: 70vh;
   overflow: auto;
   background: var(--ios-card);
@@ -186,6 +219,9 @@ body,
 }
 .engine-menu-item {
   text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
   font-family: inherit;
   padding: 8px 10px;
@@ -194,10 +230,12 @@ body,
   background: transparent;
   color: var(--ios-text);
   cursor: pointer;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.engine-menu-item > svg { flex-shrink: 0; }
 .engine-menu-item:hover {
   background: rgba(var(--ios-accent-rgb), 0.08);
 }
@@ -912,6 +950,7 @@ body,
   flex-direction: column;
   gap: 4px;
   background: rgba(255, 255, 255, 0.5);
+  overflow-y: auto;
 }
 :root[data-theme="dark"] .settings-nav {
   background: rgba(44, 44, 46, 0.6);
@@ -959,6 +998,7 @@ body,
 }
 .settings-content {
   flex: 1;
+  min-width: 0;
   overflow: auto;
   padding: 24px 28px;
 }
@@ -1498,7 +1538,9 @@ body,
   font-size: 12px;
   padding: 4px 12px;
   border-radius: var(--radius-pill);
-  white-space: nowrap;
+  max-width: 65%;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 .status-pill.idle {
   background: rgba(60, 60, 67, 0.08);

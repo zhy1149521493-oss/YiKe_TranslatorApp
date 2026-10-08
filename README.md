@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **文本翻译**：19 种语言，自动检测输入语言，实时流式输出
+- **文本翻译**：19 种语言选项，实时流式输出；源语言可手动选择或自动检测（不确定时由模型判断）
 - **划词翻译**：选中任意文字即译，透明悬浮窗显示（Ctrl+Shift+D）
 - **截图翻译**：框选屏幕区域直接识别并翻译（Ctrl+Shift+S）
 - **视频实时字幕**：系统 OCR / RapidOCR 双引擎，看视频带实时字幕
@@ -61,9 +61,11 @@
 
 ## 从源码构建（开发者）
 
+Developer setup, configuration, verification and the current code review are documented in [docs/README.md](docs/README.md).
+
 ```bash
 git clone https://github.com/zhy1149521493-oss/YiKe_TranslatorApp.git
-cd 译刻
+cd YiKe_TranslatorApp
 npm install
 npm run tauri dev      # 开发模式
 npm run tauri build    # 构建 release

@@ -52,6 +52,13 @@ fn engine() -> std::sync::MutexGuard<'static, std::collections::HashMap<AudioSou
         .unwrap()
 }
 
+fn engine_snapshot() -> std::collections::HashMap<AudioSource, Arc<AudioEngineInner>> {
+    engine().clone()
+}
+
+// Serialize lifecycle operations separately from the state map. Never hold the map while joining.
+static AUDIO_OPERATION: Mutex<()> = Mutex::new(());
+
 /// 音频来源
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum AudioSource {
@@ -157,15 +164,16 @@ pub fn apply_sensitivity(lang: &str, app: &AppHandle) {
     let app2 = app.clone();
     let lang = lang.to_string();
     std::thread::spawn(move || {
+        let _operation = AUDIO_OPERATION.lock().unwrap();
         // 所有运行中的引擎,若其语言匹配则重启
-        for (source, e) in engine().clone() {
+        for (source, e) in engine_snapshot() {
             let running = e.running.load(Ordering::SeqCst);
             let cur_lang = e.lang.lock().unwrap().clone();
             eprintln!("[audio] apply_sensitivity source={:?} lang={lang} running={running} cur_lang={cur_lang}", source);
             if running && cur_lang == lang {
                 eprintln!("[audio] sensitivity applied, restarting recognizer (source={:?} lang={lang})", source);
-                stop(source);
-                let _ = start(source, &lang, app2.clone());
+                stop_inner(source);
+                let _ = start_inner(source, &lang, app2.clone());
             }
         }
     });
@@ -175,13 +183,14 @@ pub fn apply_sensitivity(lang: &str, app: &AppHandle) {
 pub fn apply_denoise(app: &AppHandle) {
     let app2 = app.clone();
     std::thread::spawn(move || {
-        for (source, e) in engine().clone() {
+        let _operation = AUDIO_OPERATION.lock().unwrap();
+        for (source, e) in engine_snapshot() {
             let running = e.running.load(Ordering::SeqCst);
             let lang = e.lang.lock().unwrap().clone();
             eprintln!("[audio] apply_denoise source={:?} running={running} lang={lang}", source);
             if running {
-                stop(source);
-                let _ = start(source, &lang, app2.clone());
+                stop_inner(source);
+                let _ = start_inner(source, &lang, app2.clone());
             }
         }
     });
@@ -296,11 +305,14 @@ struct AudioEngineInner {
     running: AtomicBool,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
     lang: Mutex<String>,
+    session: u64,
 }
 
 impl AudioEngineInner {
     fn new(lang: String) -> Self {
+        static NEXT_SESSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
+            session: NEXT_SESSION.fetch_add(1, Ordering::SeqCst),
             running: AtomicBool::new(false),
             handle: Mutex::new(None),
             lang: Mutex::new(lang),
@@ -314,8 +326,13 @@ impl AudioEngineInner {
 /// 模型加载在后台线程执行(避免同步 command 阻塞 UI / C 库崩溃拖垮主进程);
 /// 加载结果通过 audio-status 事件上报({source, status}:"loading"→"ready"/"error:xxx")
 pub fn start(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), String> {
+    let _operation = AUDIO_OPERATION.lock().unwrap();
+    start_inner(source, lang, app)
+}
+
+fn start_inner(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), String> {
     // 已运行则先停掉(同来源)
-    stop(source);
+    stop_inner(source);
 
     let lang = lang.to_string();
     let model_dir = model_dir_for_lang(&lang)
@@ -328,7 +345,7 @@ pub fn start(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), Stri
     let inner2 = inner.clone();
     let handle = std::thread::spawn(move || {
         diag_log(&format!("[audio] thread start source={:?}, emitting loading...", source));
-        let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "loading" }));
+        let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "session": inner2.session, "status": "loading" }));
         // 后台线程:扫描模型 + 加载识别器
         let loaded = (|| -> Result<OnlineRecognizer, String> {
             diag_log("[audio] scanning model files...");
@@ -387,12 +404,13 @@ pub fn start(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), Stri
             Err(e) => {
                 diag_log(&format!("[audio] model load error: {e}"));
                 inner2.running.store(false, Ordering::SeqCst);
-                let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": format!("error:{e}") }));
+                let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "session": inner2.session, "status": format!("error:{e}") }));
                 return;
             }
         };
+        if !inner2.running.load(Ordering::SeqCst) { return; }
         diag_log(&format!("[audio] source={:?} recognizer READY", source));
-        let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "ready" }));
+        let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "session": inner2.session, "status": "ready" }));
 
         // 降噪:开关打开且模型存在 → 创建 GTCRN 在线降噪器(识别前先压噪)
         let denoiser = if get_denoise() && denoise_installed() {
@@ -421,11 +439,11 @@ pub fn start(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), Stri
         match result {
             Ok(()) => {
                 diag_log(&format!("[audio] source={:?} capture loop ended (stopped)", source));
-                let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": "stopped" }));
+                let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "session": inner2.session, "status": "stopped" }));
             }
             Err(e) => {
                 diag_log(&format!("[audio] capture error: {e}"));
-                let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "status": format!("error:{e}") }));
+                let _ = run_app.emit_to("main", "audio-status", serde_json::json!({ "source": source.as_str(), "session": inner2.session, "status": format!("error:{e}") }));
             }
         }
     });
@@ -437,8 +455,13 @@ pub fn start(source: AudioSource, lang: &str, app: AppHandle) -> Result<(), Stri
 
 /// 停止指定来源的音频识别
 pub fn stop(source: AudioSource) {
-    let mut guard = engine();
-    if let Some(inner) = guard.remove(&source) {
+    let _operation = AUDIO_OPERATION.lock().unwrap();
+    stop_inner(source);
+}
+
+fn stop_inner(source: AudioSource) {
+    let inner = engine().remove(&source);
+    if let Some(inner) = inner {
         inner.running.store(false, Ordering::SeqCst);
         if let Some(h) = inner.handle.lock().unwrap().take() {
             let _ = h.join();
@@ -448,9 +471,10 @@ pub fn stop(source: AudioSource) {
 
 /// 停止所有来源的音频识别
 pub fn stop_all() {
+    let _operation = AUDIO_OPERATION.lock().unwrap();
     let sources: Vec<AudioSource> = engine().keys().copied().collect();
     for s in sources {
-        stop(s);
+        stop_inner(s);
     }
 }
 
@@ -624,13 +648,13 @@ fn capture_loop(
 
         let stream = recognizer.create_stream();
         let mut partial_last: String = String::new();
+        let mut utterance = 0u64;
         let mut last_emit = Instant::now();
         let mut last_level = Instant::now();   // 音量事件节流
 
         audio_client.Start().map_err(|e| format!("Start 失败: {e}"))?;
         diag_log(&format!("[audio] capture started (source={:?})", source));
 
-        let block_align = (bits / 8) as usize * channels as usize;
 
         let mut diag_frames: u64 = 0;   // 诊断:累计捕获帧数
         let mut diag_last = Instant::now();
@@ -668,58 +692,14 @@ fn capture_loop(
                 diag_last = Instant::now();
             }
 
-            // 解析样本 → f32 单声道
-            let mut mono: Vec<f32> = Vec::with_capacity(num_frames as usize);
-            let raw = std::slice::from_raw_parts(data_ptr, num_frames as usize * block_align);
-            if is_float {
-                // float32 (4 字节)或 float64?按 bits 判断
-                if bits == 32 {
-                    for frame in raw.chunks_exact(block_align) {
-                        let mut sum = 0.0f32;
-                        for ch in 0..channels as usize {
-                            let off = ch * 4;
-                            let v = f32::from_le_bytes([
-                                frame[off],
-                                frame[off + 1],
-                                frame[off + 2],
-                                frame[off + 3],
-                            ]);
-                            sum += v;
-                        }
-                        mono.push(sum / channels as f32);
-                    }
-                } else if bits == 64 {
-                    for frame in raw.chunks_exact(block_align) {
-                        let mut sum = 0.0f64;
-                        for ch in 0..channels as usize {
-                            let off = ch * 8;
-                            let mut b = [0u8; 8];
-                            b.copy_from_slice(&frame[off..off + 8]);
-                            sum += f64::from_le_bytes(b);
-                        }
-                        mono.push((sum / channels as f64) as f32);
-                    }
-                } else {
-                    capture.ReleaseBuffer(num_frames).ok();
-                    return Err(format!("不支持的 float 位深: {bits}"));
-                }
-            } else if bits == 16 {
-                // int16 PCM
-                for frame in raw.chunks_exact(block_align) {
-                    let mut sum = 0.0f32;
-                    for ch in 0..channels as usize {
-                        let off = ch * 2;
-                        let v = i16::from_le_bytes([frame[off], frame[off + 1]]) as f32 / 32768.0;
-                        sum += v;
-                    }
-                    mono.push(sum / channels as f32);
-                }
-            } else {
-                capture.ReleaseBuffer(num_frames).ok();
-                return Err(format!("不支持的 PCM 位深: {bits}"));
-            }
-
-            capture.ReleaseBuffer(num_frames).ok();
+            // Decode before releasing the packet; silent packets never dereference data_ptr.
+            let decoded = crate::audio_samples::packet_to_mono(
+                data_ptr, num_frames, channels, bits, is_float,
+                flags & windows::Win32::Media::Audio::AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0,
+            );
+            let released = capture.ReleaseBuffer(num_frames);
+            let mut mono = decoded?;
+            released.map_err(|e| format!("ReleaseBuffer 失败: {e}"))?;
 
             // 原始样本统计(所有来源,节流 1s):判断是静音/直流/正常语音/超范围
             if sample_diag_last.elapsed() >= Duration::from_secs(1) {
@@ -794,12 +774,13 @@ fn capture_loop(
                             source.as_str(),
                             result.tokens
                         ));
-                        let r = app.emit_to("main", "audio-partial", serde_json::json!({ "source": source.as_str(), "text": text }));
+                        let payload = serde_json::json!({ "source": source.as_str(), "text": text, "id": format!("{}:{utterance}", inner.session), "session": inner.session });
+                        let r = app.emit_to("main", "audio-partial", payload.clone());
                         if let Err(e) = &r { diag_log(&format!("[audio] emit audio-partial FAILED: {e}")); }
                         // 语音窗实时原文:partial 也转发到对应语音窗(两句显示:上一句 + 正在生成的一句)
                         let wlabel = if source == AudioSource::Mic { "audio-floating-mic" } else { "audio-floating" };
                         if let Some(w) = app.get_webview_window(wlabel) {
-                            let js = format!("window.__audioPartial && window.__audioPartial({})", serde_json::json!(text));
+                            let js = format!("window.__audioPartial && window.__audioPartial({})", payload);
                             let _ = w.eval(&js);
                         }
                     }
@@ -815,10 +796,17 @@ fn capture_loop(
                             let r = app.emit_to(
                                 "main",
                                 "audio-final",
-                                serde_json::json!({ "source": source.as_str(), "text": final_text }),
+                                serde_json::json!({ "source": source.as_str(), "text": final_text, "id": format!("{}:{utterance}", inner.session), "session": inner.session }),
                             );
                             if let Err(e) = &r { diag_log(&format!("[audio] emit audio-final FAILED: {e}")); }
                         }
+                        if !final_text.is_empty() {
+                            if let Some(w) = app.get_webview_window(window_label(source)) {
+                                let payload = serde_json::json!({ "source": source.as_str(), "text": final_text, "id": format!("{}:{utterance}", inner.session), "session": inner.session });
+                                let _ = w.eval(&format!("window.__audioFinal && window.__audioFinal({payload})"));
+                            }
+                        }
+                        utterance += 1;
                         recognizer.reset(&stream);
                         partial_last.clear();
                     }
@@ -836,5 +824,33 @@ fn capture_loop(
 impl Drop for AudioEngineInner {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn snapshot_does_not_hold_engine_mutex_during_restart() {
+        let _operation = AUDIO_OPERATION.lock().unwrap();
+        for (_source, _inner) in {
+            engine().insert(AudioSource::System, Arc::new(AudioEngineInner::new("auto".into())));
+            engine_snapshot()
+        } {
+            assert!(AUDIO_ENGINE.get().unwrap().try_lock().is_ok());
+            stop_inner(AudioSource::System);
+        }
+        assert!(!is_running(AudioSource::System));
+        let inner = Arc::new(AudioEngineInner::new("auto".into()));
+        inner.running.store(true, Ordering::SeqCst);
+        let worker = inner.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        *inner.handle.lock().unwrap() = Some(std::thread::spawn(move || {
+            while worker.running.load(Ordering::SeqCst) { std::thread::yield_now(); }
+            sender.send(AUDIO_ENGINE.get().unwrap().try_lock().is_ok()).unwrap();
+        }));
+        engine().insert(AudioSource::System, inner);
+        stop_inner(AudioSource::System);
+        assert!(receiver.recv_timeout(Duration::from_secs(1)).unwrap(), "map lock must be released before joining capture");
     }
 }

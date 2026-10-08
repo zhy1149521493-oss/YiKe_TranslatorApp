@@ -8,6 +8,9 @@ use rapidocr_core::RapidOcr;
 use tauri_plugin_global_shortcut::ShortcutState;
 
 mod audio;
+mod audio_samples;
+mod streaming;
+mod capture_bounds;
 
 /// Job Object 句柄包装:HANDLE(*mut c_void) 本身不是 Send/Sync,
 /// 但内核句柄是进程级资源,跨线程移动/共享安全,显式标记以便放入 managed state。
@@ -426,34 +429,31 @@ async fn api_chat(
     }
     // SSE 流式解析:逐行 data: {…},choices[0].delta.content 通过 Channel 推给前端
     let mut full = String::new();
-    let mut buf = String::new();
+    let mut decoder = streaming::SseDecoder::default();
+    let mut done = false;
+    let mut consume = |payload: String| {
+        if payload.trim() == "[DONE]" { return true; }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { return false };
+        let delta = &v["choices"][0]["delta"];
+        if let Some(c) = delta["content"].as_str().filter(|s| !s.is_empty()) {
+            full.push_str(c);
+            let _ = on_token.send(serde_json::json!({ "c": c }).to_string());
+        }
+        if let Some(r) = delta["reasoning_content"].as_str().filter(|s| !s.is_empty()) {
+            let _ = on_token.send(serde_json::json!({ "r": r }).to_string());
+        }
+        false
+    };
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("读取流失败: {e}"))?;
-        buf.push_str(&String::from_utf8_lossy(&chunk));
-        while let Some(pos) = buf.find('\n') {
-            let line = buf[..pos].trim().to_string();
-            buf.drain(..=pos);
-            let Some(payload) = line.strip_prefix("data:") else { continue };
-            let payload = payload.trim();
-            if payload.is_empty() || payload == "[DONE]" {
-                continue;
-            }
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else { continue };
-            let delta = &v["choices"][0]["delta"];
-            if let Some(c) = delta["content"].as_str() {
-                if !c.is_empty() {
-                    full.push_str(c);
-                    // 内容帧:前端追加到译文
-                    let _ = on_token.send(serde_json::json!({ "c": c }).to_string());
-                }
-            } else if let Some(r) = delta["reasoning_content"].as_str() {
-                if !r.is_empty() {
-                    // 推理帧:前端显示"思考中"进度(不进入译文)
-                    let _ = on_token.send(serde_json::json!({ "r": r }).to_string());
-                }
-            }
+        for payload in decoder.push(&chunk)? {
+            if consume(payload) { done = true; break; }
         }
+        if done { break; }
+    }
+    if !done {
+        for payload in decoder.finish()? { if consume(payload) { break; } }
     }
     eprintln!("[api_chat] done stream=true out_len={} elapsed_ms={}", full.chars().count(), started.elapsed().as_millis());
     Ok(full)
@@ -1017,18 +1017,18 @@ fn audio_get_denoise() -> bool {
 
 /// 启动音频实时识别(source: "system"=电脑音频 / "mic"=麦克风)
 #[tauri::command]
-fn audio_subtitle_start(source: String, lang: String, app: tauri::AppHandle) -> Result<(), String> {
-    let src = audio::AudioSource::from_str(&source);
-    audio::start(src, &lang, app)
+async fn audio_subtitle_start(source: String, lang: String, app: tauri::AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || audio::start(audio::AudioSource::from_str(&source), &lang, app))
+        .await.map_err(|e| format!("启动音频任务失败: {e}"))?
 }
 
 /// 停止指定来源的音频识别(source: "system" / "mic";省略则全停)
 #[tauri::command]
-fn audio_subtitle_stop(source: Option<String>) {
-    match source {
+async fn audio_subtitle_stop(source: Option<String>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || match source {
         Some(s) => audio::stop(audio::AudioSource::from_str(&s)),
         None => audio::stop_all(),
-    }
+    }).await.map_err(|e| format!("停止音频任务失败: {e}"))
 }
 
 /// 查询指定来源是否运行中(source: "system" / "mic")
@@ -1156,41 +1156,37 @@ async fn win_ocr_from_image(img: &image::RgbaImage) -> Result<String, String> {
 /// 不透明窗口 + 静态截图背景方案:框选层显示位图,不依赖透明窗口透出真实屏幕
 /// (透明窗口叠加硬件视频会显示黑屏),框选时能看到画面内容。
 #[tauri::command]
-fn capture_fullscreen() -> Result<String, String> {
+fn capture_fullscreen() -> Result<ScreenCapture, String> {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let monitors = xcap::Monitor::all().map_err(|e| format!("获取显示器: {e}"))?;
-    let primary = monitors.into_iter().next().ok_or("未找到显示器")?;
+    let primary = monitors.into_iter().find(|monitor| monitor.is_primary().unwrap_or(false)).ok_or("未找到主显示器")?;
     let img = primary.capture_image().map_err(|e| format!("截屏: {e}"))?;
     let mut buf = std::io::Cursor::new(Vec::new());
     img.write_to(&mut buf, image::ImageFormat::Png).map_err(|e| format!("编码: {e}"))?;
-    Ok(STANDARD.encode(buf.get_ref()))
+    Ok(ScreenCapture {
+        b64: STANDARD.encode(buf.get_ref()),
+        x: primary.x().map_err(|e| format!("显示器坐标: {e}"))?,
+        y: primary.y().map_err(|e| format!("显示器坐标: {e}"))?,
+    })
 }
 
-/// 截图 + OCR: xcap 截全屏 → 裁剪到区域 → 保存 png → OCR → 返回文本
+#[derive(serde::Serialize)]
+struct ScreenCapture { b64: String, x: i32, y: i32 }
+
+/// Screenshot OCR returns its own result, without a shared event/source slot.
 #[tauri::command]
-fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32, app: tauri::AppHandle) -> Result<String, String> {
-    use tauri::Emitter;
-    let app2 = app.clone();
-    std::thread::spawn(move || {
-        eprintln!("[screenshot] ocr start coords=({x},{y},{w},{h})");
-        let result: String = (|| {
-            let cropped = capture_region(x, y, w, h)?;
-            ocr_image(&cropped)
-        })().unwrap_or_else(|e| format!("ERROR: {e}"));
-        let preview: String = result.chars().take(120).collect();
-        eprintln!("[screenshot] ocr result: {}", preview);
-        let emit_ok = app2.emit_to("main", "ocr-done", result);
-        eprintln!("[screenshot] emit ocr-done: {:?}", emit_ok.map(|_| "ok"));
-    });
-    Ok("processing".into())
+async fn screenshot_ocr(x: i32, y: i32, w: i32, h: i32) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let cropped = capture_region(x, y, w, h)?;
+        ocr_image(&cropped)
+    }).await.map_err(|e| format!("截图识别任务失败: {e}"))?
 }
 
 /// 视频实时字幕:连续截帧 + OCR。
-/// engine: "win"=Windows 系统 OCR(快),默认/其他=RapidOCR。与截图翻译隔离(事件 subtitle-ocr)。
+/// engine: "win"=Windows 系统 OCR(快),默认/其他=RapidOCR。结果直接返回给发起的字幕会话。
 /// async:系统 OCR 需在 Tauri 异步运行时执行(PoC 验证可行),裸线程 + block_on 会卡死。
 #[tauri::command]
-async fn subtitle_frame(x: i32, y: i32, w: i32, h: i32, engine: Option<String>, app: tauri::AppHandle) -> Result<String, String> {
-    use tauri::Emitter;
+async fn subtitle_frame(x: i32, y: i32, w: i32, h: i32, engine: Option<String>) -> Result<String, String> {
     let use_win = engine.as_deref() == Some("win");
     let result: String = match capture_region(x, y, w, h) {
         Ok(cropped) => {
@@ -1205,18 +1201,28 @@ async fn subtitle_frame(x: i32, y: i32, w: i32, h: i32, engine: Option<String>, 
     };
     let preview: String = result.chars().take(120).collect();
     eprintln!("[subtitle] frame ocr({}): {}", if use_win { "win" } else { "rapid" }, preview);
-    let _ = app.emit_to("main", "subtitle-ocr", result);
-    Ok("processing".into())
+    Ok(result)
 }
 
 /// 截取屏幕指定区域(物理像素),返回裁剪后的图像
 fn capture_region(x: i32, y: i32, w: i32, h: i32) -> Result<image::RgbaImage, String> {
     use image::GenericImageView;
     let monitors = xcap::Monitor::all().map_err(|e| format!("获取显示器: {e}"))?;
-    let primary = monitors.into_iter().next().ok_or("未找到显示器")?;
-    let img = primary.capture_image().map_err(|e| format!("截屏: {e}"))?;
-    let cropped = img.view(x as u32, y as u32, w as u32, h as u32).to_image();
-    Ok(cropped)
+    for monitor in monitors {
+        let mx = monitor.x().map_err(|e| format!("显示器坐标: {e}"))?;
+        let my = monitor.y().map_err(|e| format!("显示器坐标: {e}"))?;
+        let mw = monitor.width().map_err(|e| format!("显示器宽度: {e}"))?;
+        let mh = monitor.height().map_err(|e| format!("显示器高度: {e}"))?;
+        if let Some((lx, ly, cw, ch)) = capture_bounds::local_region(x, y, w, h, mx, my, mw, mh) {
+            let img = monitor.capture_image().map_err(|e| format!("截屏: {e}"))?;
+            // Display geometry may change between enumeration and capture.
+            if lx as u64 + cw as u64 > img.width() as u64 || ly as u64 + ch as u64 > img.height() as u64 {
+                return Err("显示器尺寸已改变,请重新选择字幕区域".into());
+            }
+            return Ok(img.view(lx, ly, cw, ch).to_image());
+        }
+    }
+    Err("截图区域无效或跨越显示器边界,请重新选择单个显示器内的区域".into())
 }
 
 /// 对裁剪图像做 OCR(共享全局缓存引擎;内存推理,免临时文件 I/O)
@@ -1282,6 +1288,8 @@ fn audio_forward_to_floating(
     tgt: String,
     result: String,
     role: String, // "cur"=当前句(partial 增量翻译), "prev"=上一句(定稿句翻译)
+    id: String,
+    session: u64,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     use tauri::Manager as _;
@@ -1293,7 +1301,7 @@ fn audio_forward_to_floating(
         return Err(format!("{label} 窗口不存在"));
     };
     // 转义 payload 为 JS 字符串(JSON 序列化后嵌入)
-    let js_payload = serde_json::json!({ "text": text, "src": src, "tgt": tgt, "result": result, "role": role }).to_string();
+    let js_payload = serde_json::json!({ "source": source, "text": text, "src": src, "tgt": tgt, "result": result, "role": role, "id": id, "session": session }).to_string();
     let js = format!("window.__audioShow && window.__audioShow({js_payload})");
     w.eval(&js)
         .map_err(|e| format!("eval 到语音窗失败: {e}"))?;
@@ -1382,6 +1390,10 @@ fn open_screenshot_overlay(from: Option<String>, app: tauri::AppHandle) -> Resul
     // 预建窗口存在 → 只通知来源(不 show,前端截完图再显示)
     if let Some(w) = app.get_webview_window("screenshot-overlay") {
         let _ = w.hide(); // 确保处于隐藏状态,截图不包含自身
+        if let Ok(Some(monitor)) = app.primary_monitor() {
+            w.set_position(*monitor.position()).map_err(|e| format!("设置框选窗口位置: {e}"))?;
+            w.set_size(*monitor.size()).map_err(|e| format!("设置框选窗口尺寸: {e}"))?;
+        }
         let _ = app.emit_to("screenshot-overlay", "overlay-start", from.clone());
         return Ok(());
     }
@@ -1407,6 +1419,10 @@ fn open_screenshot_overlay(from: Option<String>, app: tauri::AppHandle) -> Resul
             .shadow(false)
             .build()
         {
+            if let Ok(Some(monitor)) = app2.primary_monitor() {
+                let _ = w.set_position(*monitor.position());
+                let _ = w.set_size(*monitor.size());
+            }
             let _ = app2.emit_to("screenshot-overlay", "overlay-start", from.clone());
             let _ = w.show();
             let _ = w.set_focus();
@@ -1876,4 +1892,57 @@ fn webview2_installed() -> bool {
         r"C:\Program Files\Microsoft\EdgeWebView\Application",
     ];
     candidates.iter().any(|p| std::path::Path::new(p).exists())
+}
+
+#[cfg(test)]
+mod regression_tests {
+    #[test]
+    fn api_chat_decodes_split_chinese_and_eof_and_forwards_reasoning() {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(std::time::Duration::from_secs(3))).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                let count = socket.read(&mut chunk).unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&chunk[..count]);
+                if let Some(end) = request.windows(4).position(|s| s == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..end]).to_lowercase();
+                    let length: usize = headers.lines().find_map(|line| line.strip_prefix("content-length: "))
+                        .unwrap().parse().unwrap();
+                    if request.len() >= end + 4 + length { break; }
+                }
+            }
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\",\"reasoning_content\":\"分析\"}}]}\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"🌸\"}}]}";
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
+            for byte in body.as_bytes() {
+                socket.write_all(&[*byte]).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+        let frames = Arc::new(Mutex::new(Vec::new()));
+        let sink = frames.clone();
+        let channel = tauri::ipc::Channel::<String>::new(move |body| {
+            if let tauri::ipc::InvokeResponseBody::Json(json) = body {
+                let frame: String = serde_json::from_str(&json).unwrap();
+                sink.lock().unwrap().push(serde_json::from_str::<serde_json::Value>(&frame).unwrap());
+            }
+            Ok(())
+        });
+        let result = tauri::async_runtime::block_on(super::api_chat(
+            format!("http://{address}/v1"), "local-test-key".into(), "mock".into(),
+            serde_json::json!([{ "role": "user", "content": "local regression test" }]), None, false, true, channel,
+        )).unwrap();
+        server.join().unwrap();
+        assert_eq!(result, "你好🌸");
+        let frames = frames.lock().unwrap();
+        assert!(frames.iter().any(|frame| frame["c"] == "你好"));
+        assert!(frames.iter().any(|frame| frame["r"] == "分析"));
+        assert!(frames.iter().any(|frame| frame["c"] == "🌸"));
+    }
 }

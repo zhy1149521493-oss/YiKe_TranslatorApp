@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "audio-windows",
+  "description": "Allow audio subtitle windows to listen for status and notify the main window when closed.",
+  "windows": ["audio-floating", "audio-floating-mic"],
+  "permissions": ["core:event:default"]
+}
