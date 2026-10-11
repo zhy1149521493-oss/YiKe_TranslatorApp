@@ -1,5 +1,9 @@
 # Local checkpoints and rollback
 
+## Independent design demo
+
+Branch `ui/prototype-demo` is checked out separately at `E:/TranslatorApp-ui-demo`. It has no changes to the production controller, Rust commands or installed executables. Stop the demo server to return to the existing application. Do not copy `dist-demo/` over the production assets. The prior `ui/workbench-redesign` checkout and both existing checkpoint tags remain intact. See [preview setup and acceptance gate](DESIGN_DEMO.md).
+
 The stable repair checkpoint is the Git tag `checkpoint/core-repairs-2026-10-08` and branch `archive/core-repairs-2026-10-08`. It includes the eight audited logic repairs, theme-aware scrollbars, regression tests and developer documentation. These references are local; no changes have been pushed to GitHub.
 
 The repair commit is `994ddfa73ffc825e28b212b6c86695389264cdf8`. An independent complete-history Git bundle is stored at `E:/TranslatorApp/archives/core-repairs-2026-10-08/source.bundle`. Its refs were verified with `git bundle verify`.

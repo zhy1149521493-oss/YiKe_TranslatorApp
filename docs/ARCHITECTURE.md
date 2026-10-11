@@ -1,5 +1,9 @@
 # Runtime architecture and request lifecycle
 
+## Isolated design preview
+
+`demo.html` and `src/demo/main.tsx` form a separate entry. `model.ts` owns typed fixture state and shared appearance preferences; `usePreview.ts` is an in-memory task/clipboard adapter. Layout, translation, recognition, settings and floating-panel components consume this single controller. They import no production controller or Tauri APIs. `vite.demo.config.ts` builds `dist-demo/`, separately from the main app. See [design demo boundaries and validation](DESIGN_DEMO.md). Native window integration and production configuration migration await user acceptance.
+
 ## Components
 
 `src/App.tsx` routes to main, translation floating, audio floating or screenshot overlay components using the native window label. The main window owns configuration and provider selection, and orchestrates translation. React and CSS are embedded into the portable executable by the Tauri CLI release build.

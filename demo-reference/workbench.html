@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>译刻 · YiKe Translator</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            /* Claude Warm Theme */
+            --primary-gradient: linear-gradient(135deg, #D97757 0%, #E89A7E 100%);
+            --bg-base: #FBF8F3;
+            --bg-card: rgba(255, 255, 255, 0.7);
+            --text-primary: #1A1A1A;
+            --text-secondary: #6B6B6B;
+            --text-tertiary: #A8A8A8;
+            --accent: #D97757;
+            --accent-hover: #C55D3F;
+            --shadow-sm: 0 2px 8px rgba(217, 119, 87, 0.08);
+            --shadow-md: 0 8px 32px rgba(217, 119, 87, 0.12);
+            --shadow-lg: 0 16px 64px rgba(217, 119, 87, 0.16);
+            --blur: blur(20px);
+        }
+
+        [data-theme="dark"] {
+            --primary-gradient: linear-gradient(135deg, #FF9F66 0%, #FFB185 100%);
+            --bg-base: #0F0F10;
+            --bg-card: rgba(30, 30, 32, 0.8);
+            --text-primary: #EFEFEF;
+            --text-secondary: #B0B0B0;
+            --text-tertiary: #707070;
+            --accent: #FF9F66;
+            --accent-hover: #FFB185;
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+            --shadow-md: 0 8px 32px rgba(0, 0, 0, 0.5);
+            --shadow-lg: 0 16px 64px rgba(0, 0, 0, 0.7);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-base);
+            color: var(--text-primary);
+            overflow: hidden;
+            position: relative;
+            min-height: 100vh;
+        }
+
+        /* 动态背景 */
+        .dynamic-background {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            background: var(--bg-base);
+            overflow: hidden;
+        }
+
+        .gradient-orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px);
+            opacity: 0.4;
+            animation: float 20s ease-in-out infinite;
+        }
+
+        .orb-1 {
+            width: 600px;
+            height: 600px;
+            background: linear-gradient(135deg, #FFB4A1, #D97757);
+            top: -200px;
+            left: -100px;
+            animation-delay: 0s;
+        }
+
+        .orb-2 {
+            width: 500px;
+            height: 500px;
+            background: linear-gradient(135deg, #A7C7E7, #6B9BD1);
+            bottom: -150px;
+            right: -100px;
+            animation-delay: 5s;
+        }
+
+        .orb-3 {
+            width: 400px;
+            height: 400px;
+            background: linear-gradient(135deg, #F4D1A6, #E8B881);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            animation-delay: 10s;
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translate(0, 0) scale(1);
+            }
+            33% {
+                transform: translate(50px, -50px) scale(1.1);
+            }
+            66% {
+                transform: translate(-50px, 50px) scale(0.9);
+            }
+        }
+
+        /* 主容器 */
+        .app-wrapper {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 40px;
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 1400px;
+            height: 85vh;
+            background: var(--bg-card);
+            backdrop-filter: var(--blur);
+            -webkit-backdrop-filter: var(--blur);
+            border-radius: 32px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* 顶部栏 */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            padding: 20px 32px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: var(--blur);
+        }
+
+        .logo-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-right: auto;
+        }
+
+        .logo {
+            width: 40px;
+            height: 40px;
+            background: var(--primary-gradient);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 700;
+            font-size: 20px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .brand-name {
+            font-size: 22px;
+            font-weight: 600;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .mode-switcher {
+            display: flex;
+            gap: 6px;
+            background: rgba(0, 0, 0, 0.05);
+            padding: 6px;
+            border-radius: 16px;
+            margin-right: 16px;
+        }
+
+        .mode-tab {
+            padding: 10px 20px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .mode-tab:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .mode-tab.active {
+            background: var(--primary-gradient);
+            color: white;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .top-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .icon-button {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            border: none;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 18px;
+        }
+
+        .icon-button:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .theme-toggle {
+            background: var(--primary-gradient);
+            color: white;
+        }
+
+        /* 主工作区 */
+        .workspace {
+            flex: 1;
+            overflow-y: auto;
+            padding: 32px;
+        }
+
+        /* 文本翻译视图 */
+        .translate-view {
+            height: 100%;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        .translate-card {
+            background: var(--bg-card);
+            backdrop-filter: var(--blur);
+            border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .translate-card:hover {
+            box-shadow: var(--shadow-md);
+            transform: translateY(-4px);
+        }
+
+        .card-header {
+            padding: 20px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .lang-dropdown {
+            padding: 8px 16px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .lang-dropdown:hover {
+            border-color: var(--accent);
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .card-body {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+        }
+
+        .text-input {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            font-size: 16px;
+            line-height: 1.8;
+            resize: none;
+            outline: none;
+            font-family: inherit;
+            font-weight: 400;
+        }
+
+        .text-input::placeholder {
+            color: var(--text-tertiary);
+            font-weight: 300;
+        }
+
+        .translation-result {
+            font-size: 16px;
+            line-height: 1.8;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+        }
+
+        .card-footer {
+            padding: 16px 24px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .footer-stats {
+            font-size: 13px;
+            color: var(--text-tertiary);
+            font-weight: 500;
+        }
+
+        .footer-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .action-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            border: none;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 16px;
+        }
+
+        .action-btn:hover {
+            background: var(--primary-gradient);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        /* 功能卡片视图（截图/字幕/音频） */
+        .feature-view {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            gap: 48px;
+        }
+
+        .feature-hero {
+            text-align: center;
+            max-width: 600px;
+        }
+
+        .feature-icon-large {
+            width: 120px;
+            height: 120px;
+            margin: 0 auto 24px;
+            background: var(--primary-gradient);
+            border-radius: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 56px;
+            box-shadow: var(--shadow-md);
+            animation: pulse 3s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.05);
+            }
+        }
+
+        .feature-title {
+            font-size: 42px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            background: var(--primary-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .feature-description {
+            font-size: 18px;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        .feature-action {
+            padding: 16px 48px;
+            border-radius: 16px;
+            border: none;
+            background: var(--primary-gradient);
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            box-shadow: var(--shadow-md);
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .feature-action:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+            width: 100%;
+            max-width: 1000px;
+        }
+
+        .info-card {
+            background: var(--bg-card);
+            backdrop-filter: var(--blur);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 32px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+
+        .info-card:hover {
+            transform: translateY(-8px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .info-icon {
+            font-size: 40px;
+            margin-bottom: 16px;
+        }
+
+        .info-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+        }
+
+        .info-text {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        /* 设置视图 */
+        .settings-view {
+            display: none;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .settings-section {
+            background: var(--bg-card);
+            backdrop-filter: var(--blur);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 32px;
+            margin-bottom: 24px;
+        }
+
+        .section-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 24px;
+            color: var(--text-primary);
+        }
+
+        .setting-row {
+            margin-bottom: 24px;
+        }
+
+        .setting-label {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+            display: block;
+        }
+
+        .theme-options {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .theme-card {
+            padding: 24px;
+            border-radius: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+        }
+
+        .theme-card:hover {
+            border-color: var(--accent);
+            transform: translateY(-4px);
+        }
+
+        .theme-card.active {
+            border-color: var(--accent);
+            background: rgba(217, 119, 87, 0.1);
+        }
+
+        .theme-preview-box {
+            width: 100%;
+            height: 80px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+        }
+
+        .theme-label {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .color-pickers {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+
+        .color-picker-item {
+            text-align: center;
+        }
+
+        .color-preview {
+            width: 60px;
+            height: 60px;
+            border-radius: 14px;
+            border: 3px solid rgba(255, 255, 255, 0.2);
+            margin: 0 auto 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .color-preview:hover {
+            transform: scale(1.1);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .color-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        /* 滚动条 */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(217, 119, 87, 0.3);
+            border-radius: 5px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(217, 119, 87, 0.5);
+        }
+
+        /* 显示控制 */
+        .view-active {
+            display: flex !important;
+        }
+
+        .translate-view.view-active {
+            display: grid !important;
+        }
+
+        .settings-view.view-active {
+            display: block !important;
+        }
+
+        /* 响应式 */
+        @media (max-width: 1200px) {
+            .translate-view {
+                grid-template-columns: 1fr;
+            }
+
+            .feature-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- 动态背景 -->
+    <div class="dynamic-background">
+        <div class="gradient-orb orb-1"></div>
+        <div class="gradient-orb orb-2"></div>
+        <div class="gradient-orb orb-3"></div>
+    </div>
+
+    <!-- 应用主体 -->
+    <div class="app-wrapper">
+        <div class="app-container">
+            <!-- 顶部栏 -->
+            <div class="top-bar">
+                <div class="logo-section">
+                    <div class="logo">译</div>
+                    <div class="brand-name">译刻</div>
+                </div>
+
+                <div class="mode-switcher">
+                    <button class="mode-tab active" onclick="switchMode('translate')">文本翻译</button>
+                    <button class="mode-tab" onclick="switchMode('screenshot')">截图翻译</button>
+                    <button class="mode-tab" onclick="switchMode('subtitle')">视频字幕</button>
+                    <button class="mode-tab" onclick="switchMode('audio')">音频翻译</button>
+                </div>
+
+                <div class="top-actions">
+                    <button class="icon-button" onclick="switchMode('settings')">⚙️</button>
+                    <button class="icon-button theme-toggle" onclick="toggleTheme()">🌓</button>
+                </div>
+            </div>
+
+            <!-- 工作区 -->
+            <div class="workspace">
+                <!-- 文本翻译视图 -->
+                <div class="translate-view view-active" id="view-translate">
+                    <!-- 源文本 -->
+                    <div class="translate-card">
+                        <div class="card-header">
+                            <span class="card-title">Source Text</span>
+                            <select class="lang-dropdown">
+                                <option>Auto Detect</option>
+                                <option>English</option>
+                                <option>中文</option>
+                                <option>日本語</option>
+                                <option>한국어</option>
+                            </select>
+                        </div>
+                        <div class="card-body">
+                            <textarea class="text-input" placeholder="Type or paste your text here...
+
+The interface supports multiple languages and can automatically detect the source language. Start typing to see the translation in real-time.">Welcome to YiKe Translator — a beautifully redesigned translation experience.
+
+This new interface features:
+• Glassmorphism design with dynamic gradient background
+• Modern typography using Inter font family
+• Smooth animations and micro-interactions
+• Fully customizable color themes
+
+The design draws inspiration from Apple's design language and Claude's warm aesthetic, creating a premium, distraction-free workspace for your translation needs.</textarea>
+                        </div>
+                        <div class="card-footer">
+                            <span class="footer-stats">0 / 5000 characters</span>
+                            <div class="footer-actions">
+                                <button class="action-btn" title="Clear">🗑️</button>
+                                <button class="action-btn" title="Speak">🔊</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 译文 -->
+                    <div class="translate-card">
+                        <div class="card-header">
+                            <span class="card-title">Translation</span>
+                            <select class="lang-dropdown">
+                                <option>中文</option>
+                                <option>English</option>
+                                <option>日本語</option>
+                                <option>한국어</option>
+                            </select>
+                        </div>
+                        <div class="card-body">
+                            <div class="translation-result">欢迎来到译刻翻译器 — 一个经过精心重新设计的翻译体验。
+
+这个全新界面的特点：
+• 玻璃态设计配合动态渐变背景
+• 使用 Inter 字体家族的现代排版
+• 流畅的动画和微交互
+• 完全可自定义的颜色主题
+
+设计灵感来自 Apple 的设计语言和 Claude 的温暖美学，为您的翻译需求打造了一个高端、无干扰的工作空间。</div>
+                        </div>
+                        <div class="card-footer">
+                            <span class="footer-stats">HY-MT2 · 0.6s</span>
+                            <div class="footer-actions">
+                                <button class="action-btn" title="Copy">📋</button>
+                                <button class="action-btn" title="Save">💾</button>
+                                <button class="action-btn" title="Share">↗️</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 截图翻译视图 -->
+                <div class="feature-view" id="view-screenshot">
+                    <div class="feature-hero">
+                        <div class="feature-icon-large">📷</div>
+                        <h2 class="feature-title">Screenshot Translation</h2>
+                        <p class="feature-description">Capture any area of your screen and instantly translate the text with advanced OCR technology. Perfect for translating images, videos, or any on-screen content.</p>
+                        <br><br>
+                        <button class="feature-action">
+                            <span>Start Screenshot</span>
+                            <span>Ctrl+Shift+S</span>
+                        </button>
+                    </div>
+
+                    <div class="feature-grid">
+                        <div class="info-card">
+                            <div class="info-icon">⚡</div>
+                            <div class="info-title">Lightning Fast</div>
+                            <div class="info-text">Instant OCR recognition with RapidOCR engine</div>
+                        </div>
+                        <div class="info-card">
+                            <div class="info-icon">🎯</div>
+                            <div class="info-title">Precise Selection</div>
+                            <div class="info-text">Flexible area selection with visual feedback</div>
+                        </div>
+                        <div class="info-card">
+                            <div class="info-icon">🌍</div>
+                            <div class="info-title">Multi-Language</div>
+                            <div class="info-text">Support for CJK and Latin scripts</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 视频字幕视图 -->
+                <div class="feature-view" id="view-subtitle">
+                    <div class="feature-hero">
+                        <div class="feature-icon-large">🎬</div>
+                        <h2 class="feature-title">Live Subtitle Translation</h2>
+                        <p class="feature-description">Watch videos with real-time subtitle translation. Automatically captures and translates on-screen subtitles from any video player or streaming service.</p>
+                        <br><br>
+                        <button class="feature-action">
+                            <span>Start Monitoring</span>
+                            <span>▶️</span>
+                        </button>
+                    </div>
+
+                    <div class="feature-grid">
+                        <div class="info-card">
+                            <div class="info-icon">🎯</div>
+                            <div class="info-title">Smart Region</div>
+                            <div class="info-text">Customizable subtitle detection area</div>
+                        </div>
+                        <div class="info-card">
+                            <div class="info-icon">⚙️</div>
+                            <div class="info-title">Adjustable Speed</div>
+                            <div class="info-text">1-5 FPS capture rate control</div>
+                        </div>
+                        <div class="info-card">
+                            <div class="info-icon">🔄</div>
+                            <div class="info-title">Duplicate Filter</div>
+                            <div class="info-text">Intelligent deduplication algorithm</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 音频翻译视图 -->
+                <div class="feature-view" id="view-audio">
+                    <div class="feature-hero">
+                        <div class="feature-icon-large">🎙️</div>
+                        <h2 class="feature-title">Audio Translation</h2>
+                        <p class="feature-description">Real-time speech recognition and translation for system audio and microphone input. Perfect for meetings, podcasts, and language learning.</p>
+                        <br><br>
+                        <button class="feature-action">
+                            <span>Start Listening</span>
+                            <span>🎧</span>
+                        </button>
+                    </div>
+
+                    <div class="feature-grid">
+                        <div class="info-card">
+                            <div class="info-icon">🔊</div>
+                            <div class="info-title">System Audio</div>
+                            <div class="info-text">Capture and translate computer audio</div>
+                        </div>
+                        <div class="info-card">
+                            <div class="info-icon">🎤</div>
+                            <div class="info-title">Microphone</div>
+                            <div class="info-text">Live voice translation via mic input</div>
+                        </div>
+                        <div class="info-card">
+                            <div class="info-icon">🌐</div>
+                            <div class="info-title">4 Languages</div>
+                            <div class="info-text">Chinese, English, Japanese, Korean</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 设置视图 -->
+                <div class="settings-view" id="view-settings">
+                    <div class="settings-section">
+                        <h3 class="section-title">Appearance</h3>
+                        <div class="setting-row">
+                            <label class="setting-label">Theme Preset</label>
+                            <div class="theme-options">
+                                <div class="theme-card active" onclick="applyTheme('light')">
+                                    <div class="theme-preview-box" style="background: linear-gradient(135deg, #FBF8F3, #F5E6DC);"></div>
+                                    <div class="theme-label">Claude Warm</div>
+                                </div>
+                                <div class="theme-card" onclick="applyTheme('dark')">
+                                    <div class="theme-preview-box" style="background: linear-gradient(135deg, #0F0F10, #1E1E20);"></div>
+                                    <div class="theme-label">Dark Mode</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3 class="section-title">Custom Colors</h3>
+                        <div class="setting-row">
+                            <label class="setting-label">Primary Colors</label>
+                            <div class="color-pickers">
+                                <div class="color-picker-item">
+                                    <input type="color" class="color-preview" value="#D97757" style="background: #D97757;">
+                                    <div class="color-label">Accent</div>
+                                </div>
+                                <div class="color-picker-item">
+                                    <input type="color" class="color-preview" value="#FBF8F3" style="background: #FBF8F3;">
+                                    <div class="color-label">Background</div>
+                                </div>
+                                <div class="color-picker-item">
+                                    <input type="color" class="color-preview" value="#1A1A1A" style="background: #1A1A1A;">
+                                    <div class="color-label">Text</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-section">
+                        <h3 class="section-title">Keyboard Shortcuts</h3>
+                        <div class="setting-row">
+                            <label class="setting-label">Screenshot Translation</label>
+                            <input type="text" class="lang-dropdown" value="Ctrl + Shift + S" readonly style="width: 100%;">
+                        </div>
+                        <div class="setting-row">
+                            <label class="setting-label">Toggle Floating Window</label>
+                            <input type="text" class="lang-dropdown" value="Ctrl + Shift + D" readonly style="width: 100%;">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 模式切换
+        function switchMode(mode) {
+            // 隐藏所有视图
+            document.querySelectorAll('.translate-view, .feature-view, .settings-view').forEach(view => {
+                view.classList.remove('view-active');
+            });
+
+            // 显示目标视图
+            const targetView = document.getElementById('view-' + mode);
+            if (targetView) {
+                targetView.classList.add('view-active');
+            }
+
+            // 更新标签激活状态
+            document.querySelectorAll('.mode-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            if (event && event.target.classList.contains('mode-tab')) {
+                event.target.classList.add('active');
+            }
+        }
+
+        // 主题切换
+        function toggleTheme() {
+            document.body.toggleAttribute('data-theme', 'dark');
+            const isDark = document.body.hasAttribute('data-theme');
+
+            // 更新设置页主题卡片
+            document.querySelectorAll('.theme-card').forEach(card => {
+                card.classList.remove('active');
+            });
+
+            if (isDark) {
+                document.querySelectorAll('.theme-card')[1].classList.add('active');
+            } else {
+                document.querySelectorAll('.theme-card')[0].classList.add('active');
+            }
+        }
+
+        function applyTheme(theme) {
+            if (theme === 'dark') {
+                document.body.setAttribute('data-theme', 'dark');
+            } else {
+                document.body.removeAttribute('data-theme');
+            }
+
+            // 更新卡片激活状态
+            document.querySelectorAll('.theme-card').forEach(card => {
+                card.classList.remove('active');
+            });
+            event.target.closest('.theme-card').classList.add('active');
+        }
+
+        // 字符计数
+        const textarea = document.querySelector('.text-input');
+        if (textarea) {
+            textarea.addEventListener('input', function() {
+                const count = this.value.length;
+                const statsElement = this.closest('.translate-card').querySelector('.footer-stats');
+                if (statsElement) {
+                    statsElement.textContent = `${count} / 5000 characters`;
+                }
+            });
+        }
+    </script>
+</body>
+</html>
