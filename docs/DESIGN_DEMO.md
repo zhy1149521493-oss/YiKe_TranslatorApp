@@ -22,7 +22,7 @@ npm run demo:build
 npm run demo:preview
 ```
 
-The built preview is at `http://127.0.0.1:1432/demo.html`. `dist-demo/` is separate from production `dist/`. The packaging script copies the unmodified reference HTML into the preview output. Use a local server rather than opening the built HTML through `file://`.
+The built preview is at `http://127.0.0.1:1432/demo.html`. `dist-demo/` is separate from production `dist/`. The packaging script copies the unmodified reference HTML and the bundled fonts' license notices into the preview output. Use a local server rather than opening the built HTML through `file://`.
 
 ## Controls and scope
 
