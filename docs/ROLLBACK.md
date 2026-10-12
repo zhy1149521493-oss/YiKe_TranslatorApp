@@ -18,7 +18,7 @@ Run `npm ci` and `npm run demo` in that new directory after stopping the other d
 git worktree add --detach E:/TranslatorApp-demo-before-drawers checkpoint/design-demo-before-drawers
 ```
 
-`checkpoint/design-demo-before-brand-lock` retains the previous V3 commit `4b25131`, before navigation pinning and supplied branding. `checkpoint/design-demo-v3.1-candidate` records the revised candidate, with a [complete-history/build archive](../../TranslatorApp/archives/design-demo-v3.1-candidate/README.md). The later `checkpoint/design-demo-folded-selection-fix` preserves the correction that clears navigation highlights when content is folded; the V3.1 archive contains the preceding base revision. All prior tags/archives remain unchanged. To inspect the previous behavior without resetting current work:
+`checkpoint/design-demo-before-brand-lock` retains the previous V3 commit `4b25131`, before navigation pinning and supplied branding. `checkpoint/design-demo-v3.1-candidate` records the revised candidate, with a [complete-history/build archive](../../TranslatorApp/archives/design-demo-v3.1-candidate/README.md). The later `checkpoint/design-demo-folded-selection-fix` preserves the correction that clears navigation highlights when content is folded; the V3.1 archive contains the preceding base revision. The subsequent `checkpoint/design-demo-hover-focus-fix` preserves the correction for mouse-focused buttons preventing hover collapse. All prior tags/archives remain unchanged. To inspect the previous behavior without resetting current work:
 
 ```powershell
 git worktree add --detach E:/TranslatorApp-demo-before-brand-lock checkpoint/design-demo-before-brand-lock

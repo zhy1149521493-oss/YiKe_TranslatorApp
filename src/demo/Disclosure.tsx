@@ -102,14 +102,16 @@ export function NavigationCapsule({
         cancel();
         timer.current = setTimeout(() => setRevealed(false), 180);
       }}
+      onPointerDownCapture={() => {
+        // A mouse/touch press may focus a button without keyboard intent,
+        // including a button that was already focused before the press.
+        setFocused(false);
+      }}
       onFocusCapture={(event) => {
         // Focus pins navigation separately; it must not cancel a pending
         // pointer departure when a pointer action returns focus to the logo.
         const target = event.target as HTMLElement;
-        setFocused(
-          !target.classList.contains("navigation-brand") ||
-            target.matches(":focus-visible"),
-        );
+        setFocused(target.matches(":focus-visible"));
       }}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null))
