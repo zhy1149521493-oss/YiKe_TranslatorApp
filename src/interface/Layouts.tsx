@@ -8,6 +8,7 @@ import {
   type Preferences,
 } from "./model";
 import type { InterfaceController } from "./controller";
+import { useViewMotion } from "./useViewMotion";
 import { EnginePicker, TextFlow } from "./Translation";
 import { FeatureView } from "./Features";
 import { ReadingWorkbench } from "./ReadingWorkbench";
@@ -119,6 +120,7 @@ function Content({ props }: { props: LayoutProps }) {
   );
 }
 export function PoetryLayout(props: LayoutProps) {
+  const page = useViewMotion(props.settingsOpen ? "settings" : props.controller.state.mode);
   return (
     <>
       <WindowControls {...props} />
@@ -133,14 +135,13 @@ export function PoetryLayout(props: LayoutProps) {
         <ToolbarActions {...props} />
       </NavigationCapsule>
       <ContentDrawer
-        key={props.settingsOpen ? "settings" : props.controller.state.mode}
         open={props.drawerOpen}
         direction="down"
         className="poetry-drawer"
         onClose={props.onCloseDrawer}
       >
         <main
-          key={props.settingsOpen ? "settings" : props.controller.state.mode}
+          ref={page}
           className={`poetry-workspace${props.settingsOpen ? " showing-settings" : ""}`}
           tabIndex={-1}
           data-drawer-focus
@@ -156,6 +157,7 @@ export function WorkbenchLayout(props: LayoutProps) {
 }
 export function ClassicLayout(props: LayoutProps) {
   const { controller } = props;
+  const page = useViewMotion(props.settingsOpen ? "settings" : controller.state.mode);
   const meta = modes.find((mode) => mode.id === controller.state.mode)!;
   return (
     <div className="classic-shell">
@@ -205,14 +207,13 @@ export function ClassicLayout(props: LayoutProps) {
       </NavigationCapsule>
       <WindowControls {...props} />
       <ContentDrawer
-        key={props.settingsOpen ? "settings" : controller.state.mode}
         open={props.drawerOpen}
         direction="down"
         className="classic-content"
         onClose={props.onCloseDrawer}
       >
         <main
-          key={props.settingsOpen ? "settings" : props.controller.state.mode}
+          ref={page}
           className="classic-workspace"
           tabIndex={-1}
           data-drawer-focus

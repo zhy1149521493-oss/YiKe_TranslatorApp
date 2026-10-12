@@ -10,6 +10,7 @@ import {
 import { FeatureView } from "./Features";
 import type { InterfaceController } from "./controller";
 import { ContentDrawer, NavigationCapsule } from "./Disclosure";
+import { useViewMotion } from "./useViewMotion";
 
 function ReadingDesk({ controller }: { controller: InterfaceController }) {
   const task = controller.state.tasks.text;
@@ -100,6 +101,7 @@ function ReadingDesk({ controller }: { controller: InterfaceController }) {
 
 export function ReadingWorkbench(props: LayoutProps) {
   const { controller } = props;
+  const page = useViewMotion(props.settingsOpen ? "settings" : controller.state.mode);
   const meta = modes.find((m) => m.id === controller.state.mode)!;
   const task = controller.state.tasks[meta.id];
   return (
@@ -154,7 +156,6 @@ export function ReadingWorkbench(props: LayoutProps) {
         </div>
       </NavigationCapsule>
       <ContentDrawer
-        key={props.settingsOpen ? "settings" : meta.id}
         open={props.drawerOpen}
         direction="right"
         className="reading-main"
@@ -186,8 +187,8 @@ export function ReadingWorkbench(props: LayoutProps) {
           </div>
         </header>
         <main
+          ref={page}
           className={`reading-workspace${props.settingsOpen ? " reading-settings" : ""}`}
-          key={props.settingsOpen ? "settings" : meta.id}
           tabIndex={-1}
           data-drawer-focus
         >

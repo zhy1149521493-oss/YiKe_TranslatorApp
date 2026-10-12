@@ -1,5 +1,9 @@
 # Runtime architecture and request lifecycle
 
+## Stable view and drawer motion
+
+The three layouts retain the drawer and main shell across task/Settings changes. `useViewMotion` keys only an opacity transition to view identity, with interruption, keyboard/reduced-motion cancellation and unmount cleanup. Native workspace geometry keeps the same 240ms timing as CSS for both directions, including a simultaneous menu removal. Standalone navigation uses 160ms. See [motion lifecycle and validation](MOTION.md).
+
 ## Main-window menu and audio reading
 
 The [context menu](CONTEXT_MENU.md) is owned by ConnectedMain and scoped to the production main window. Its optional popup rectangle is serialized with native navigation-region updates and unioned on the UI thread, preserving desktop hit testing while folded. Pinning reads and writes actual Tauri window state without persisting business configuration. Poetry alone groups AudioRecognized/AudioTranslations by source in one reading column; controllers, queues, native ASR and landscape layouts are unchanged.

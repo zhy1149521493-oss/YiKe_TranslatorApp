@@ -21,7 +21,7 @@ Select a function to pull out its workspace. Select the current function or use 
 
 ## Implementation and compatibility
 
-`useNativeSurface.ts` observes actual production navigation bounds and disclosure state. `SurfaceAnimator` serializes IPC, interrupts from its current frame and switches immediately for keyboard actions or reduced motion. Navigation retracts/reveals in 160 ms; workspace expansion uses 240 ms. The easing follows CSS `cubic-bezier(.23,1,.32,1)`, including its time axis. Existing CSS animates the corresponding content. Failed native updates attempt to restore the full surface so controls remain recoverable.
+`useNativeSurface.ts` observes actual production navigation bounds and disclosure state. `SurfaceAnimator` serializes IPC, interrupts from its current frame and switches immediately for keyboard actions or reduced motion. Navigation retracts/reveals in 160 ms; workspace opening and closing use 240 ms, matching CSS. The [motion correction](MOTION.md) preserves that timing through repeated measurements and simultaneous context-menu removal. The easing follows CSS `cubic-bezier(.23,1,.32,1)`, including its time axis. Existing CSS animates the corresponding content. Failed native updates attempt to restore the full surface so controls remain recoverable.
 
 Poetry ignores a press at the old centered-logo location during its first 180 ms of reveal, preventing a function moving under the pointer from receiving that click. Other deliberate task presses remain available. Workbench uses its existing draggable topbar; the duplicate top drag overlay is noninteractive so it cannot intercept the drawer's folding button.
 

@@ -12,6 +12,8 @@ export function useNativeSurface(root: RefObject<HTMLDivElement | null>) {
     const reduced = matchMedia("(prefers-reduced-motion: reduce)");
     let popup: SurfaceRect | null = null;
     let popupKey = "";
+    let workspaceWasOpen = element.dataset.workspaceOpen === "true";
+    let workspaceTransitionUntil = 0;
     const animator = new SurfaceAnimator(
       bounds => invoke("set_main_surface", { bounds, popup }),
       () => new Promise(resolve => requestAnimationFrame(resolve)),
@@ -28,6 +30,9 @@ export function useNativeSurface(root: RefObject<HTMLDivElement | null>) {
         size.observe(nav);
       }
       const full = { x: 0, y: 0, width: innerWidth, height: innerHeight, radius: 0 };
+      const workspaceOpen = element.dataset.workspaceOpen === "true";
+      if (workspaceOpen !== workspaceWasOpen) workspaceTransitionUntil = performance.now() + 240;
+      workspaceWasOpen = workspaceOpen;
       const menu = element.querySelector<HTMLElement>('[data-context-menu]');
       const menuRect = menu?.getBoundingClientRect();
       popup = menuRect ? { x: menuRect.x - 4, y: menuRect.y - 4, width: menuRect.width + 8, height: menuRect.height + 8, radius: 18 } : null;
@@ -38,8 +43,8 @@ export function useNativeSurface(root: RefObject<HTMLDivElement | null>) {
         : navigationSurface(nav.getBoundingClientRect(), logo.getBoundingClientRect(),
           nav.dataset.expanded === "true", nav.dataset.variant === "poetry");
       if (target && (!target.width || !target.height)) return;
-      animator.update(target, full, popupChanged || reduced.matches || element.dataset.motionInput === "keyboard" ? 0
-        : element.dataset.workspaceOpen === "true" ? 240 : 160, popupKey);
+      animator.update(target, full, (popupChanged && performance.now() >= workspaceTransitionUntil) || reduced.matches || element.dataset.motionInput === "keyboard" ? 0
+        : workspaceOpen || performance.now() < workspaceTransitionUntil ? 240 : 160, popupKey);
     };
     const schedule = () => { if (disposed) return; cancelAnimationFrame(scheduled); scheduled = requestAnimationFrame(measure); };
     const mutations = new MutationObserver(schedule);

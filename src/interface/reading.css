@@ -322,6 +322,26 @@
   min-width: 0;
   min-height: 100%;
 }
+.connected-ui .feature-left-column > .feature-control-card {
+  /* Keep controls in the page flow when the viewport is shorter than both cards. */
+  flex-shrink: 0;
+}
+.connected-ui .reading-feature .live-audio-stage {
+  height: auto;
+  min-height: 0;
+  padding: 12px;
+  gap: 12px;
+}
+.connected-ui .reading-feature .audio-sources {
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.connected-ui .reading-feature .audio-sources button {
+  flex-basis: 90px;
+}
+.connected-ui .reading-feature .feature-controls {
+  margin-top: 16px;
+}
 .connected-ui .feature-recognized-source {
   flex: 1;
   padding: 24px;

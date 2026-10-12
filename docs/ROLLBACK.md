@@ -1,5 +1,9 @@
 # Local checkpoints and rollback
 
+## Motion candidate
+
+`fix/fluid-interface-motion` is based on `checkpoint/context-menu-audio-2026-10-12-candidate` (`ef4d8ae`). The separate `译刻-动画优化版-v2.exe` retains all menu/audio corrections. To return to that preceding candidate, save input, exit through the tray and run the retained `译刻-右键与音频修正版.exe`. No configuration migration or task logic change is included. Focused native motion checks cover the three layouts; final Workbench control visibility awaits recheck. Tag `checkpoint/fluid-motion-2026-10-12-candidate` and the [source/binary archive](../../TranslatorApp/archives/fluid-motion-2026-10-12-candidate/README.md) retain this revision.
+
 ## Context-menu and audio-reading candidate
 
 `fix/context-menu-audio-reading` starts from `checkpoint/portrait-poetry-2026-10-12-candidate` (`0969288`). The new side-by-side candidate is `E:/TranslatorApp/译刻-右键与音频修正版.exe`. Exit through the tray before switching builds. Run the retained `译刻-书页布局版.exe` to restore the preceding software; no private configuration migration is required. The main-window pin choice is session-only. Tag `checkpoint/context-menu-audio-2026-10-12-candidate` and the [source/binary archive](../../TranslatorApp/archives/context-menu-audio-2026-10-12-candidate/README.md) retain this candidate.
