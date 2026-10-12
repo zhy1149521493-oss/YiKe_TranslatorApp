@@ -1,5 +1,6 @@
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 const paths: Record<string, ReactNode> = {
+  pin: <><path d="m9 3 9 9-3 1-3 4-5-5 4-3Z" /><path d="m7 17-4 4M13 3l8 8" /></>,
   pen: (
     <>
       <path d="m16 3 5 5-12 12-6 1 1-6Z" />

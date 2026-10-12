@@ -1,5 +1,9 @@
 # Runtime architecture and request lifecycle
 
+## Main-window menu and audio reading
+
+The [context menu](CONTEXT_MENU.md) is owned by ConnectedMain and scoped to the production main window. Its optional popup rectangle is serialized with native navigation-region updates and unioned on the UI thread, preserving desktop hit testing while folded. Pinning reads and writes actual Tauri window state without persisting business configuration. Poetry alone groups AudioRecognized/AudioTranslations by source in one reading column; controllers, queues, native ASR and landscape layouts are unchanged.
+
 ## Isolated design preview
 
 The production main window sizes itself after saved design preferences hydrate. `useStyleWindowSize.ts` supplies Tauri monitor/window/storage operations to the serialized `StyleWindowSizing` controller. Style-specific normal sizes are device-local, use logical pixels and ignore our own resize events; maximized/minimized geometry never becomes a saved normal size. A main-only capability adds minimum-size control. Native drawer clipping still determines the visible/hit surface independently of expanded geometry. See [sizes, golden-ratio reading measure and compatibility](POETRY_LAYOUT.md).

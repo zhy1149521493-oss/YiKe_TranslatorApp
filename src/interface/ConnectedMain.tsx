@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode, type MouseEvent } from "react";
+import { AppContextMenu } from "./AppContextMenu";
+import { keepsEditingMenu } from "./contextMenu";
 import { actionInk } from "./preferences";
 import { MainLayout } from "./Layouts";
 import { useNativeSurface } from "./useNativeSurface";
@@ -26,6 +28,13 @@ export function ConnectedMain(props: {
   const [systemDark, setSystemDark] = useState(() => matchMedia("(prefers-color-scheme: dark)").matches);
   const [motion, setMotion] = useState("pointer");
   const root = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const menuOrigin = useRef<HTMLElement | null>(null);
+  const dismissMenu = useCallback((restoreFocus = false) => {
+    setMenu(null);
+    if (restoreFocus) menuOrigin.current?.focus({ preventScroll: true });
+  }, []);
+  useEffect(() => { setMenu(null); }, [props.style, props.controller.state.mode, props.settingsOpen, open]);
   useNativeSurface(root);
   const previousMode = useRef(props.controller.state.mode);
   const previousSettings = useRef(props.settingsOpen);
@@ -61,6 +70,13 @@ export function ConnectedMain(props: {
   return <div ref={root} className="connected-ui" data-style={props.style}
     data-tone={tone} data-navigation={props.navigation} data-workspace-open={open}
     data-motion-input={motion} style={style}
+    onContextMenu={e => {
+      if (keepsEditingMenu(e.target as Element)) return;
+      e.preventDefault();
+      menuOrigin.current = document.activeElement as HTMLElement;
+      const anchor = (e.target as Element).getBoundingClientRect();
+      setMenu({ x: e.clientX || anchor.left, y: e.clientY || anchor.bottom });
+    }}
     onMouseDownCapture={e => {
       if ((e.target as HTMLElement).closest(".navigation-capsule")) props.onDrag(e);
     }}
@@ -82,5 +98,9 @@ export function ConnectedMain(props: {
     </MainLayout>
     {props.controller.extra && <div className="connected-feedback">{props.controller.extra}</div>}
     <div className="connected-notice" role="status" aria-live="polite">{props.notice}</div>
+    {menu && <AppContextMenu {...menu} open={open} floatingOpen={props.floatingOpen} onDismiss={dismissMenu}
+      onToggleDrawer={() => open ? fold() : setOpen(true)} onFloating={props.onFloating}
+      onSettings={() => { props.onSettings(); setOpen(true); }} onTheme={props.onTheme}
+      onMinimize={props.onMinimize} onClose={props.onClose} />}
   </div>;
 }

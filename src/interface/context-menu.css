@@ -1,0 +1,23 @@
+.connected-ui .app-context-menu {
+  position: fixed; z-index: 1000; width: 224px; max-width: calc(100vw - 16px);
+  padding: 7px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--panel-solid); color: var(--ink);
+  box-shadow: 0 3px 8px #0002; font: 13px/1.4 Inter, "Microsoft YaHei", sans-serif;
+  animation: context-appear 130ms ease-out;
+}
+.connected-ui .context-menu-heading { padding: 5px 10px 8px; font-size: 11px; color: var(--muted); letter-spacing: .08em; }
+.connected-ui .app-context-menu button {
+  width: 100%; display: flex; align-items: center; gap: 11px; padding: 9px 10px;
+  border: 0; border-radius: 8px; background: transparent; color: inherit; text-align: left;
+  font: inherit; cursor: pointer;
+}
+.connected-ui .app-context-menu button span { flex: 1; }
+.connected-ui .app-context-menu button > svg { flex-shrink: 0; color: var(--muted); }
+.connected-ui .app-context-menu button:hover:not(:disabled),
+.connected-ui .app-context-menu button:focus-visible { background: color-mix(in srgb, var(--accent) 13%, transparent); outline: none; }
+.connected-ui .app-context-menu button[aria-checked="true"] > svg { color: var(--accent); }
+.connected-ui .app-context-menu button:disabled { opacity: .5; cursor: default; }
+.connected-ui .app-context-menu [role="separator"] { height: 1px; margin: 5px 10px; background: var(--line); }
+.connected-ui .context-menu-error { padding: 4px 10px; color: var(--accent); font-size: 12px; }
+@keyframes context-appear { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .connected-ui .app-context-menu { animation: none; } }

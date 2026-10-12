@@ -112,6 +112,7 @@ function Content({ props }: { props: LayoutProps }) {
   ) : (
     <FeatureView
       mode={mode}
+      book
       controller={props.controller}
       onCapture={props.onCapture}
     />

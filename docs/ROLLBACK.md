@@ -1,5 +1,9 @@
 # Local checkpoints and rollback
 
+## Context-menu and audio-reading candidate
+
+`fix/context-menu-audio-reading` starts from `checkpoint/portrait-poetry-2026-10-12-candidate` (`0969288`). The new side-by-side candidate is `E:/TranslatorApp/译刻-右键与音频修正版.exe`. Exit through the tray before switching builds. Run the retained `译刻-书页布局版.exe` to restore the preceding software; no private configuration migration is required. The main-window pin choice is session-only. Tag `checkpoint/context-menu-audio-2026-10-12-candidate` and the [source/binary archive](../../TranslatorApp/archives/context-menu-audio-2026-10-12-candidate/README.md) retain this candidate.
+
 ## Portrait Poetry and golden-ratio reading
 
 Tag `checkpoint/portrait-poetry-2026-10-12-candidate` and the [complete source/binary archive](../../TranslatorApp/archives/portrait-poetry-2026-10-12-candidate/README.md) preserve this revision. The archive manifest records verification scope and remaining native checks.

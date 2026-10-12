@@ -164,11 +164,13 @@ export function FeatureView({
   controller,
   onCapture,
   card = false,
+  book = false,
 }: {
   mode: Exclude<Mode, "text">;
   controller: InterfaceController;
   onCapture: (mode: "screenshot" | "subtitle") => void;
   card?: boolean;
+  book?: boolean;
 }) {
   const meta = modes.find((m) => m.id === mode)!;
   const task = controller.state.tasks[mode];
@@ -220,10 +222,14 @@ export function FeatureView({
       )}
       {!card && mode === "audio" && <Ornament />}
       {mode === "audio" ? (
-        <>
-          {!sourceOnLeft && <AudioRecognized controller={controller} />}
-          <AudioTranslations controller={controller} card={card} />
-        </>
+        !book ? <>{!sourceOnLeft && <AudioRecognized controller={controller} />}<AudioTranslations controller={controller} card={card} /></> :
+          <div className="audio-passages" data-channels={selectedAudioChannels(controller.state.audioSource).length}>
+            {selectedAudioChannels(controller.state.audioSource).map(channel =>
+              <section className="audio-passage" key={channel} aria-label={`${audioLabels[channel]}原文与译文`}>
+                <AudioRecognized controller={controller} channel={channel} />
+                <AudioTranslations controller={controller} channel={channel} />
+              </section>)}
+          </div>
       ) : (
         <section
           className={card ? "glass-card feature-results" : "feature-results"}

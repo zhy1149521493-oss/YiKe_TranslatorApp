@@ -2,6 +2,10 @@
 
 The correction lives on isolated branch `fix/native-drawer-surface`. It addresses the connected candidate leaving an opaque, clickable empty desktop rectangle after folding its workspace. Existing binaries and `checkpoint/design-integration-2026-10-12-candidate` remain available for rollback.
 
+## Application menu overlay
+
+The follow-up [application context menu](CONTEXT_MENU.md) adds an optional popup rectangle to `set_main_surface`. While folded, its rounded region is unioned with navigation so the menu remains visible and clickable without exposing an empty desktop rectangle. Closing the menu removes only that extra region. The main window remains the only command target; Classic auxiliary windows are unaffected.
+
 ## Behavior
 
 The later [style-size revision](POETRY_LAYOUT.md) makes Poetry's expanded window portrait by default and Workbench/Classic landscape. Folding itself still changes only the clipping region; it never records the clipped navigation silhouette as a custom expanded size.

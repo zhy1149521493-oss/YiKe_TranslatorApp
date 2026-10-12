@@ -86,6 +86,19 @@ test('live styles render real text and isolate simultaneous audio data without d
   }
 });
 
+test('Poetry audio pairs each source with its own translation without changing landscape layouts', () => {
+  const audioHist = [
+    { id: '1:0', source: 'system', text: 'Computer original', result: 'Computer result', isFinal: true },
+    { id: '2:0', source: 'mic', text: 'Microphone original', result: 'Microphone result', isFinal: true },
+  ];
+  const html = render('audio', 'MainWindow', 'poetry', { audioMode: 'both', audioHist });
+  assert.ok(html.indexOf('Computer original') < html.indexOf('Computer result'));
+  assert.ok(html.indexOf('Computer result') < html.indexOf('Microphone original'));
+  assert.ok(html.indexOf('Microphone original') < html.indexOf('Microphone result'));
+  assert.match(html, /audio-passages/);
+  for (const layout of ['studio', 'classic']) assert.doesNotMatch(render('audio', 'MainWindow', layout), /audio-passages/);
+});
+
 test('all existing settings categories render in all three connected layouts', () => {
   for (const layout of ['poetry', 'studio', 'classic']) for (const settingsPage of ['general', 'translate', 'audio', 'subtitle', 'floating', 'providers', 'shortcuts', 'about']) {
     const html = render('text', 'MainWindow', layout, { settingsOpen: true, settingsPage });

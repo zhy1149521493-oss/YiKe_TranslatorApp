@@ -1,5 +1,7 @@
 # YiKe developer documentation
 
+The [themed application context menu](CONTEXT_MENU.md) adds session-only main-window pinning and useful window actions. The audio correction applies the [Poetry reading measure](POETRY_LAYOUT.md) to controls and per-channel paired passages on isolated branch `fix/context-menu-audio-reading`.
+
 The [responsive Poetry layout and style-specific window sizes](POETRY_LAYOUT.md) retain continuous vertical reading, a centered golden-ratio reading column and an editor that reflows when resized. Poetry defaults to a portrait window; Workbench and Classic default to landscape, with independent remembered manual sizes. Screenshot/subtitle placeholders remain compact controls on `fix/style-window-orientation`.
 
 The [native drawer correction](NATIVE_DRAWER.md) on `fix/native-drawer-surface` makes folded navigation the only visible and interactive desktop surface. It supersedes the connected candidate's content-only folding behavior.

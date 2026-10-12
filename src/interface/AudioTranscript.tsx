@@ -15,11 +15,13 @@ function AudioBadge({ channel }: { channel: AudioChannel }) {
 export function AudioRecognized({
   controller,
   card = false,
+  channel: onlyChannel,
 }: {
   controller: InterfaceController;
   card?: boolean;
+  channel?: AudioChannel;
 }) {
-  const channels = selectedAudioChannels(controller.state.audioSource);
+  const channels = onlyChannel ? [onlyChannel] : selectedAudioChannels(controller.state.audioSource);
   return (
     <div
       className={`audio-source-cards${card ? " feature-source-cards" : ""}`}
@@ -61,11 +63,13 @@ export function AudioRecognized({
 export function AudioTranslations({
   controller,
   card = false,
+  channel: onlyChannel,
 }: {
   controller: InterfaceController;
   card?: boolean;
+  channel?: AudioChannel;
 }) {
-  const channels = selectedAudioChannels(controller.state.audioSource);
+  const channels = onlyChannel ? [onlyChannel] : selectedAudioChannels(controller.state.audioSource);
   return (
     <div className="audio-results-stack" data-channels={channels.length}>
       {channels.map((channel) => {

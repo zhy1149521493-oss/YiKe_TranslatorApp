@@ -29,13 +29,13 @@ impl SurfaceRect {
 }
 
 #[tauri::command]
-pub async fn set_main_surface(window: tauri::WebviewWindow, bounds: Option<SurfaceRect>) -> Result<(), String> {
+pub async fn set_main_surface(window: tauri::WebviewWindow, bounds: Option<SurfaceRect>, popup: Option<SurfaceRect>) -> Result<(), String> {
     // This command can only shape its invoking main window, never an overlay.
     if window.label() != "main" { return Err("Main window required".into()); }
     let app = window.app_handle().clone();
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     app.run_on_main_thread(move || {
-        let result = apply_surface(&window, bounds);
+        let result = apply_surface(&window, bounds, popup);
         let _ = sender.send(result);
     }).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -44,10 +44,10 @@ pub async fn set_main_surface(window: tauri::WebviewWindow, bounds: Option<Surfa
     }).await.map_err(|e| e.to_string())?
 }
 
-fn apply_surface(window: &tauri::WebviewWindow, bounds: Option<SurfaceRect>) -> Result<(), String> {
+fn apply_surface(window: &tauri::WebviewWindow, bounds: Option<SurfaceRect>, popup: Option<SurfaceRect>) -> Result<(), String> {
     use windows::Win32::{
         Foundation::{HWND, POINT, RECT},
-        Graphics::Gdi::{ClientToScreen, CreateRoundRectRgn, DeleteObject, HGDIOBJ, SetWindowRgn},
+        Graphics::Gdi::{ClientToScreen, CombineRgn, CreateRoundRectRgn, DeleteObject, HGDIOBJ, RGN_OR, SetWindowRgn},
         UI::WindowsAndMessaging::GetWindowRect,
     };
     let raw = window.hwnd().map_err(|e| e.to_string())?;
@@ -63,10 +63,26 @@ fn apply_surface(window: &tauri::WebviewWindow, bounds: Option<SurfaceRect>) -> 
         ClientToScreen(hwnd, &mut origin).ok().map_err(|e| e.to_string())?;
         let mut outer = RECT::default();
         GetWindowRect(hwnd, &mut outer).map_err(|e| e.to_string())?;
-        let rect = bounds.physical(window.scale_factor().map_err(|e| e.to_string())?,
-            (origin.x - outer.left, origin.y - outer.top))?;
+        let scale = window.scale_factor().map_err(|e| e.to_string())?;
+        let offset = (origin.x - outer.left, origin.y - outer.top);
+        let rect = bounds.physical(scale, offset)?;
+        // Validate both rectangles before allocating GDI handles.
+        let popup_rect = popup.map(|p| p.physical(scale, offset)).transpose()?;
         let region = CreateRoundRectRgn(rect[0], rect[1], rect[2], rect[3], rect[4], rect[5]);
         if region.0.is_null() { return Err("Unable to create main-window surface".into()); }
+        if let Some(p) = popup_rect {
+            let menu_region = CreateRoundRectRgn(p[0], p[1], p[2], p[3], p[4], p[5]);
+            if menu_region.0.is_null() {
+                let _ = DeleteObject(HGDIOBJ(region.0));
+                return Err("Unable to create menu surface".into());
+            }
+            let combined = CombineRgn(Some(region), Some(region), Some(menu_region), RGN_OR);
+            let _ = DeleteObject(HGDIOBJ(menu_region.0));
+            if combined.0 == 0 {
+                let _ = DeleteObject(HGDIOBJ(region.0));
+                return Err("Unable to combine menu surface".into());
+            }
+        }
         if SetWindowRgn(hwnd, Some(region), true) == 0 {
             // On success Windows owns the region. Only free it after failure.
             let _ = DeleteObject(HGDIOBJ(region.0));

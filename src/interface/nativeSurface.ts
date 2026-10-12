@@ -36,8 +36,8 @@ export class SurfaceAnimator {
   constructor(private apply: (rect: SurfaceRect | null) => Promise<void>,
     private frame: () => Promise<number>, private now: () => number,
     private onError: (error: unknown) => void) {}
-  update(target: SurfaceRect | null, full: SurfaceRect, duration: number) {
-    const request = JSON.stringify([target, full, duration]);
+  update(target: SurfaceRect | null, full: SurfaceRect, duration: number, overlayKey = "") {
+    const request = JSON.stringify([target, full, duration, overlayKey]);
     if (request === this.lastRequest) return;
     this.lastRequest = request;
     this.target = target; this.full = full; this.duration = duration; this.revision++;

@@ -12,7 +12,7 @@
 }
 /* A centered reading measure at the golden ratio of the native page width. */
 .connected-ui .poetry-workspace > .document-flow,
-.connected-ui .poetry-workspace > .feature-document:not([data-feature="audio"]) {
+.connected-ui .poetry-workspace > .feature-document {
   width: min(61.8vw, 100%);
   min-width: min(320px, 100%);
   max-width: 1040px;
@@ -113,41 +113,44 @@
   padding-top: 18px;
   border-top: 1px solid var(--line);
 }
-/* Audio keeps its independently labelled sources and real levels. */
+/* Audio uses the same book measure and keeps each source next to its result. */
 .connected-ui .poetry-workspace .feature-document[data-feature="audio"] {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 18px;
+  display: flex; flex-direction: column; min-height: 100%; gap: 0;
 }
 .connected-ui .poetry-workspace [data-feature="audio"] > .feature-control-card {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-column: 1 / -1;
-  margin: 0;
+  grid-template-columns: minmax(0, 1fr); margin: 0 0 20px; gap: 10px;
 }
 .connected-ui .poetry-workspace [data-feature="audio"] > .ornament { display: none; }
 .connected-ui .poetry-workspace .live-audio-stage {
-  grid-column: 1;
-  grid-row: 2 / 4;
-  height: auto;
-  gap: 8px;
-  padding: 8px 12px;
+  height: auto; min-height: 0; gap: 8px; padding: 10px 12px;
 }
-.connected-ui .poetry-workspace .live-level { gap: 4px; }
-.connected-ui .poetry-workspace .audio-sources { grid-column: 2; grid-row: 2; margin: 0; }
-.connected-ui .poetry-workspace [data-feature="audio"] .feature-controls { grid-column: 2; grid-row: 3; }
-.connected-ui .poetry-workspace [data-feature="audio"] .feature-intro { grid-column: 1 / -1; }
-.connected-ui .poetry-workspace .audio-sources { flex-wrap: wrap; }
+.connected-ui .poetry-workspace .live-level {
+  grid-template-columns: auto minmax(32px, 1fr) auto; align-items: center; gap: 10px;
+}
+.connected-ui .poetry-workspace .live-level > span { font-size: 12px; gap: 6px; }
+.connected-ui .poetry-workspace .live-level > span svg { width: 16px; height: 16px; }
+.connected-ui .poetry-workspace .live-level small { font-size: 11px; max-width: 110px; overflow-wrap: anywhere; }
+.connected-ui .poetry-workspace .audio-sources { margin: 0; flex-wrap: wrap; gap: 6px; }
+.connected-ui .poetry-workspace .audio-sources button { padding: 7px 9px; font-size: 12px; }
 .connected-ui .poetry-workspace .section-heading { flex-wrap: wrap; }
 .connected-ui .poetry-workspace .language-select { min-width: 0; }
 .connected-ui .poetry-workspace .feature-intro > div { min-width: 0; }
 .connected-ui .poetry-workspace .feature-intro p { overflow-wrap: anywhere; }
-.connected-ui .poetry-workspace .audio-source-cards[data-channels="2"] {
-  grid-template-columns: minmax(0, 1fr);
+.connected-ui .poetry-workspace .audio-passages,
+.connected-ui .poetry-workspace .audio-passage,
+.connected-ui .poetry-workspace .audio-passage .audio-results-stack,
+.connected-ui .poetry-workspace .audio-passage .audio-channel-result {
+  display: flex; flex-direction: column; flex: 1; min-width: 0;
 }
-.connected-ui .poetry-workspace .audio-channel-result > .translation-text {
-  max-height: 35vh;
-  overflow: auto;
-}
+.connected-ui .poetry-workspace .audio-passages { gap: 24px; }
+.connected-ui .poetry-workspace .audio-passage .audio-results-stack { gap: 0; padding-top: 18px; border-top: 1px solid var(--line); }
+.connected-ui .poetry-workspace .audio-passage .audio-source-cards { margin-bottom: 18px; }
+.connected-ui .poetry-workspace .audio-passage .recognized-source { min-height: clamp(48px, 10vh, 96px); }
+.connected-ui .poetry-workspace .audio-passage .translation-text { max-height: none; overflow: visible; }
+.connected-ui .poetry-workspace .audio-passages[data-channels="2"] .audio-passage { flex: none; }
+.connected-ui .poetry-workspace .audio-passages[data-channels="2"] .recognized-source { min-height: 40px; }
+.connected-ui .poetry-workspace .audio-passages[data-channels="2"] .result-message { min-height: 64px; }
+.connected-ui .poetry-workspace .audio-passages[data-channels="2"] .audio-passage + .audio-passage { border-top: 1px solid var(--line); padding-top: 24px; }
 /* The page scrolls only when its actual passages outgrow the window. */
 .connected-ui .poetry-workspace,
 .connected-ui .poetry-workspace * {
@@ -188,21 +191,11 @@
     justify-content: flex-start;
     flex-wrap: wrap;
   }
-  .connected-ui .poetry-workspace .feature-document[data-feature="audio"],
-  .connected-ui .poetry-workspace [data-feature="audio"] > .feature-control-card {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .connected-ui .poetry-workspace [data-feature="audio"] .live-audio-stage,
-  .connected-ui .poetry-workspace [data-feature="audio"] .audio-sources,
-  .connected-ui .poetry-workspace [data-feature="audio"] .feature-controls {
-    grid-column: 1;
-    grid-row: auto;
-  }
-  .connected-ui .poetry-workspace [data-feature="audio"] .audio-results-stack { grid-template-rows: none; }
+
 }
 @media (max-width: 600px) {
   .connected-ui .poetry-workspace > .document-flow,
-  .connected-ui .poetry-workspace > .feature-document:not([data-feature="audio"]) {
+  .connected-ui .poetry-workspace > .feature-document {
     width: 100%;
   }
   .connected-ui .poetry-workspace .source-editor,
