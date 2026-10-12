@@ -24,7 +24,7 @@ function mount(mode, component = 'MainWindow', layout = 'studio', overrides = {}
   const states = {}; const calls = [];
   let hookIndex = 0;
   const ctx = {
-    React, ConnectedMain, appVersion: "1.1.0", exports: {}, ...load("interface/preferences"), ...load('latest-task'), ...load('audio-tasks'), ...load('text-tools'), ...load('request'),
+    React, ConnectedMain, useStyleWindowSize: () => {}, appVersion: "1.1.0", exports: {}, ...load("interface/preferences"), ...load('latest-task'), ...load('audio-tasks'), ...load('text-tools'), ...load('request'),
     getCurrentWebviewWindow: () => ({ label: component === 'AudioFloatingWindow' ? 'audio-floating' : 'main', close: async () => calls.push(['close']), startDragging: async () => calls.push(['drag']) }),
     invoke: async (command, args) => { calls.push([command, args]); },
     readText: async () => 'Clipboard original', writeText: async text => { calls.push(['clipboard-write', text]); },

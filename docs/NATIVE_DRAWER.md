@@ -4,6 +4,8 @@ The correction lives on isolated branch `fix/native-drawer-surface`. It addresse
 
 ## Behavior
 
+The later [style-size revision](POETRY_LAYOUT.md) makes Poetry's expanded window portrait by default and Workbench/Classic landscape. Folding itself still changes only the clipping region; it never records the clipped navigation silhouette as a custom expanded size.
+
 | State | Visible and interactive desktop surface |
 | --- | --- |
 | Workspace open | Complete existing interface; navigation stays expanded |

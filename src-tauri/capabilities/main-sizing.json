@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-sizing",
+  "description": "Allow style-specific minimum sizes for the main reading window only",
+  "windows": ["main"],
+  "permissions": ["core:window:allow-set-min-size"]
+}

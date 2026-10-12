@@ -21,22 +21,34 @@ const code = ts.transpileModule(`var hydrate = ${effect.getText(ast)};`, {
   compilerOptions: { target: ts.ScriptTarget.ES2020 },
 }).outputText;
 function harness(config) {
-  let resolve;
+  let resolve, reject;
   const states = {};
   const saves = [];
   const ctx = { ...preferences, savedConfigRef: { current: {} }, configLoadedRef: { current: false }, subRegionRef: { current: null }, DEFAULT_APPEARANCE: {}, DEFAULT_SHORTCUTS: {}, mergeAppearance: (_, saved) => saved ?? {},
     invoke: (cmd, args) => {
-      if (cmd === 'load_app_config') return new Promise(r => { resolve = r; });
+      if (cmd === 'load_app_config') return new Promise((r, e) => { resolve = r; reject = e; });
       if (cmd === 'save_app_config') saves.push(args.config);
       return Promise.resolve();
     },
   };
-  for (const name of ['EngineMode', 'MainClose', 'UiLayout', 'Navigation', 'AudioChannelLanguages', 'Theme', 'AccentColor', 'Appearance', 'Shortcuts', 'ConflictHint', 'SourceLang', 'TargetLang', 'StreamOn', 'NumCtx', 'IndependentLang', 'ModeLangs', 'ClipAuto', 'AudioDenoise', 'Providers', 'ActiveProviderId', 'SubFps', 'SubMode', 'SubEngine', 'SubRegion']) ctx['set' + name] = v => { states[name] = v; };
+  for (const name of ['WindowSizingReady', 'EngineMode', 'MainClose', 'UiLayout', 'Navigation', 'AudioChannelLanguages', 'Theme', 'AccentColor', 'Appearance', 'Shortcuts', 'ConflictHint', 'SourceLang', 'TargetLang', 'StreamOn', 'NumCtx', 'IndependentLang', 'ModeLangs', 'ClipAuto', 'AudioDenoise', 'Providers', 'ActiveProviderId', 'SubFps', 'SubMode', 'SubEngine', 'SubRegion']) ctx['set' + name] = v => { states[name] = v; };
   vm.createContext(ctx);
   vm.runInContext(code, ctx);
   const cleanup = ctx.hydrate();
-  return { ctx, states, saves, cleanup, load: async () => { resolve(config); await new Promise(r => setImmediate(r)); } };
+  return { ctx, states, saves, cleanup, fail: async () => { reject(Error('fixture')); await new Promise(r => setImmediate(r)); }, load: async () => { resolve(config); await new Promise(r => setImmediate(r)); } };
 }
+
+test('native sizing waits for restored Poetry style and still starts after missing or failed config', async () => {
+  const h = harness({ configVersion: 3, settings: { design: { mainStyle: 'poetry' } } });
+  assert.equal(h.states.WindowSizingReady, undefined);
+  await h.load();
+  assert.equal(h.states.UiLayout, 'poetry');
+  assert.equal(h.states.WindowSizingReady, true);
+  const missing = harness(null); await missing.load();
+  assert.equal(missing.states.WindowSizingReady, true);
+  const failed = harness(null); await failed.fail();
+  assert.equal(failed.states.WindowSizingReady, true);
+});
 
 test('subtitle settings hydrate after IPC resolves, including the saved region', async () => {
   const h = harness({ configVersion: 3, settings: { subtitle: { fps: 5, mode: 'ocr-first', engine: 'rapid', region: { x: 20, y: 30, w: 400, h: 100 } } } });

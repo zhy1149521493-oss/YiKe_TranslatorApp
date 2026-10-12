@@ -1,5 +1,11 @@
 # Local checkpoints and rollback
 
+## Portrait Poetry and golden-ratio reading
+
+Tag `checkpoint/portrait-poetry-2026-10-12-candidate` and the [complete source/binary archive](../../TranslatorApp/archives/portrait-poetry-2026-10-12-candidate/README.md) preserve this revision. The archive manifest records verification scope and remaining native checks.
+
+`fix/style-window-orientation` builds separately as `译刻-书页布局版.exe`. Poetry defaults to 640×860 logical pixels with a centered 61.8%-width text/OCR reading column; Workbench and Classic default to 960×640. Manual normal sizes are independent and stored locally in the WebView, not in portable `config.json`. Short pages distribute content vertically; OCR controls align with reading text and audio stacks at portrait widths. See [behavior and responsive exceptions](POETRY_LAYOUT.md). To roll back, exit through the tray and launch the retained `译刻-诗集阅读修正版.exe`. The previous source is tagged `checkpoint/poetry-reading-2026-10-12-candidate`; no reset or private configuration migration is required. The older build ignores the new geometry storage key.
+
 ## Flowing Poetry reading candidate
 
 `fix/poetry-responsive-layout` retains vertical document reading while reducing empty spacing, reflowing the editor after resize/font loading and removing redundant OCR preview boxes. Its separate executable is `译刻-诗集阅读修正版.exe`; the earlier `译刻-诗集优化版.exe` is a rejected equal-height experiment. Revised desktop visual acceptance remains pending. Exit through the tray and run `译刻-拉窗修正版.exe` to return to the previous native-drawer UI. Configuration and runtime resources stay shared; this change adds no schema migration. Tag `checkpoint/poetry-reading-2026-10-12-candidate` and the [source/binary archive](../../TranslatorApp/archives/poetry-reading-2026-10-12-candidate/README.md) preserve the revision. See [layout behavior and acceptance scope](POETRY_LAYOUT.md).

@@ -2,6 +2,8 @@
 
 ## Isolated design preview
 
+The production main window sizes itself after saved design preferences hydrate. `useStyleWindowSize.ts` supplies Tauri monitor/window/storage operations to the serialized `StyleWindowSizing` controller. Style-specific normal sizes are device-local, use logical pixels and ignore our own resize events; maximized/minimized geometry never becomes a saved normal size. A main-only capability adds minimum-size control. Native drawer clipping still determines the visible/hit surface independently of expanded geometry. See [sizes, golden-ratio reading measure and compatibility](POETRY_LAYOUT.md).
+
 The connected [Poetry reading page](POETRY_LAYOUT.md) keeps a natural vertical document. Its original editor observes container width, viewport resize and offline font readiness to remeasure actual text height without the old oversized minimum. The observers are detached on unmount. Screenshot/subtitle presentation uses compact status/controls instead of a duplicate capture placeholder; native recognition commands and business state remain owned by MainWindow.
 
 `demo.html` and `src/demo/main.tsx` form a separate entry. `model.ts` owns typed fixture state and shared appearance preferences; `usePreview.ts` is an in-memory task/clipboard adapter. Layout, translation, recognition, settings and floating-panel components consume this single controller. They import no production controller or Tauri APIs. `vite.demo.config.ts` builds `dist-demo/`, separately from the main app. See [design demo boundaries and validation](DESIGN_DEMO.md). The user has authorized integration; `src/interface/` is the separate production presentation layer described below. The Demo continues to use fixtures.

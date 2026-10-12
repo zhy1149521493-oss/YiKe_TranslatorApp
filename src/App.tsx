@@ -18,6 +18,7 @@ import { ConnectedMain } from "./interface/ConnectedMain";
 import type { InterfaceController, LanguagePair } from "./interface/controller";
 import type { AudioChannel, MainStyle } from "./interface/model";
 import { restoreDesign, restoreAudioLanguages, mergeSavedConfig } from "./interface/preferences";
+import { useStyleWindowSize } from "./interface/useStyleWindowSize";
 
 const appWindow = getCurrentWebviewWindow();
 
@@ -631,6 +632,8 @@ function MainWindow() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [uiLayout, setUiLayout] = useState<"poetry" | "studio" | "classic">("studio");
   const [navigation, setNavigation] = useState<"persistent" | "hover">("persistent");
+  const [windowSizingReady, setWindowSizingReady] = useState(false);
+  useStyleWindowSize(uiLayout === "studio" ? "workbench" : uiLayout, windowSizingReady);
   const [composing, setComposing] = useState(false);
   const [audioControlsBusy, setAudioControlsBusy] = useState(false);
   const audioControlsBusyRef = useRef(false);
@@ -784,7 +787,8 @@ function MainWindow() {
           }
         }
       })
-      .catch(() => { if (!cancelled) configLoadedRef.current = true; });
+      .catch(() => { if (!cancelled) configLoadedRef.current = true; })
+      .finally(() => { if (!cancelled) setWindowSizingReady(true); });
     return () => { cancelled = true; };
   }, []);
 
