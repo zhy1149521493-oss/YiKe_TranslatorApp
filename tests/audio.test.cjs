@@ -77,7 +77,7 @@ test('real audio callback forwards the final identity and updates its own histor
   const ctx = {
     audioQueues: { system: new AudioTaskQueue(), mic: new AudioTaskQueue() },
     audioDesiredRef: { current: { system: true, mic: true } }, audioSessionsRef: { current: { system: 1, mic: 2 } },
-    langFor: () => ({ src: 'en', tgt: 'zh' }), model: 'mock', numCtx: 1024,
+    langForAudio: () => ({ src: 'en', tgt: 'zh' }), model: 'mock', numCtx: 1024,
     translateFull: async (_model, _src, _tgt, text, _ctx, signal) => boundedRequest(async () => { if (first) { first = false; await gate.promise; } return 'translated ' + text; }, signal),
     invoke: async (_cmd, payload) => { forwarded.push(payload); },
     applyAudioResult, errorMessage: String,
@@ -150,4 +150,43 @@ test('floating subtitle start/stop controls remain registered after OCR event re
   listeners['subtitle-start'](); listeners['subtitle-stop']();
   assert.deepEqual(calls, ['start', 'stop']);
   cleanup(); await flush(); assert.deepEqual(Object.keys(listeners), []);
+});
+
+
+test('a busy computer channel cannot evict microphone history', () => {
+  let history = updateAudioLine([], job('mic:1', 'microphone', true, 'mic'));
+  history = applyAudioResult(history, job('mic:1', 'microphone', true, 'mic'), '麦克风译文');
+  for (let i = 0; i < 20; i++) history = updateAudioLine(history, job('system:' + i, 'computer ' + i, true));
+  assert.equal(history.find(line => line.source === 'mic' && line.id === 'mic:1').result, '麦克风译文');
+  for (const source of ['mic', 'system']) assert.ok(history.filter(line => line.source === source).length <= 3);
+});
+
+test('even identical utterance IDs cannot cross audio sources', () => {
+  const system = job('same-id', 'same text', true);
+  const mic = job('same-id', 'same text', true, 'mic');
+  let history = updateAudioLine(updateAudioLine([], system), mic);
+  history = applyAudioResult(history, mic, 'microphone only');
+  assert.equal(history.find(line => line.source === 'system' && line.id).result, '');
+  assert.equal(history.find(line => line.source === 'mic' && line.id).result, 'microphone only');
+});
+
+
+test('real dual-audio startup uses each recognition language and serializes rapid clicks', async () => {
+  let toggle;
+  function find(node) { if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'toggleAudioSubtitle') toggle=node.initializer.arguments[0]; ts.forEachChild(node,find); }
+  find(ast);assert.ok(toggle);
+  const gate=deferred();const calls=[];const states={on:{},status:{}};
+  const ctx={ audioControlsBusyRef:{current:false},setAudioControlsBusy:()=>{},audioMode:'both',audioSubOn:{},
+    sourcesForMode:mode=>mode==='both'?['system','mic']:[mode],setSubtitleOn:()=>{},setActiveMode:()=>{},
+    appWindow:{emitTo:async()=>{}},langForAudio:source=>({src:source==='mic'?'ko':'ja',tgt:'zh'}),AUDIO_ASR_LANGS:['auto','zh','en','ja','ko'],
+    localModels:[{name:'mock'}],providers:[],componentStatus:{asr:{ko:{installed:true},multi:{installed:true}}},invalidateAudio:()=>{},
+    setAudioStatus:fn=>{states.status=fn(states.status);},setAudioSubOn:fn=>{states.on=fn(states.on);},setAudioPartial:()=>{},
+    invoke:async(command,args)=>{calls.push([command,args]);if(command==='audio_subtitle_start'&&args.source==='system')await gate.promise;},
+  };
+  vm.createContext(ctx);vm.runInContext(ts.transpileModule('var toggle='+toggle.getText(ast),{compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText,ctx);
+  const pending=ctx.toggle();await flush();await ctx.toggle();
+  assert.equal(calls.filter(([command])=>command==='audio_subtitle_start').length,1);
+  gate.resolve();await pending;
+  assert.deepEqual(calls.filter(([command])=>command==='audio_subtitle_start').map(([,args])=>[args.source,args.lang]),[['system','ja'],['mic','ko']]);
+  assert.equal(states.on.system,true);assert.equal(states.on.mic,true);assert.equal(ctx.audioControlsBusyRef.current,false);
 });

@@ -28,7 +28,7 @@ function disclosure(variant) {
     useId: () => "test-navigation",
     useEffect: () => {},
   };
-  const filename = path.resolve(__dirname, "../src/demo/Disclosure.tsx");
+  const filename = path.resolve(__dirname, "../src/interface/Disclosure.tsx");
   const loaded = new Module(filename, module);
   loaded.require = (id) => {
     if (id === "react") return hooks;

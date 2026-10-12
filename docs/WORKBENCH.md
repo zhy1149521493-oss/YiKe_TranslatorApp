@@ -1,4 +1,6 @@
-# Workbench interface
+# Previous workbench interface
+
+This page documents the retained `译刻-工作台版.exe` build and its historical visual checks. The new three-style candidate uses different materials/navigation and settings-only style selection; see [connected interface usage and acceptance](INTERFACE_INTEGRATION.md).
 
 The main window defaults to the studio layout: an ink-colored mode rail, a mint accent, a shared language toolbar and separate source/translation panels. Light, dark and system themes remain supported. Custom background, text, font size and accent settings still apply; studio buttons choose black or white text for a custom accent.
 

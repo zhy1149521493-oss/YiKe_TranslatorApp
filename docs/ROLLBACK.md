@@ -1,5 +1,12 @@
 # Local checkpoints and rollback
 
+## Connected candidate rollback
+
+`ui/design-integration` in `E:/TranslatorApp-icon-update` connects the approved designs to real handlers. `译刻-新版界面.exe` is a separate local candidate; the original, repair and prior workbench binaries are not overwritten. The prior icon-only checkpoint `checkpoint/clay-icon-2026-10-12` and Demo checkpoint `checkpoint/design-demo-v3.2-candidate` remain intact. The merge base before controller integration is `19548cf`.
+
+Within the candidate, Settings > General > Interface layout > Classic retains input and running jobs while switching presentation. To restore the exact earlier software, exit through the tray and run `E:/TranslatorApp/译刻-工作台版.exe` or `译刻-修复版.exe`. Shared resources stay in place. Old binaries may remove optional `settings.design` and per-channel language fields when saving; see [configuration compatibility](INTERFACE_INTEGRATION.md). The runtime configuration was not inspected or included in the source archive. Native visual/device acceptance remains pending.
+
+
 ## Independent design demo
 
 Branch `ui/prototype-demo` is checked out separately at `E:/TranslatorApp-ui-demo`. It has no changes to the production controller, Rust commands or installed executables. Stop the demo server to return to the existing application. Do not copy `dist-demo/` over the production assets. The prior `ui/workbench-redesign` checkout and both existing checkpoint tags remain intact. See [preview setup and acceptance gate](DESIGN_DEMO.md).

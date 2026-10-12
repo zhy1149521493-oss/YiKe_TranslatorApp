@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
+const preferences = require("./load-ts.cjs")("interface/preferences");
 
 // Exercise the actual hydration effect with asynchronous IPC and setter spies.
 const source = fs.readFileSync(path.resolve(__dirname, '../src/App.tsx'), 'utf8');
@@ -23,14 +24,14 @@ function harness(config) {
   let resolve;
   const states = {};
   const saves = [];
-  const ctx = { configLoadedRef: { current: false }, subRegionRef: { current: null }, DEFAULT_APPEARANCE: {}, DEFAULT_SHORTCUTS: {}, mergeAppearance: (_, saved) => saved ?? {},
+  const ctx = { ...preferences, savedConfigRef: { current: {} }, configLoadedRef: { current: false }, subRegionRef: { current: null }, DEFAULT_APPEARANCE: {}, DEFAULT_SHORTCUTS: {}, mergeAppearance: (_, saved) => saved ?? {},
     invoke: (cmd, args) => {
       if (cmd === 'load_app_config') return new Promise(r => { resolve = r; });
       if (cmd === 'save_app_config') saves.push(args.config);
       return Promise.resolve();
     },
   };
-  for (const name of ['EngineMode', 'MainClose', 'UiLayout', 'Theme', 'AccentColor', 'Appearance', 'Shortcuts', 'ConflictHint', 'SourceLang', 'TargetLang', 'StreamOn', 'NumCtx', 'IndependentLang', 'ModeLangs', 'ClipAuto', 'AudioDenoise', 'Providers', 'ActiveProviderId', 'SubFps', 'SubMode', 'SubEngine', 'SubRegion']) ctx['set' + name] = v => { states[name] = v; };
+  for (const name of ['EngineMode', 'MainClose', 'UiLayout', 'Navigation', 'AudioChannelLanguages', 'Theme', 'AccentColor', 'Appearance', 'Shortcuts', 'ConflictHint', 'SourceLang', 'TargetLang', 'StreamOn', 'NumCtx', 'IndependentLang', 'ModeLangs', 'ClipAuto', 'AudioDenoise', 'Providers', 'ActiveProviderId', 'SubFps', 'SubMode', 'SubEngine', 'SubRegion']) ctx['set' + name] = v => { states[name] = v; };
   vm.createContext(ctx);
   vm.runInContext(code, ctx);
   const cleanup = ctx.hydrate();

@@ -1,0 +1,42 @@
+.connected-ui { font-family: Inter, "Microsoft YaHei", "Segoe UI", sans-serif; }
+.connected-ui .settings-body { padding: 0; min-height: 400px; width: 100%; }
+.connected-ui .settings-center { box-shadow: none; background: var(--panel-solid); color: var(--ink); }
+.connected-ui .settings-content { background: var(--panel-solid); }
+.connected-ui .settings-nav { background: color-mix(in srgb, var(--accent) 5%, var(--paper)); }
+.connected-ui .settings-row { flex-wrap: wrap; }
+.connected-ui .settings-section { max-width: 100%; }
+.connected-ui .classic-preserved { padding: 0; overflow: visible; }
+.connected-ui .classic-preserved .task-card { margin-bottom: 16px; }
+.connected-ui .classic-preserved .trans-output { margin-top: 16px; }
+.connected-ui .connected-notice { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 80; max-width: 80%; background: var(--panel-solid); color: var(--ink); border-radius: 14px; box-shadow: var(--shadow-soft); }
+.connected-ui .connected-notice:not(:empty) { padding: 10px 18px; border: 1px solid var(--line); }
+.connected-ui .connected-feedback { position: absolute; bottom: 12px; left: 16px; right: 16px; z-index: 65; pointer-events: none; }
+.connected-ui .connected-feedback > * { pointer-events: auto; }
+.connected-ui .live-audio-stage { display: flex; flex-direction: column; gap: 22px; justify-content: center; }
+.connected-ui .live-level { width: 100%; display: grid; gap: 10px; text-align: left; }
+.connected-ui .live-level > span { display: flex; align-items: center; gap: 10px; color: var(--accent); }
+.connected-ui .live-level meter { width: 100%; height: 10px; accent-color: var(--accent); }
+.connected-ui .live-level small { overflow-wrap: anywhere; }
+.connected-ui .capture-stage { gap: 14px; }
+.connected-ui .audio-channel-result .section-heading { flex-wrap: wrap; }
+.connected-ui .reading-topbar { -webkit-app-region: no-drag; }
+
+.connected-ui .native-drag-strip { position: absolute; left: 0; right: 130px; top: 0; height: 18px; z-index: 90; }
+.connected-ui .connected-feedback:has(.conflict-bar) { bottom: 72px; }
+.connected-ui[data-workspace-open="false"] .connected-feedback { display: none; }
+.connected-ui .settings-center { --ios-label2: var(--muted); --ios-fill: var(--line); }
+.connected-ui .classic-preserved .trans-input { min-height: 180px; width: 100%; }
+.connected-ui .classic-preserved .source-actions { display: flex; gap: 12px; align-items: center; }
+
+.connected-ui .reading-native-controls { display: flex; }
+.connected-ui .window-controls { z-index: 91; }
+.connected-ui .settings-body { overflow: visible; }
+.connected-ui .settings-center { min-height: 450px; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; }
+.connected-ui .settings-nav-item.active { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+.connected-ui .btn-primary, .connected-ui .seg-item.active { color: var(--action-ink); }
+.connected-ui .classic-preserved .output-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.connected-ui .reading-status { max-width: 40%; overflow-wrap: anywhere; }
+@media (max-width: 780px) {
+  .connected-ui .settings-nav { width: 110px; padding: 12px 6px; }
+  .connected-ui .settings-content { padding: 20px 14px; }
+}

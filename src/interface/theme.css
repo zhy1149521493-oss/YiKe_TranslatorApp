@@ -1,0 +1,414 @@
+@font-face {
+  font-family: Inter;
+  src: url("../assets/fonts/Inter.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Noto Serif SC";
+  src: url("../assets/fonts/NotoSerifSC.ttf") format("truetype");
+  font-weight: 200 900;
+  font-display: swap;
+}
+.connected-ui * {
+  box-sizing: border-box;
+}
+.connected-ui,
+.connected-ui,
+.connected-ui {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+.connected-ui {
+  font-family: Inter, "Microsoft YaHei", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.connected-ui button,
+.connected-ui input,
+.connected-ui textarea,
+.connected-ui select {
+  font: inherit;
+}
+.connected-ui button,
+.connected-ui select,
+.connected-ui input[type="color"],
+.connected-ui input[type="range"] {
+  cursor: pointer;
+}
+.connected-ui button {
+  color: inherit;
+}
+.connected-ui button svg {
+  flex-shrink: 0;
+}
+.connected-ui button:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+.connected-ui button:focus-visible,
+.connected-ui a:focus-visible,
+.connected-ui select:focus-visible,
+.connected-ui input:focus-visible,
+.connected-ui textarea:focus-visible,
+.connected-ui [tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.connected-ui button {
+  transition:
+    background-color 160ms ease-out,
+    color 160ms ease-out,
+    border-color 160ms ease-out,
+    box-shadow 160ms ease-out,
+    transform 160ms ease-out;
+}
+.connected-ui button:not(:disabled):active {
+  transform: scale(0.97);
+}
+.connected-ui a {
+  color: var(--accent);
+}
+.connected-ui select {
+  min-width: 0;
+}
+.connected-ui select option {
+  background: var(--panel-solid);
+  color: var(--ink);
+}
+.connected-ui {
+  --paper: #f9f7f4;
+  --ink: #2a2826;
+  --accent: #c8886d;
+  --muted: #8a8784;
+  --soft-ink: #3d3935;
+  --line: rgba(42, 40, 38, 0.12);
+  --panel-solid: #fff;
+  --panel: rgba(255, 255, 255, 0.7);
+  --shadow-soft: 0 2px 24px rgba(42, 40, 38, 0.06);
+  --shadow-lift: 0 8px 48px rgba(42, 40, 38, 0.12);
+  --scroll-thumb: rgba(90, 78, 66, 0.28);
+  --reading-size: 16px;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: var(--paper);
+  color: var(--ink);
+  line-height: 1.6;
+  isolation: isolate;
+  color-scheme: light;
+}
+.connected-ui[data-tone="dark"] {
+  --muted: #a39f99;
+  --soft-ink: #d4d2cf;
+  --line: rgba(232, 230, 227, 0.12);
+  --panel-solid: #2a2826;
+  --panel: rgba(40, 38, 36, 0.8);
+  --shadow-soft: 0 2px 24px rgba(0, 0, 0, 0.35);
+  --shadow-lift: 0 8px 48px rgba(0, 0, 0, 0.5);
+  --scroll-thumb: rgba(226, 215, 201, 0.3);
+  color-scheme: dark;
+}
+.connected-ui * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+.connected-ui ::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.connected-ui ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.connected-ui ::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 4px;
+}
+.connected-ui ::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+.connected-ui .main-surface,
+.connected-ui .layout-surface {
+  height: 100%;
+  width: 100%;
+}
+.connected-ui .icon-button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  padding: 6px;
+  flex-shrink: 0;
+}
+.connected-ui .icon-button[aria-pressed="true"] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.connected-ui .quiet-button,
+.connected-ui .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 6px 14px;
+  white-space: nowrap;
+}
+.connected-ui .primary-button {
+  background: var(--accent);
+  color: var(--paper);
+  border-color: transparent;
+  min-height: 40px;
+  padding: 9px 20px;
+  font-weight: 500;
+  color: var(--action-ink, #fff);
+}
+.connected-ui .toolbar-actions,
+.connected-ui .inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.connected-ui .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: "Noto Serif SC", serif;
+  font-weight: 600;
+  font-size: 16px;
+  white-space: nowrap;
+}
+.connected-ui .brand svg {
+  flex-shrink: 0;
+}
+.connected-ui .mode-nav {
+  display: flex;
+  gap: 4px;
+}
+.connected-ui .mode-nav button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  background: transparent;
+  border: 0;
+  border-radius: 32px;
+  color: var(--muted);
+  padding: 6px 18px;
+  white-space: nowrap;
+  font-size: 14px;
+}
+.connected-ui .mode-nav button.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  font-weight: 500;
+}
+.connected-ui .mode-nav button svg {
+  display: none;
+}
+.connected-ui .section-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 16px;
+}
+.connected-ui .heading-line {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.connected-ui .language-select {
+  max-width: 150px;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 4px 12px;
+  background: transparent;
+  color: var(--muted);
+  letter-spacing: 0;
+}
+.connected-ui .source-editor {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 280px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  resize: none;
+  color: var(--ink);
+  font-family: "Noto Serif SC", serif;
+  font-size: calc(var(--reading-size) + 1px);
+  font-weight: 400;
+  line-height: 1.9;
+  padding: 0;
+  overflow: hidden;
+}
+.connected-ui .source-editor::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
+}
+.connected-ui .source-editor:focus-visible {
+  outline-offset: 8px;
+  border-radius: 2px;
+}
+.connected-ui .translation-text {
+  font-size: var(--reading-size);
+  line-height: 1.85;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.connected-ui .block-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 13px;
+}
+.connected-ui .engine-select {
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  max-width: 200px;
+  text-overflow: ellipsis;
+  padding: 4px 16px 4px 0;
+}
+.connected-ui .ornament {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  color: var(--muted);
+  margin: 48px 0;
+}
+.connected-ui .ornament span {
+  height: 1px;
+  flex: 1;
+  background: linear-gradient(to right, transparent, var(--line));
+}
+.connected-ui .ornament span:last-child {
+  transform: rotate(180deg);
+}
+.connected-ui .result-message {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+  padding: 25px 10px;
+}
+.connected-ui .result-message p {
+  margin: 0;
+  font-size: 14px;
+}
+.connected-ui .result-message small {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.connected-ui .result-message > svg {
+  opacity: 0.5;
+}
+.connected-ui .error-message {
+  color: var(--accent);
+}
+.connected-ui .error-message strong {
+  font-size: 15px;
+  font-weight: 500;
+}
+.connected-ui .loading-dots {
+  display: flex;
+  gap: 7px;
+  height: 24px;
+  align-items: center;
+}
+.connected-ui .loading-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: breathe 1s ease-in-out infinite alternate;
+}
+.connected-ui .loading-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.connected-ui .loading-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes breathe {
+  to {
+    opacity: 0.25;
+    transform: translateY(-4px);
+  }
+}
+.connected-ui .window-controls {
+  position: absolute;
+  top: 1px;
+  right: 5px;
+  display: flex;
+  gap: 0;
+  z-index: 4;
+  opacity: 0.55;
+}
+.connected-ui .window-controls .icon-button {
+  height: 22px;
+  width: 28px;
+  border-radius: 4px;
+}
+.connected-ui .window-controls svg {
+  width: 12px;
+  height: 12px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .connected-ui .icon-button:not(:disabled):hover,
+  .connected-ui .quiet-button:not(:disabled):hover {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 9%, transparent);
+  }
+  .connected-ui .quiet-button:not(:disabled):hover {
+    border-color: var(--accent);
+  }
+  .connected-ui .mode-nav button:hover {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    color: var(--ink);
+  }
+  .connected-ui .primary-button:not(:disabled):hover {
+    box-shadow: 0 3px 16px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .connected-ui *,
+  .connected-ui *::before,
+  .connected-ui *::after {
+    animation: none !important;
+    transition-duration: 0s !important;
+    scroll-behavior: auto !important;
+  }
+  .connected-ui button:active {
+    transform: none;
+  }
+}

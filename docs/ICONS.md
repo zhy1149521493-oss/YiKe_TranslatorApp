@@ -12,7 +12,7 @@ From a checkout with dependencies installed, generate to a new temporary directo
 npm exec tauri -- icon src-tauri/icons/yike-clay.svg --output ./icon-output
 ```
 
-Copy the reviewed root files into `src-tauri/icons/`. Normal Tauri builds use these assets for the executable and embedded default window/tray image. This icon-only branch does not merge the independent UI Demo or rebuild the installed applications.
+Copy the reviewed root files into `src-tauri/icons/`. Normal Tauri builds use these assets for the executable and embedded default window/tray image. The original icon-only checkpoint did not rebuild the installed applications. The later `ui/design-integration` candidate includes these packaging assets in a normal Tauri build; prior executable file icons remain unchanged.
 
 ## Installed Windows file icons
 

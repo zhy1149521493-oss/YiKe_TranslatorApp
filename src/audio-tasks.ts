@@ -52,16 +52,21 @@ export class AudioTaskQueue {
 }
 
 export function updateAudioLine(history: AudioLine[], job: AudioJob): AudioLine[] {
-  const existing = history.find(line => line.id === job.id);
+  const existing = history.find(line => line.id === job.id && line.source === job.source);
   if (existing?.isFinal) return history;
   const line: AudioLine = { ...job, result: job.isFinal && existing?.text !== job.text ? "" : existing?.result ?? "" };
-  const updated = existing ? history.map(old => old.id === job.id ? line : old)
+  const updated = existing ? history.map(old => old.id === job.id && old.source === job.source ? line : old)
     : [...history.filter(old => old.id || old.source !== job.source), line];
   if (job.isFinal) updated.push({ id: "", source: job.source, text: "", result: "", isFinal: false });
-  return updated.slice(-3);
+  const counts = new Map<string, number>();
+  return updated.slice().reverse().filter(line => {
+    const count = (counts.get(line.source) ?? 0) + 1;
+    counts.set(line.source, count);
+    return count <= 3;
+  }).reverse();
 }
 
 export function applyAudioResult(history: AudioLine[], job: AudioJob, result: string): AudioLine[] {
-  return history.map(line => line.id === job.id && line.text === job.text && (!line.isFinal || job.isFinal)
+  return history.map(line => line.id === job.id && line.source === job.source && line.text === job.text && (!line.isFinal || job.isFinal)
     ? { ...line, result } : line);
 }

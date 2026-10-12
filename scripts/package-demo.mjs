@@ -8,5 +8,5 @@ await cp(
 const licenses = new URL("../dist-demo/licenses/", import.meta.url);
 await mkdir(licenses, { recursive: true });
 for (const name of ["Inter-OFL.txt", "NotoSerifSC-OFL.txt", "README.md"]) {
-  await cp(new URL(`../src/demo/fonts/${name}`, import.meta.url), new URL(name, licenses));
+  await cp(new URL(`../src/assets/fonts/${name}`, import.meta.url), new URL(name, licenses));
 }

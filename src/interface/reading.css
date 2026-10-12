@@ -1,0 +1,507 @@
+/* The studio's interaction structure, with quiet facing-page materials. */
+.connected-ui[data-style="workbench"] {
+  padding: 0;
+}
+.connected-ui .reading-shell {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 198px minmax(0, 1fr);
+}
+.connected-ui .reading-rail {
+  display: flex;
+  flex-direction: column;
+  padding: 30px 16px 24px;
+  background: color-mix(in srgb, var(--paper) 90%, var(--accent));
+  border-right: 1px solid var(--line);
+}
+.connected-ui .reading-brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 0 12px 36px;
+  color: var(--accent);
+}
+.connected-ui .reading-brand b {
+  font:
+    600 31px "Noto Serif SC",
+    serif;
+  letter-spacing: 3px;
+  color: var(--ink);
+}
+.connected-ui .reading-brand small {
+  display: block;
+  font-size: 8px;
+  letter-spacing: 1.6px;
+  margin-top: 4px;
+}
+.connected-ui .reading-rail-caption {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 2px;
+  padding: 0 15px;
+  margin: 0 0 18px;
+}
+.connected-ui .reading-rail nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.connected-ui .reading-rail button {
+  width: 100%;
+  min-height: 49px;
+  padding: 12px 15px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.connected-ui .reading-rail button[aria-current],
+.connected-ui .reading-rail button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.connected-ui .reading-rail button:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.connected-ui .reading-rail-bottom {
+  margin-top: auto;
+}
+.connected-ui .reading-rail-bottom p {
+  font:
+    11px "Noto Serif SC",
+    serif;
+  color: var(--muted);
+  padding: 20px 15px 0;
+  margin: 14px 0 0;
+  border-top: 1px solid var(--line);
+}
+.connected-ui .reading-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.connected-ui .reading-topbar {
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 30px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.connected-ui .reading-topbar .engine-select {
+  max-width: 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 12px;
+}
+.connected-ui .reading-top-actions,
+.connected-ui .reading-native-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.connected-ui .reading-native-controls {
+  border-left: 1px solid var(--line);
+  padding-left: 10px;
+  margin-left: 8px;
+}
+.connected-ui .reading-workspace {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  padding: 28px 32px 32px;
+  overflow: auto;
+}
+.connected-ui .reading-intro {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 22px;
+  gap: 10px;
+}
+.connected-ui .reading-intro small {
+  letter-spacing: 2.6px;
+  font-size: 9px;
+  color: var(--accent);
+}
+.connected-ui .reading-intro h1 {
+  font:
+    500 28px "Noto Serif SC",
+    serif;
+  margin: 6px 0 7px;
+  letter-spacing: 2px;
+}
+.connected-ui .reading-intro p {
+  margin: 0;
+  color: var(--muted);
+  font:
+    12px "Noto Serif SC",
+    serif;
+}
+.connected-ui .reading-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.connected-ui .reading-status i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.connected-ui .reading-language-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-shrink: 0;
+}
+.connected-ui .reading-language-bar > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.connected-ui .reading-language-bar .language-select {
+  width: 150px;
+  padding: 7px 11px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.connected-ui .reading-book {
+  flex: 1;
+  min-height: 235px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: 51px minmax(0, 1fr) 49px;
+  background: color-mix(in srgb, var(--paper) 35%, var(--panel-solid));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 6px 26px color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.connected-ui .reading-page-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--line);
+}
+.connected-ui .reading-page-heading span {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.connected-ui .reading-page-heading svg {
+  color: var(--accent);
+}
+.connected-ui .reading-page-heading small {
+  font-size: 8px;
+  letter-spacing: 1.8px;
+  color: var(--muted);
+}
+.connected-ui .reading-page-heading:nth-child(2),
+.connected-ui .reading-page + .reading-page,
+.connected-ui .reading-page-footer:last-child {
+  border-left: 1px solid var(--line);
+}
+.connected-ui .reading-page {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 26px;
+  background-image: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    color-mix(in srgb, var(--ink) 1.2%, transparent) 4px
+  );
+}
+.connected-ui .reading-page .source-editor {
+  height: 100%;
+  min-height: 100%;
+  overflow: auto;
+  font:
+    var(--reading-size)/1.95 "Noto Serif SC",
+    serif;
+}
+.connected-ui .reading-page .translation-text {
+  font:
+    var(--reading-size)/1.95 "Noto Serif SC",
+    serif;
+}
+.connected-ui .reading-page .result-message {
+  height: 100%;
+  min-height: 100px;
+}
+.connected-ui .reading-page-footer {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 0 20px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+.connected-ui .reading-page-footer small {
+  margin-left: auto;
+  font-size: 10px;
+}
+.connected-ui .reading-page-footer:last-child small {
+  margin-right: auto;
+  margin-left: 0;
+}
+.connected-ui .reading-page-footer .quiet-button {
+  padding: 4px 0;
+  font-size: 11px;
+}
+.connected-ui .reading-bottom-bar {
+  margin-top: 19px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.connected-ui .reading-bottom-bar > span {
+  font-size: 10px;
+  color: var(--muted);
+}
+.connected-ui .reading-bottom-bar .primary-button {
+  padding: 9px 18px;
+  min-height: 39px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+.connected-ui .reading-bottom-bar kbd {
+  padding-left: 12px;
+  margin-left: 4px;
+  border-left: 1px solid currentColor;
+  font:
+    10px Inter,
+    sans-serif;
+  opacity: 0.7;
+}
+.connected-ui .reading-feature {
+  flex: 1;
+  min-height: 300px;
+}
+.connected-ui .reading-feature .feature-card-layout {
+  height: 100%;
+}
+.connected-ui .reading-settings {
+  padding: 24px 28px 30px;
+}
+.connected-ui .reading-feature .glass-card {
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--paper) 35%, var(--panel-solid));
+  box-shadow: var(--shadow-soft);
+}
+.connected-ui .reading-feature .feature-intro h2 {
+  font-size: 21px;
+}
+.connected-ui .feature-left-column {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  min-height: 100%;
+}
+.connected-ui .feature-recognized-source {
+  flex: 1;
+  padding: 24px;
+}
+.connected-ui .feature-recognized-source .recognized-source {
+  margin-bottom: 0;
+  max-height: min(32vh, 360px);
+  overflow-y: auto;
+}
+.connected-ui .feature-recognition-layout .feature-results > .translation-text,
+.connected-ui .feature-recognition-layout .feature-results > .result-message {
+  flex: 1;
+}
+@media (max-width: 850px) {
+  .connected-ui .feature-left-column {
+    gap: 16px;
+  }
+}
+@media (min-width: 1200px) {
+  .connected-ui .reading-workspace {
+    padding: 36px 42px 38px;
+  }
+  .connected-ui .reading-intro {
+    margin-bottom: 28px;
+  }
+  .connected-ui .reading-book {
+    grid-template-rows: 58px minmax(0, 1fr) 54px;
+  }
+  .connected-ui .reading-page {
+    padding: 32px;
+  }
+}
+@media (max-width: 1000px) {
+  .connected-ui .reading-shell {
+    grid-template-columns: 164px minmax(0, 1fr);
+  }
+  .connected-ui .reading-brand {
+    gap: 9px;
+    padding-left: 8px;
+  }
+  .connected-ui .reading-brand b {
+    font-size: 27px;
+  }
+  .connected-ui .reading-brand small {
+    font-size: 6px;
+  }
+  .connected-ui .reading-workspace {
+    padding: 22px 24px 30px;
+  }
+  .connected-ui .reading-page {
+    padding: 22px;
+  }
+  .connected-ui .reading-page-heading {
+    padding: 0 20px;
+  }
+  .connected-ui .reading-language-bar {
+    gap: 8px;
+  }
+  .connected-ui .reading-language-bar .language-select {
+    width: 124px;
+  }
+}
+@media (max-width: 780px) {
+  .connected-ui .reading-shell {
+    grid-template-columns: 66px minmax(0, 1fr);
+  }
+  .connected-ui .reading-rail {
+    padding: 22px 8px 24px;
+  }
+  .connected-ui .reading-brand {
+    justify-content: center;
+    padding: 0 0 32px;
+  }
+  .connected-ui .reading-brand > div,
+  .connected-ui .reading-rail-caption,
+  .connected-ui .reading-rail button > span,
+  .connected-ui .reading-rail-bottom p {
+    display: none;
+  }
+  .connected-ui .reading-rail button {
+    justify-content: center;
+    padding: 12px;
+  }
+  .connected-ui .reading-topbar {
+    height: 56px;
+    padding: 0 22px;
+  }
+  .connected-ui .reading-workspace {
+    padding: 18px 22px 28px;
+  }
+  .connected-ui .reading-intro {
+    margin-bottom: 16px;
+  }
+  .connected-ui .reading-intro h1 {
+    font-size: 23px;
+  }
+  .connected-ui .reading-intro p {
+    font-size: 11px;
+  }
+  .connected-ui .reading-native-controls {
+    display: none;
+  }
+  .connected-ui .reading-page-heading small {
+    display: none;
+  }
+  .connected-ui .reading-language-bar {
+    margin-bottom: 14px;
+  }
+  .connected-ui .reading-page-heading {
+    padding: 0 17px;
+  }
+  .connected-ui .reading-book {
+    min-height: 190px;
+    grid-template-rows: 42px minmax(0, 1fr) 43px;
+  }
+  .connected-ui .reading-page {
+    padding: 18px;
+  }
+  .connected-ui .reading-page-footer {
+    padding: 0 13px;
+    gap: 8px;
+  }
+  .connected-ui .reading-bottom-bar {
+    margin-top: 12px;
+  }
+}
+@media (max-height: 560px) {
+  .connected-ui .reading-workspace {
+    padding-top: 14px;
+    padding-bottom: 25px;
+  }
+  .connected-ui .reading-intro p,
+  .connected-ui .reading-intro small {
+    display: none;
+  }
+  .connected-ui .reading-intro {
+    margin-bottom: 12px;
+  }
+  .connected-ui .reading-intro h1 {
+    margin: 0;
+    font-size: 22px;
+  }
+  .connected-ui .reading-language-bar {
+    margin-bottom: 12px;
+  }
+  .connected-ui .reading-rail {
+    padding-top: 20px;
+  }
+  .connected-ui .reading-brand {
+    padding-bottom: 20px;
+  }
+}
+@media (max-width: 540px) {
+  .connected-ui .reading-workspace {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .connected-ui .reading-language-bar {
+    flex-wrap: wrap;
+  }
+  .connected-ui .reading-language-bar .language-select {
+    width: 85px;
+  }
+  .connected-ui .reading-language-bar > span {
+    display: none;
+  }
+  .connected-ui .reading-language-bar {
+    gap: 4px;
+  }
+  .connected-ui .reading-bottom-bar > span,
+  .connected-ui .reading-bottom-bar kbd {
+    display: none;
+  }
+  .connected-ui .reading-bottom-bar {
+    justify-content: flex-end;
+  }
+  .connected-ui .reading-page {
+    padding: 12px;
+  }
+  .connected-ui .reading-page-footer small {
+    display: none;
+  }
+}

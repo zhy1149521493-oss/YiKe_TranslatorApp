@@ -1,5 +1,7 @@
 # Independent design demo
 
+The user has authorized the next integration stage. This page continues to describe the independent Demo, which retains its fixture boundary. The connected desktop candidate is documented in [INTERFACE_INTEGRATION.md](INTERFACE_INTEGRATION.md); its native visual acceptance remains separate.
+
 This interactive React + TypeScript preview lives on branch `ui/prototype-demo`, in the independent checkout `E:/TranslatorApp-ui-demo`. It has not been merged into the production app. The installation, private configuration and existing executables are unchanged.
 
 ## Run and build
@@ -91,7 +93,7 @@ The three supplied files are preserved in `demo-reference/`, linked from Setting
 | Different reference accent defaults | Shared palette across styles and windows | Honor the confirmed shared-color requirement |
 | Emoji controls, fake timings/limits and dead actions | SVG controls and clearly labelled fixture interactions | Avoid implying unavailable production capabilities |
 
-Poetry's paper texture, 17 px serif source typography with 1.9 line-height, 720 px document width, 48 px desktop document padding and floating pill toolbar remain unchanged. Workbench adapts these materials to the former studio structure, using quieter paper surfaces instead of the V1 animated gradient. Native window controls are visibly disabled. Reduced motion disables movement and keyboard focus stays visible. [Fonts and licenses](../src/demo/fonts/README.md) are bundled locally, adding approximately 26 MB only to the demo output.
+Poetry's paper texture, 17 px serif source typography with 1.9 line-height, 720 px document width, 48 px desktop document padding and floating pill toolbar remain unchanged. Workbench adapts these materials to the former studio structure, using quieter paper surfaces instead of the V1 animated gradient. Native window controls are visibly disabled. Reduced motion disables movement and keyboard focus stays visible. [Fonts and licenses](../src/assets/fonts/README.md) are bundled locally, adding approximately 26 MB to each interface build that uses them.
 
 ## Verification and acceptance
 
