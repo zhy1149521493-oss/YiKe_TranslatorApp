@@ -18,6 +18,12 @@ Run `npm ci` and `npm run demo` in that new directory after stopping the other d
 git worktree add --detach E:/TranslatorApp-demo-before-drawers checkpoint/design-demo-before-drawers
 ```
 
+`checkpoint/design-demo-before-brand-lock` retains the previous V3 commit `4b25131`, before navigation pinning and supplied branding. `checkpoint/design-demo-v3.1-candidate` records the revised candidate, with a [complete-history/build archive](../../TranslatorApp/archives/design-demo-v3.1-candidate/README.md). All prior tags/archives remain unchanged. To inspect the previous behavior without resetting current work:
+
+```powershell
+git worktree add --detach E:/TranslatorApp-demo-before-brand-lock checkpoint/design-demo-before-brand-lock
+```
+
 The stable repair checkpoint is the Git tag `checkpoint/core-repairs-2026-10-08` and branch `archive/core-repairs-2026-10-08`. It includes the eight audited logic repairs, theme-aware scrollbars, regression tests and developer documentation. These references are local; no changes have been pushed to GitHub.
 
 The repair commit is `994ddfa73ffc825e28b212b6c86695389264cdf8`. An independent complete-history Git bundle is stored at `E:/TranslatorApp/archives/core-repairs-2026-10-08/source.bundle`. Its refs were verified with `git bundle verify`.

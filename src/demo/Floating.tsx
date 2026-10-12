@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Icon, IconButton } from "./Icon";
+import { BrandMark } from "./BrandMark";
 import { clampPanel, modes, type Mode, type Preferences } from "./model";
 import { dockSide } from "./floatingGeometry";
 import type { PreviewController } from "./usePreview";
@@ -359,7 +360,7 @@ function CapsuleLauncher({
             setExpanded(true);
           }}
         >
-          <Icon name="book" size={18} />
+          <BrandMark size={20} />
           <span>译刻</span>
         </button>
       )}
@@ -421,7 +422,7 @@ function CapsuleLauncher({
           aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
         >
-          <Icon name="book" size={21} />
+          <BrandMark size={24} />
           <span>译刻</span>
         </button>
         {expanded && (

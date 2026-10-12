@@ -137,17 +137,8 @@
 .reading-rail .navigation-brand:hover {
   background: transparent;
 }
-.design-demo[data-navigation="hover"] .reading-shell {
-  grid-template-columns: 66px minmax(0, 1fr);
-}
-.design-demo[data-navigation="hover"] .reading-rail {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 198px;
-}
-.design-demo[data-navigation="hover"] .reading-main {
-  grid-column: 2;
-}
+/* Reserve the original rail track even when folded. Open content never sits
+   behind navigation, and opening it does not change its available width. */
 .classic-shell {
   display: flex;
   flex-direction: column;
@@ -167,15 +158,12 @@
   font-size: 20px;
   font-weight: 600;
 }
-.classic-capsule[data-behavior="persistent"] .navigation-logo {
-  display: none;
-}
 .classic-navigation-top {
   display: flex;
   gap: 14px;
   align-items: center;
   min-height: 56px;
-  padding: 0 100px 0 104px;
+  padding: 0 100px 0 150px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
@@ -192,23 +180,8 @@
   transform: translateY(-24px);
   clip-path: inset(0 0 100% 0 round 16px);
 }
-.design-demo[data-navigation="hover"] .classic-capsule {
-  position: absolute;
-  inset: 0 0 auto;
-}
-.design-demo[data-navigation="hover"] .classic-navigation-top {
-  padding-left: 150px;
-}
-.design-demo[data-navigation="hover"] .classic-navigation-body {
-  background: var(--paper);
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line);
-  box-shadow: var(--shadow-soft);
-}
-.design-demo[data-navigation="hover"] .classic-content {
-  margin-top: 72px;
-}
-.design-demo[data-navigation="hover"] .window-controls {
+.design-demo[data-navigation="hover"][data-workspace-open="false"]
+  .window-controls {
   display: none;
 }
 .content-drawer {
@@ -318,39 +291,6 @@
   }
   .reading-rail .navigation-brand-copy {
     display: none;
-  }
-  .design-demo[data-navigation="hover"] .reading-rail .navigation-brand {
-    justify-content: flex-start;
-    padding-left: 6px;
-  }
-  .design-demo[data-navigation="hover"] .reading-rail .navigation-brand-copy {
-    display: block;
-  }
-  .design-demo[data-navigation="hover"]
-    .reading-rail[data-expanded="true"]
-    button
-    > span {
-    display: inline;
-  }
-  .design-demo[data-navigation="hover"]
-    .reading-rail[data-expanded="true"]
-    .navigation-logo {
-    display: flex;
-  }
-  .design-demo[data-navigation="hover"]
-    .reading-rail[data-expanded="true"]
-    .reading-rail-caption {
-    display: block;
-  }
-  .design-demo[data-navigation="hover"]
-    .reading-rail[data-expanded="true"]
-    nav
-    button,
-  .design-demo[data-navigation="hover"]
-    .reading-rail[data-expanded="true"]
-    .reading-rail-bottom
-    button {
-    justify-content: flex-start;
   }
 }
 @media (max-width: 850px) {

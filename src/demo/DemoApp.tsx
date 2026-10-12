@@ -161,6 +161,7 @@ export function DemoApp() {
       data-style={prefs.mainStyle}
       data-tone={tone}
       data-navigation={prefs.navigation}
+      data-workspace-open={workspace.open}
       data-motion-input={motionInput}
       style={style}
       onKeyDown={keyDown}

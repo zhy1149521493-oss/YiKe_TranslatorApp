@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Icon, IconButton } from "./Icon";
+import { BrandMark } from "./BrandMark";
 import {
   defaults,
   modes,
@@ -134,12 +135,12 @@ export function Settings({
                   className={prefs.navigation === "hover" ? "selected" : ""}
                   onClick={() => update({ navigation: "hover" })}
                 >
-                  <Icon name="book" size={20} />
+                  <BrandMark size={20} />
                   悬停展开
                 </button>
               </div>
               <p className="setting-note">
-                悬停模式平时只显示译刻图标；鼠标进入导航或键盘聚焦时展开。已打开的工作区会保持，不会因鼠标离开而消失；触屏可点击图标展开。
+                悬停模式在工作区收起时只留译刻图标，移入或聚焦可展开导航。工作区打开时导航始终展开，保留完整布局；收起工作区并移开鼠标后才缩回图标。触屏可点击图标展开。
               </p>
             </div>
             <div className="settings-section">

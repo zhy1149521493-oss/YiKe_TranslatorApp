@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { Icon, IconButton } from "./Icon";
+import { IconButton } from "./Icon";
 import type { Preferences } from "./model";
+import { BrandMark } from "./BrandMark";
 
 /** Nonmodal page navigation disclosure; this is not a dialog or a menu role. */
 export function NavigationCapsule({
@@ -24,10 +25,11 @@ export function NavigationCapsule({
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const ref = useRef<HTMLElement>(null);
   const pressedExpanded = useRef(false);
+  const pointerInside = useRef(false);
   const [centerShift, setCenterShift] = useState(0);
   const [foldClip, setFoldClip] = useState("inset(0 100% 100% 0 round 21px)");
   const persistent = behavior === "persistent";
-  const expanded = persistent || revealed || focused;
+  const expanded = persistent || workspaceOpen || revealed || focused;
   const cancel = () => clearTimeout(timer.current);
   useEffect(() => () => clearTimeout(timer.current), []);
   useEffect(() => {
@@ -68,6 +70,7 @@ export function NavigationCapsule({
   }, [variant, behavior]);
   const enter = () => {
     if (!matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+    pointerInside.current = true;
     cancel();
     setRevealed(true);
   };
@@ -85,6 +88,7 @@ export function NavigationCapsule({
       data-variant={variant}
       data-expanded={expanded}
       data-behavior={behavior}
+      data-workspace-open={workspaceOpen}
       style={
         variant !== "poetry"
           ? { clipPath: expanded ? "inset(0 0 0 0 round 0)" : foldClip }
@@ -94,11 +98,13 @@ export function NavigationCapsule({
         if (expanded) enter();
       }}
       onPointerLeave={() => {
+        pointerInside.current = false;
         cancel();
         timer.current = setTimeout(() => setRevealed(false), 180);
       }}
       onFocusCapture={(event) => {
-        cancel();
+        // Focus pins navigation separately; it must not cancel a pending
+        // pointer departure when a pointer action returns focus to the logo.
         const target = event.target as HTMLElement;
         setFocused(
           !target.classList.contains("navigation-brand") ||
@@ -110,7 +116,12 @@ export function NavigationCapsule({
           setFocused(false);
       }}
       onKeyDown={(event) => {
-        if (event.key === "Escape" && !persistent && expanded) {
+        if (
+          event.key === "Escape" &&
+          !persistent &&
+          expanded &&
+          !workspaceOpen
+        ) {
           event.stopPropagation();
           setFocused(false);
           setRevealed(false);
@@ -124,14 +135,16 @@ export function NavigationCapsule({
       <button
         className="navigation-brand"
         aria-label={
-          persistent
+          persistent || workspaceOpen
             ? workspaceOpen
               ? "收起当前工作区"
               : "展开当前工作区"
             : "译刻导航"
         }
-        aria-expanded={persistent ? workspaceOpen : expanded}
-        aria-controls={persistent ? "translation-workspace" : id}
+        aria-expanded={persistent || workspaceOpen ? workspaceOpen : expanded}
+        aria-controls={
+          persistent || workspaceOpen ? "translation-workspace" : id
+        }
         onPointerEnter={enter}
         onPointerDown={() => {
           pressedExpanded.current = expanded;
@@ -142,11 +155,12 @@ export function NavigationCapsule({
             : undefined
         }
         onClick={(event) => {
-          if (persistent) onBrand();
+          if (persistent || workspaceOpen) onBrand();
           else {
             cancel();
             const closing =
-              event.detail > 0 ? pressedExpanded.current : expanded;
+              !pointerInside.current &&
+              (event.detail > 0 ? pressedExpanded.current : expanded);
             setRevealed(!closing);
             if (closing) {
               setFocused(false);
@@ -158,7 +172,7 @@ export function NavigationCapsule({
         }}
       >
         <span className="navigation-logo">
-          <Icon name="book" size={variant === "workbench" ? 30 : 28} />
+          <BrandMark size={variant === "workbench" ? 32 : 30} />
         </span>
         <span className="navigation-brand-copy">{brand}</span>
       </button>

@@ -1,5 +1,6 @@
 // Startup crash check only. This is not browser or visual acceptance.
 const fs = require("node:fs");
+const assert = require("node:assert/strict");
 const path = require("node:path");
 const Module = require("node:module");
 const ts = require("typescript");
@@ -60,7 +61,7 @@ for (const style of ["poetry", "workbench", "classic"]) {
       };
       for (const navigation of ["persistent", "hover"])
         for (const drawerOpen of [false, true]) {
-          renderToStaticMarkup(
+          const markup = renderToStaticMarkup(
             React.createElement(MainLayout, {
               style,
               controller,
@@ -77,6 +78,21 @@ for (const style of ["poetry", "workbench", "classic"]) {
               onCloseDrawer: noop,
               onBrand: noop,
             }),
+          );
+          // An open task must pin navigation, even without hover/focus effects.
+          const navigationTag = markup.match(
+            /<(?:aside|header)[^>]*class="navigation-capsule[^>]*>/,
+          )?.[0];
+          assert.ok(navigationTag, `${style}: missing navigation`);
+          assert.ok(
+            navigationTag.includes(
+              `data-expanded="${navigation === "persistent" || drawerOpen}"`,
+            ),
+            `${style}: navigation must remain expanded while its workspace is open`,
+          );
+          assert.ok(
+            markup.includes('class="brand-mark"'),
+            `${style}: missing YiKe brand`,
           );
           count++;
         }

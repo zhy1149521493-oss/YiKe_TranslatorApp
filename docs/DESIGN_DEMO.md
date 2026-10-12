@@ -30,7 +30,7 @@ The built preview is at `http://127.0.0.1:1432/demo.html`. `dist-demo/` is separ
 - **Settings > General > Interface style** selects Poetry, Workbench or Classic. Main style selection appears only in Settings; task navigation remains separate.
 - **Settings > General > Navigation behavior** selects persistent navigation (default) or hover disclosure for all three styles. Older saved demo preferences default to persistent navigation. This adds `navigation: "persistent" | "hover"` under the existing isolated browser storage key; production configuration is unaffected.
 - On initial load the workspace is folded. Click a task to slide its workspace open; click the same selected task to fold it again, or use the small collapse handle. Select another task to open that task. Settings follows the same disclosure behavior; its Back/Close button returns to the current task. Escape returns from Settings first, then folds the task workspace. Folding does not unmount the current view or stop background fixture jobs.
-- Poetry retains its horizontal top capsule; Workbench retains its left rail; Classic retains its header and four task tiles. Hover mode reveals these from the YiKe book icon, keeps navigation open while the pointer is inside or a navigation control has keyboard focus, and folds after a 180 ms pointer-leave delay. Open content remains available when navigation folds. Touch users can tap the icon. In hover mode the rail/Classic launcher overlays content without repeatedly reflowing it.
+- Poetry retains its horizontal top capsule; Workbench retains its left rail; Classic retains its header and four task tiles. Hover mode reveals these from the YiKe translation-bubble mark. An open workspace pins its entire navigation open, including Settings. Only after folding the workspace and leaving navigation does it shrink to the icon after a 180 ms delay; keyboard focus can keep navigation available until focus leaves. Touch users can tap the icon. The rail and Classic navigation occupy their original layout tracks in both behaviors, never covering open content. Existing responsive rail compaction is preserved. Clicking the brand while content is open folds that content first.
 - Navigation uses 160 ms transitions; content uses a 240 ms slide/reveal and 200 ms fade, with reversible CSS transitions. Keyboard actions and reduced-motion preferences disable travel. Mount transitions progressively use `@starting-style`; browsers without support still display the selected workspace immediately. This changes the preview app shell, not native window sizes, transparency or edge docking.
 - Light/dark/system theme, accent palette/custom accent, background/text colors and reading size are shared across all three main layouts and both floating styles. Light/dark color overrides are independent of layout.
 - **Settings > Floating window** selects Classic or Capsule independently of the main layout. Open its preview here or through the main toolbar's window icon.
@@ -61,7 +61,7 @@ Every result is a fixture, not real inference or capture. The Classic preview is
 | `Features.tsx` | Capture, subtitle/audio views and sample-region dialog |
 | `Settings.tsx` | Shared appearance and independent floating-style selection |
 | `Floating.tsx`, `floatingGeometry.ts` | Desktop preview, edge docking, classic header actions, panel movement and resize/collapse |
-| `Icon.tsx` | Local SVG controls without emoji icons |
+| `Icon.tsx`, `BrandMark.tsx`, `brand/` | Semantic SVG controls, themed YiKe outline brand and cleaned supplied app artwork |
 | Scoped CSS files | Shared tokens and layout/settings/window styling |
 
 The adapter does not migrate production `settings.uiLayout`. Mapping the old `studio/classic` setting, connecting real handlers and broadcasting settings to native windows belong to the post-acceptance phase.
@@ -74,6 +74,8 @@ The three supplied files are preserved in `demo-reference/`, linked from Setting
 | --- | --- | --- |
 | Missing inactive-view hiding and implicit global `event` | Explicit React view state | Prevent stacked pages and incorrect active tabs |
 | Navigation and workspaces always occupy the screen | Shared persistent/hover navigation plus click-to-reveal content drawers | Support the requested compact launcher interaction while retaining all three silhouettes |
+| Hover rail covered source text while its workspace stayed open | Pin navigation while the workspace is open; restore original rail/header layout tracks | Preserve the original complete interface and prevent text occlusion |
+| Generic book brand in navigation and floating launchers | Two translation bubbles with A/Chinese strokes; supplied color artwork for the demo favicon | Match the user-supplied app identity while keeping functional icons recognizable |
 | A collapse could be confused with stopping or closing a task | Visibility reducer separate from the fixture task controller; children remain mounted | Preserve task state, reading position and in-progress jobs on folding |
 | `toggleAttribute('data-theme', 'dark')` | Explicit theme state | Set the CSS theme value correctly |
 | V1 Workbench replaces studio navigation with top tabs | Original side rail, shared language bar and bottom actions, with facing paper pages | Retain the user's preferred interaction structure |
@@ -89,15 +91,17 @@ Poetry's paper texture, 17 px serif source typography with 1.9 line-height, 720 
 
 ## Verification and acceptance
 
-### Current V3 drawer candidate: visual acceptance pending
+### Current V3.1 navigation-lock and brand candidate: visual acceptance pending
 
-`npm test` passed 36 frontend checks (25 existing regressions and eleven demo checks), including preference migration, task/settings visibility transitions, explicit fixture correspondence and both docking boundaries. `node scripts/check-demo-render.cjs` rendered all three layouts in four modes, five scenarios, two navigation behaviors and both folded/open states, plus both floating styles: 242 startup renders without exceptions. This server render does not run effects, measure CSS, or verify pointer/focus interaction.
+`npm test` passed 36 frontend checks (25 existing regressions and eleven demo checks), including preference migration, task/settings visibility transitions, explicit fixture correspondence and both docking boundaries. `node scripts/check-demo-render.cjs` rendered all three layouts in four modes, five scenarios, two navigation behaviors and both folded/open states, plus both floating styles: 242 startup renders without exceptions. Every main-layout case additionally asserts that an open workspace pins navigation expanded and includes the new brand mark. This server render does not run effects, measure CSS, or verify pointer/focus interaction.
 
 `npm run build` and `npm run demo:build` passed. Production assets retain the same names and sizes (`index-CUBx0_Dt.js`, approximately 326 kB; `index-CKzXjTf2.css`, approximately 37 kB) and do not contain demo fonts. No production controller/native code changed.
 
-The browser tool previously rejected the local preview URL under its URL security policy. Consequently **V2 and V3 have no completed browser/visual acceptance**. The prior screenshots and browser results below belong to V1 and must not be treated as evidence for the changed workbench, disclosures or floating windows. No alternate browser surface was used to bypass that rejection.
+The browser tool previously rejected the local preview URL under its URL security policy. Consequently **V2, V3 and V3.1 have no completed browser/visual acceptance**. The prior screenshots and browser results below belong to V1 and must not be treated as evidence for the changed workbench, disclosures or floating windows. No alternate browser surface was used to bypass that rejection.
 
-When browser preview becomes available, verify 960 x 640, 720 x 480 and 1440 x 900 in both tones: all three navigation silhouettes and both navigation preferences; pointer movement from logo into navigation, delayed departure, keyboard and touch recovery; repeated task toggling and switching mid-transition; workspace folding during audio/subtitle tasks; settings reachability and preference reload; reduced motion; workbench source/translation and paired reading; capsule docking; classic floating header actions. Capture new V3 screenshots and inspect the animation at reduced playback speed before visual acceptance. Native work-area/DPI/transparency checks remain a later stage.
+The supplied SVG and new outline were rasterized and inspected separately: [cleaned color artwork](images/brand/app-cleaned.png), [outline mark](images/brand/outline.png). These are asset checks, not evidence of full-page rendering or animation. See [asset provenance and exports](../src/demo/brand/README.md).
+
+When browser preview becomes available, verify 960 x 640, 720 x 480 and 1440 x 900 in both tones: all three navigation silhouettes and both navigation preferences; pointer movement from logo into navigation, workspace pinning after pointer departure, no rail/header overlap, folding followed by delayed departure, keyboard and touch recovery; repeated task toggling and switching mid-transition; workspace folding during audio/subtitle tasks; settings reachability and preference reload; reduced motion; workbench source/translation and paired reading; capsule docking; classic floating header actions. Capture new V3.1 screenshots and inspect the animation at reduced playback speed before visual acceptance. Native work-area/DPI/transparency checks remain a later stage.
 
 ### Previous V1 verification (historical evidence)
 
