@@ -58,21 +58,28 @@ for (const style of ["poetry", "workbench", "classic"]) {
         paste: noop,
         setComposing: noop,
       };
-      renderToStaticMarkup(
-        React.createElement(MainLayout, {
-          style,
-          controller,
-          tone: "light",
-          settingsOpen: false,
-          onSettings: noop,
-          onTheme: noop,
-          onFloating: noop,
-          floatingOpen: false,
-          onMode: noop,
-          onCapture: noop,
-        }),
-      );
-      count++;
+      for (const navigation of ["persistent", "hover"])
+        for (const drawerOpen of [false, true]) {
+          renderToStaticMarkup(
+            React.createElement(MainLayout, {
+              style,
+              controller,
+              tone: "light",
+              settingsOpen: false,
+              onSettings: noop,
+              onTheme: noop,
+              onFloating: noop,
+              floatingOpen: false,
+              onMode: noop,
+              onCapture: noop,
+              navigation,
+              drawerOpen,
+              onCloseDrawer: noop,
+              onBrand: noop,
+            }),
+          );
+          count++;
+        }
     }
   }
 }

@@ -12,6 +12,12 @@ git worktree add --detach E:/TranslatorApp-demo-v1-review checkpoint/design-demo
 
 Run `npm ci` and `npm run demo` in that new directory after stopping the other demo's server (both use port 1431). The complete-history bundle and build of V1.1 remain at `E:/TranslatorApp/archives/design-demo-v1.1/`. The V2 candidate archive is `E:/TranslatorApp/archives/design-demo-v2-candidate/`; it is an implementation checkpoint, not a visually accepted release. No tags were moved and neither version was merged into production.
 
+`checkpoint/design-demo-before-drawers` retains commit `a4cabcc`, including the audio source relocation, before navigation/workspace drawers. `checkpoint/design-demo-v3-candidate` and `E:/TranslatorApp/archives/design-demo-v3-candidate/` retain the drawer candidate with the same pending visual acceptance. Inspect the pre-drawer layout in a new checkout without resetting current work:
+
+```powershell
+git worktree add --detach E:/TranslatorApp-demo-before-drawers checkpoint/design-demo-before-drawers
+```
+
 The stable repair checkpoint is the Git tag `checkpoint/core-repairs-2026-10-08` and branch `archive/core-repairs-2026-10-08`. It includes the eight audited logic repairs, theme-aware scrollbars, regression tests and developer documentation. These references are local; no changes have been pushed to GitHub.
 
 The repair commit is `994ddfa73ffc825e28b212b6c86695389264cdf8`. An independent complete-history Git bundle is stored at `E:/TranslatorApp/archives/core-repairs-2026-10-08/source.bundle`. Its refs were verified with `git bundle verify`.

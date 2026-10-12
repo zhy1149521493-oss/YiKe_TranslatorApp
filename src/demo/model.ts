@@ -8,6 +8,7 @@ export type AudioSource = "system" | "mic" | "both";
 export type Preferences = {
   mainStyle: MainStyle;
   floatingStyle: "classic" | "capsule";
+  navigation: "persistent" | "hover";
   theme: Theme;
   accent: "clay" | "ocean" | "forest" | "custom";
   customAccent: string;
@@ -19,6 +20,7 @@ export const STORAGE_KEY = "yike-design-demo-v1";
 export const defaults: Preferences = {
   mainStyle: "poetry",
   floatingStyle: "capsule",
+  navigation: "persistent",
   theme: "light",
   accent: "clay",
   customAccent: "#C8886D",
@@ -51,6 +53,7 @@ export function normalizePreferences(value: unknown): Preferences {
       ? (raw.mainStyle as MainStyle)
       : defaults.mainStyle,
     floatingStyle: raw.floatingStyle === "classic" ? "classic" : "capsule",
+    navigation: raw.navigation === "hover" ? "hover" : "persistent",
     theme: ["light", "dark", "system"].includes(String(raw.theme))
       ? (raw.theme as Theme)
       : defaults.theme,

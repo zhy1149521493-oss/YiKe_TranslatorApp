@@ -10,6 +10,7 @@ import {
 } from "./Translation";
 import { FeatureView } from "./Features";
 import type { PreviewController } from "./usePreview";
+import { ContentDrawer, NavigationCapsule } from "./Disclosure";
 
 function ReadingDesk({ controller }: { controller: PreviewController }) {
   const [reading, setReading] = useState(false);
@@ -155,14 +156,18 @@ export function ReadingWorkbench(props: LayoutProps) {
   const task = controller.state.tasks[meta.id];
   return (
     <div className="reading-shell">
-      <aside className="reading-rail">
-        <div className="reading-brand">
-          <Icon name="book" size={30} />
-          <div>
+      <NavigationCapsule
+        variant="workbench"
+        behavior={props.navigation}
+        brand={
+          <>
             <b>译刻</b>
             <small>YIKE TRANSLATOR</small>
-          </div>
-        </div>
+          </>
+        }
+        workspaceOpen={props.drawerOpen}
+        onBrand={props.onBrand}
+      >
         <p className="reading-rail-caption">翻译工作台</p>
         <nav aria-label="翻译功能">
           {modes.map((mode) => (
@@ -197,8 +202,14 @@ export function ReadingWorkbench(props: LayoutProps) {
           </button>
           <p>让理解，少一点距离。</p>
         </div>
-      </aside>
-      <div className="reading-main">
+      </NavigationCapsule>
+      <ContentDrawer
+        key={props.settingsOpen ? "settings" : meta.id}
+        open={props.drawerOpen}
+        direction="right"
+        className="reading-main"
+        onClose={props.onCloseDrawer}
+      >
         <header className="reading-topbar">
           <EnginePicker controller={controller} />
           <div className="reading-top-actions">
@@ -227,6 +238,8 @@ export function ReadingWorkbench(props: LayoutProps) {
         <main
           className={`reading-workspace${props.settingsOpen ? " reading-settings" : ""}`}
           key={props.settingsOpen ? "settings" : meta.id}
+          tabIndex={-1}
+          data-drawer-focus
         >
           {props.settingsOpen ? (
             props.children
@@ -266,7 +279,7 @@ export function ReadingWorkbench(props: LayoutProps) {
             </>
           )}
         </main>
-      </div>
+      </ContentDrawer>
     </div>
   );
 }

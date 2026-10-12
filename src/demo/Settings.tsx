@@ -114,6 +114,35 @@ export function Settings({
               </div>
             </div>
             <div className="settings-section">
+              <h2>导航展开方式</h2>
+              <p>
+                三套界面共用。点击功能展开工作区，再次点击当前功能可收起；收起不停止任务。
+              </p>
+              <div className="theme-picker">
+                <button
+                  aria-pressed={prefs.navigation === "persistent"}
+                  className={
+                    prefs.navigation === "persistent" ? "selected" : ""
+                  }
+                  onClick={() => update({ navigation: "persistent" })}
+                >
+                  <Icon name="monitor" size={20} />
+                  常驻导航
+                </button>
+                <button
+                  aria-pressed={prefs.navigation === "hover"}
+                  className={prefs.navigation === "hover" ? "selected" : ""}
+                  onClick={() => update({ navigation: "hover" })}
+                >
+                  <Icon name="book" size={20} />
+                  悬停展开
+                </button>
+              </div>
+              <p className="setting-note">
+                悬停模式平时只显示译刻图标；鼠标进入导航或键盘聚焦时展开。已打开的工作区会保持，不会因鼠标离开而消失；触屏可点击图标展开。
+              </p>
+            </div>
+            <div className="settings-section">
               <h2>主题与配色</h2>
               <p>三套主界面和悬浮窗共享配色，切换风格不会重置。</p>
               <div className="theme-picker">
@@ -235,12 +264,18 @@ export function Settings({
         {page === "floating" && (
           <div className="settings-section">
             <h2>悬浮窗样式</h2>
-            <p>独立于主界面选择，共享主题颜色。预览用浏览器边界模拟桌面，尚未创建系统窗口。</p>
+            <p>
+              独立于主界面选择，共享主题颜色。预览用浏览器边界模拟桌面，尚未创建系统窗口。
+            </p>
             <div className="floating-style-picker">
               {(
                 [
                   ["classic", "经典悬浮窗", "保持紧凑卡片与原有入口"],
-                  ["capsule", "胶囊悬浮窗", "独立胶囊，拖到边缘收起，点击书签唤出"],
+                  [
+                    "capsule",
+                    "胶囊悬浮窗",
+                    "独立胶囊，拖到边缘收起，点击书签唤出",
+                  ],
                 ] as const
               ).map(([id, label, hint]) => (
                 <button

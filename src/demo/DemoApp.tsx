@@ -2,6 +2,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useReducer,
   type CSSProperties,
   type KeyboardEvent,
 } from "react";
@@ -19,6 +20,7 @@ import { CaptureDialog } from "./Features";
 import { FloatingPreview } from "./Floating";
 import { Icon } from "./Icon";
 import { usePreview } from "./usePreview";
+import { workspaceReducer } from "./workspace";
 
 function readPreferences(): Preferences {
   try {
@@ -35,7 +37,14 @@ export function DemoApp() {
   const [systemDark, setSystemDark] = useState(
     () => matchMedia("(prefers-color-scheme: dark)").matches,
   );
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [workspace, dispatchWorkspace] = useReducer(workspaceReducer, {
+    open: false,
+    view: "task",
+  });
+  const settingsOpen = workspace.view === "settings";
+  const [motionInput, setMotionInput] = useState<"pointer" | "keyboard">(
+    "pointer",
+  );
   const [settingsPage, setSettingsPage] = useState<SettingsPage>("general");
   const [floatingOpen, setFloatingOpen] = useState(false);
   const [capture, setCapture] = useState<"screenshot" | "subtitle" | null>(
@@ -90,13 +99,32 @@ export function DemoApp() {
           ?.focus();
     };
   }, [floatingOpen]);
+  useEffect(() => {
+    if (workspace.open && !capture && !floatingOpen)
+      root.current
+        ?.querySelector<HTMLElement>("[data-drawer-focus]")
+        ?.focus({ preventScroll: true });
+  }, [
+    workspace.open,
+    workspace.view,
+    controller.state.mode,
+    capture,
+    floatingOpen,
+  ]);
+  const closeDrawer = () => {
+    root.current
+      ?.querySelector<HTMLButtonElement>(".navigation-brand")
+      ?.focus({ preventScroll: true });
+    dispatchWorkspace({ type: "close" });
+  };
   const keyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       if (capture) setCapture(null);
-      else if (settingsOpen) setSettingsOpen(false);
+      else if (settingsOpen && workspace.open)
+        dispatchWorkspace({ type: "back" });
       else if (floatingOpen) {
         setFloatingOpen(false);
-      }
+      } else if (workspace.open) closeDrawer();
     }
     if (capture && event.key === "Tab") {
       const buttons = root.current?.querySelectorAll<HTMLButtonElement>(
@@ -117,7 +145,6 @@ export function DemoApp() {
   };
   const showFloating = () => {
     previousFloatingFocus.current = document.activeElement as HTMLElement;
-    setSettingsOpen(false);
     setFloatingOpen((open) => !open);
   };
   const style = {
@@ -133,8 +160,13 @@ export function DemoApp() {
       className="design-demo"
       data-style={prefs.mainStyle}
       data-tone={tone}
+      data-navigation={prefs.navigation}
+      data-motion-input={motionInput}
       style={style}
       onKeyDown={keyDown}
+      onKeyDownCapture={() => setMotionInput("keyboard")}
+      onPointerDownCapture={() => setMotionInput("pointer")}
+      onPointerOverCapture={() => setMotionInput("pointer")}
     >
       <div className="main-surface" inert={capture ? true : undefined}>
         <div className="layout-surface" inert={floatingOpen ? true : undefined}>
@@ -143,10 +175,20 @@ export function DemoApp() {
             controller={controller}
             tone={tone}
             settingsOpen={settingsOpen}
+            navigation={prefs.navigation}
+            drawerOpen={workspace.open}
+            onCloseDrawer={closeDrawer}
+            onBrand={() =>
+              dispatchWorkspace(
+                workspace.open
+                  ? { type: "close" }
+                  : { type: settingsOpen ? "show-settings" : "back" },
+              )
+            }
             onSettings={() => {
               setSettingsPage("general");
               setFloatingOpen(false);
-              setSettingsOpen((open) => !open);
+              dispatchWorkspace({ type: "settings" });
             }}
             onTheme={() =>
               setPrefs((p) => ({
@@ -157,8 +199,11 @@ export function DemoApp() {
             floatingOpen={floatingOpen}
             onFloating={showFloating}
             onMode={(mode) => {
+              dispatchWorkspace({
+                type: "task",
+                sameMode: controller.state.mode === mode,
+              });
               controller.dispatch({ type: "mode", mode });
-              setSettingsOpen(false);
             }}
             onCapture={setCapture}
           >
@@ -168,7 +213,7 @@ export function DemoApp() {
               onChange={setPrefs}
               controller={controller}
               initialPage={settingsPage}
-              onBack={() => setSettingsOpen(false)}
+              onBack={() => dispatchWorkspace({ type: "back" })}
               onFloating={showFloating}
             />
           </MainLayout>
@@ -181,7 +226,7 @@ export function DemoApp() {
             onSettings={() => {
               setSettingsPage("floating");
               setFloatingOpen(false);
-              setSettingsOpen(true);
+              dispatchWorkspace({ type: "show-settings" });
             }}
             onCapture={setCapture}
             onClose={() => setFloatingOpen(false)}

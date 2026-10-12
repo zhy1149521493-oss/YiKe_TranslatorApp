@@ -6,6 +6,7 @@ import "./layouts.css";
 import "./settings.css";
 import "./floating.css";
 import "./reading.css";
+import "./disclosure.css";
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

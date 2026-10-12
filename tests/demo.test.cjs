@@ -156,3 +156,48 @@ test("capsule docking follows both work-area edges and leaves the center free", 
   assert.equal(dockSide(804, 140, 960), "right");
   assert.equal(dockSide(25, 671, 720), "right");
 });
+
+test("navigation preferences migrate older saved values to persistent navigation", () => {
+  assert.equal(
+    normalizePreferences({ mainStyle: "classic" }).navigation,
+    "persistent",
+  );
+  assert.equal(
+    normalizePreferences({ navigation: "hover" }).navigation,
+    "hover",
+  );
+  for (const navigation of [null, false, 1, "auto", {}])
+    assert.equal(normalizePreferences({ navigation }).navigation, "persistent");
+});
+
+test("workspace toggles the selected task and opens a newly selected task", () => {
+  const { workspaceReducer } = load("demo/workspace");
+  let state = { open: false, view: "task" };
+  state = workspaceReducer(state, { type: "task", sameMode: true });
+  assert.deepEqual(state, { open: true, view: "task" });
+  state = workspaceReducer(state, { type: "task", sameMode: true });
+  assert.deepEqual(state, { open: false, view: "task" });
+  state = workspaceReducer(state, { type: "task", sameMode: false });
+  assert.deepEqual(state, { open: true, view: "task" });
+  state = workspaceReducer(state, { type: "close" });
+  assert.deepEqual(state, { open: false, view: "task" });
+});
+
+test("settings disclosure reopens correctly and cannot toggle the wrong task closed", () => {
+  const { workspaceReducer } = load("demo/workspace");
+  let state = workspaceReducer(
+    { open: true, view: "task" },
+    { type: "settings" },
+  );
+  assert.deepEqual(state, { open: true, view: "settings" });
+  state = workspaceReducer(state, { type: "settings" });
+  assert.deepEqual(state, { open: false, view: "settings" });
+  state = workspaceReducer(state, { type: "show-settings" });
+  assert.deepEqual(state, { open: true, view: "settings" });
+  state = workspaceReducer(state, { type: "task", sameMode: true });
+  assert.deepEqual(state, { open: true, view: "task" });
+  assert.deepEqual(
+    workspaceReducer({ open: false, view: "settings" }, { type: "back" }),
+    { open: true, view: "task" },
+  );
+});
