@@ -2,6 +2,8 @@
 
 YiKe is a Windows desktop translator built with React, TypeScript and Tauri. It translates text using local Ollama models or an OpenAI-compatible API, and includes selection/clipboard translation, screenshot OCR, video subtitle OCR and streaming audio recognition. OCR and ASR are separate recognition components; this repository does not train translation models.
 
+The approved [clay icon assets and Windows installation/rollback](ICONS.md) are isolated on branch `ui/clay-app-icon`; no independent Demo UI is merged.
+
 ## Setup and development
 
 Use Windows 10/11 x64 with WebView2, Node.js compatible with Vite 7, Rust with the MSVC toolchain, and the Windows SDK/C++ build tools. This review used Node.js 24.18.1. Run these commands from the repository root:

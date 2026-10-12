@@ -4,6 +4,10 @@ The stable repair checkpoint is the Git tag `checkpoint/core-repairs-2026-10-08`
 
 The repair commit is `994ddfa73ffc825e28b212b6c86695389264cdf8`. An independent complete-history Git bundle is stored at `E:/TranslatorApp/archives/core-repairs-2026-10-08/source.bundle`. Its refs were verified with `git bundle verify`.
 
+## Icon-only installation
+
+The approved clay Windows file icons are installed with original executables preserved under `E:/TranslatorApp/archives/clay-icon-2026-10-12/originals/`. The earlier checksum below applies to the pre-icon repair build; use the icon archive manifest for current hashes. Source assets live on the isolated `ui/clay-app-icon` branch. See [icon scope, validation and rollback](ICONS.md).
+
 ## Switch the UI only
 
 In `译刻-工作台版.exe`, click **Classic interface** in the title bar (or Settings > General > Interface layout > Classic). Input, translations and settings are retained. Click **Workbench interface** to return. This does not require restarting or replacing files. See [the workbench guide](WORKBENCH.md).
