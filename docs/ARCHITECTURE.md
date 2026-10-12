@@ -4,6 +4,8 @@
 
 `demo.html` and `src/demo/main.tsx` form a separate entry. `model.ts` owns typed fixture state and shared appearance preferences; `usePreview.ts` is an in-memory task/clipboard adapter. Layout, translation, recognition, settings and floating-panel components consume this single controller. They import no production controller or Tauri APIs. `vite.demo.config.ts` builds `dist-demo/`, separately from the main app. See [design demo boundaries and validation](DESIGN_DEMO.md). Native window integration and production configuration migration await user acceptance.
 
+`ReadingWorkbench.tsx` keeps the studio rail/top model bar, shared text-language controls and bottom action. Its editor and paired-reading view share task state. `fixturePairs` accepts only complete, explicitly known sample fixtures; it does not infer alignment from paragraph counts. `Floating.tsx` renders a simulated desktop with a separately movable Capsule launcher and function panel, or the restored Classic header/body. `floatingGeometry.ts` defines the edge threshold against browser bounds; monitor work areas, always-on-top/transparency and native window synchronization are not connected. Both styles use the same appearance tokens as all three main layouts. V2 visual acceptance remains pending.
+
 ## Components
 
 `src/App.tsx` routes to main, translation floating, audio floating or screenshot overlay components using the native window label. The main window owns configuration and provider selection, and orchestrates translation. React and CSS are embedded into the portable executable by the Tauri CLI release build.

@@ -249,33 +249,3 @@ export function TextFlow({ controller }: { controller: PreviewController }) {
     </div>
   );
 }
-export function TranslationCards({
-  controller,
-}: {
-  controller: PreviewController;
-}) {
-  return (
-    <div className="translation-cards">
-      <section className="glass-card">
-        <div className="card-heading">
-          <span>Source Text</span>
-          <LanguageSelect side="src" controller={controller} />
-        </div>
-        <div className="card-content">
-          <TextEditor controller={controller} compact />
-        </div>
-        <SourceActions controller={controller} />
-      </section>
-      <section className="glass-card">
-        <div className="card-heading">
-          <span>Translation</span>
-          <LanguageSelect side="tgt" controller={controller} />
-        </div>
-        <div className="card-content">
-          <ResultBody task={controller.state.tasks.text} />
-        </div>
-        <ResultActions controller={controller} mode="text" />
-      </section>
-    </div>
-  );
-}

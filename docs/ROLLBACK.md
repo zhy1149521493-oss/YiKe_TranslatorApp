@@ -4,6 +4,14 @@
 
 Branch `ui/prototype-demo` is checked out separately at `E:/TranslatorApp-ui-demo`. It has no changes to the production controller, Rust commands or installed executables. Stop the demo server to return to the existing application. Do not copy `dist-demo/` over the production assets. The prior `ui/workbench-redesign` checkout and both existing checkpoint tags remain intact. See [preview setup and acceptance gate](DESIGN_DEMO.md).
 
+`checkpoint/design-demo-v1.1` retains the previously browser-reviewed demo. `checkpoint/design-demo-v2-candidate` retains the next iteration, with compilation/startup checks but **pending visual acceptance**. To inspect V1 without replacing the current checkout:
+
+```powershell
+git worktree add --detach E:/TranslatorApp-demo-v1-review checkpoint/design-demo-v1.1
+```
+
+Run `npm ci` and `npm run demo` in that new directory after stopping the other demo's server (both use port 1431). The complete-history bundle and build of V1.1 remain at `E:/TranslatorApp/archives/design-demo-v1.1/`. The V2 candidate archive is `E:/TranslatorApp/archives/design-demo-v2-candidate/`; it is an implementation checkpoint, not a visually accepted release. No tags were moved and neither version was merged into production.
+
 The stable repair checkpoint is the Git tag `checkpoint/core-repairs-2026-10-08` and branch `archive/core-repairs-2026-10-08`. It includes the eight audited logic repairs, theme-aware scrollbars, regression tests and developer documentation. These references are local; no changes have been pushed to GitHub.
 
 The repair commit is `994ddfa73ffc825e28b212b6c86695389264cdf8`. An independent complete-history Git bundle is stored at `E:/TranslatorApp/archives/core-repairs-2026-10-08/source.bundle`. Its refs were verified with `git bundle verify`.

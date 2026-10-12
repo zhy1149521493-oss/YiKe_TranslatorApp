@@ -235,12 +235,12 @@ export function Settings({
         {page === "floating" && (
           <div className="settings-section">
             <h2>悬浮窗样式</h2>
-            <p>独立于主界面选择。这里演示窗口内部交互，尚未接入桌面窗口。</p>
+            <p>独立于主界面选择，共享主题颜色。预览用浏览器边界模拟桌面，尚未创建系统窗口。</p>
             <div className="floating-style-picker">
               {(
                 [
                   ["classic", "经典悬浮窗", "保持紧凑卡片与原有入口"],
-                  ["capsule", "胶囊悬浮窗", "展开工具胶囊，再打开所需功能"],
+                  ["capsule", "胶囊悬浮窗", "独立胶囊，拖到边缘收起，点击书签唤出"],
                 ] as const
               ).map(([id, label, hint]) => (
                 <button
@@ -264,7 +264,7 @@ export function Settings({
               试用当前悬浮窗
             </button>
             <div className="setting-note">
-              收起不停止任务。关闭音频面板会停止音频演示；其他面板的关闭不代替停止字幕。
+              拖动握柄贴靠左右边缘，点击书签展开功能。收起不停止任务；关闭音频面板会停止音频演示。经典样式的截图、字幕、选区、透明度和关闭按钮保留在窗内。
             </div>
           </div>
         )}

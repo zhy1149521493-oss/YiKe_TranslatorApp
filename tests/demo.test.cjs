@@ -126,3 +126,33 @@ test("stopping one audio preview preserves the other task data", () => {
   assert.equal(state.tasks.audio.result, "final text");
   assert.equal(state.tasks.text, text);
 });
+
+test("paired reading only accepts known complete fixtures, never equal paragraph counts", () => {
+  const { fixturePairs } = load("demo/model");
+  const { sampleResult } = load("demo/model");
+  const task = createPreviewState().tasks.text;
+  assert.equal(fixturePairs(task).length, 4);
+  const long = previewReducer(createPreviewState(), {
+    type: "scenario",
+    scenario: "long",
+  }).tasks.text;
+  assert.equal(fixturePairs(long).length, 48);
+  assert.equal(new Set(fixturePairs(long).map((p) => p.id)).size, 48);
+  assert.equal(fixturePairs({ ...task, phase: "loading" }), null);
+  assert.equal(fixturePairs({ ...task, source: "a\n\nb\n\nc\n\nd" }), null);
+  assert.equal(
+    fixturePairs({ ...task, result: sampleResult + " changed" }),
+    null,
+  );
+  assert.equal(fixturePairs({ ...long, result: sampleResult }), null);
+});
+
+test("capsule docking follows both work-area edges and leaves the center free", () => {
+  const { dockSide } = load("demo/floatingGeometry");
+  assert.equal(dockSide(8, 140, 960), "left");
+  assert.equal(dockSide(24, 140, 960), "left");
+  assert.equal(dockSide(25, 140, 960), null);
+  assert.equal(dockSide(400, 140, 960), null);
+  assert.equal(dockSide(804, 140, 960), "right");
+  assert.equal(dockSide(25, 671, 720), "right");
+});

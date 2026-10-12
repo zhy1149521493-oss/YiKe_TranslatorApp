@@ -128,7 +128,8 @@ select option {
 .design-demo ::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
-.main-surface {
+.main-surface,
+.layout-surface {
   height: 100%;
   width: 100%;
 }

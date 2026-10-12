@@ -1,6 +1,6 @@
 # YiKe developer documentation
 
-The independent [design demo](DESIGN_DEMO.md) previews Poetry, Workbench and Classic layouts plus optional Capsule floating windows. It is not merged into the desktop app; run `npm run demo` in the demo checkout. Main-app setup and behavior below remain unchanged.
+The independent [design demo](DESIGN_DEMO.md) previews Poetry, Workbench and Classic layouts plus independent floating-style selection. The V2 candidate restores studio controls with paper reading surfaces, adds paired fixture reading, and demonstrates capsule edge docking and classic header actions. Compilation and startup checks pass; V2 browser/visual acceptance is pending. It is not merged into the desktop app; run `npm run demo` in the demo checkout. Main-app setup and behavior below remain unchanged.
 
 YiKe is a Windows desktop translator built with React, TypeScript and Tauri. It translates text using local Ollama models or an OpenAI-compatible API, and includes selection/clipboard translation, screenshot OCR, video subtitle OCR and streaming audio recognition. OCR and ASR are separate recognition components; this repository does not train translation models.
 

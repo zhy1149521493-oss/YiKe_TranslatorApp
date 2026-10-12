@@ -2,8 +2,9 @@ import type { ReactNode } from "react";
 import { Icon, IconButton } from "./Icon";
 import { modes, type MainStyle, type Mode, type Tone } from "./model";
 import type { PreviewController } from "./usePreview";
-import { EnginePicker, TextFlow, TranslationCards } from "./Translation";
+import { EnginePicker, TextFlow } from "./Translation";
 import { FeatureView } from "./Features";
+import { ReadingWorkbench } from "./ReadingWorkbench";
 
 export type LayoutProps = {
   controller: PreviewController;
@@ -81,27 +82,16 @@ function WindowControls() {
     </div>
   );
 }
-function Content({
-  props,
-  card = false,
-}: {
-  props: LayoutProps;
-  card?: boolean;
-}) {
+function Content({ props }: { props: LayoutProps }) {
   if (props.settingsOpen) return <>{props.children}</>;
   const mode = props.controller.state.mode;
   return mode === "text" ? (
-    card ? (
-      <TranslationCards controller={props.controller} />
-    ) : (
-      <TextFlow controller={props.controller} />
-    )
+    <TextFlow controller={props.controller} />
   ) : (
     <FeatureView
       mode={mode}
       controller={props.controller}
       onCapture={props.onCapture}
-      card={card}
     />
   );
 }
@@ -127,34 +117,7 @@ export function PoetryLayout(props: LayoutProps) {
   );
 }
 export function WorkbenchLayout(props: LayoutProps) {
-  return (
-    <>
-      <div className="ambient-background" aria-hidden="true">
-        <i />
-        <i />
-        <i />
-      </div>
-      <WindowControls />
-      <div className="workbench-frame">
-        <header className="workbench-toolbar">
-          <div className="brand">
-            <span className="brand-tile">
-              <Icon name="book" size={24} />
-            </span>
-            <span>译刻</span>
-          </div>
-          <ModeNav {...props} />
-          <ToolbarActions {...props} />
-        </header>
-        <main
-          key={props.settingsOpen ? "settings" : props.controller.state.mode}
-          className="workbench-workspace"
-        >
-          <Content props={props} card />
-        </main>
-      </div>
-    </>
-  );
+  return <ReadingWorkbench {...props} />;
 }
 export function ClassicLayout(props: LayoutProps) {
   const { controller } = props;

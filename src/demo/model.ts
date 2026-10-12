@@ -170,6 +170,32 @@ export const createTask = (source = "", result = ""): TaskState => ({
   running: false,
   region: false,
 });
+
+/** Explicit fixture correspondence only; paragraph counts are not an aligner. */
+export function fixturePairs(task: TaskState) {
+  if (task.phase !== "success") return null;
+  const repeats =
+    task.source === sampleSource
+      ? 1
+      : task.source === Array(12).fill(sampleSource).join("\n\n")
+        ? 12
+        : 0;
+  if (
+    !repeats ||
+    task.result !== Array(repeats).fill(sampleResult).join("\n\n")
+  )
+    return null;
+  const source = sampleSource.split("\n\n");
+  const target = sampleResult.split("\n\n");
+  if (source.length !== target.length) return null;
+  return Array.from({ length: repeats }, (_, chapter) =>
+    source.map((text, paragraph) => ({
+      id: `${chapter}-${paragraph}`,
+      source: text,
+      target: target[paragraph],
+    })),
+  ).flat();
+}
 export function createPreviewState(): PreviewState {
   return {
     mode: "text",

@@ -58,139 +58,6 @@
 .poetry-workspace.showing-settings {
   padding: 112px 24px 40px;
 }
-.ambient-background {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-}
-.ambient-background i {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(80px);
-  opacity: 0.4;
-  animation: drift 20s ease-in-out infinite;
-}
-.ambient-background i:nth-child(1) {
-  width: 600px;
-  height: 600px;
-  top: -200px;
-  left: -100px;
-  background: linear-gradient(135deg, #ffb4a1, var(--accent));
-}
-.ambient-background i:nth-child(2) {
-  width: 500px;
-  height: 500px;
-  bottom: -150px;
-  right: -100px;
-  background: linear-gradient(135deg, #a7c7e7, #6b9bd1);
-  animation-delay: -5s;
-}
-.ambient-background i:nth-child(3) {
-  width: 400px;
-  height: 400px;
-  top: 35%;
-  left: 40%;
-  background: linear-gradient(135deg, #f4d1a6, #e8b881);
-  animation-delay: -10s;
-}
-@keyframes drift {
-  33% {
-    transform: translate(50px, -50px) scale(1.1);
-  }
-  66% {
-    transform: translate(-50px, 50px) scale(0.9);
-  }
-}
-.design-demo[data-style="workbench"] {
-  padding: 40px;
-}
-.workbench-frame {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  max-width: 1400px;
-  height: 100%;
-  width: 100%;
-  margin: auto;
-  background: var(--panel);
-  border: 1px solid color-mix(in srgb, var(--panel-solid) 30%, transparent);
-  backdrop-filter: blur(20px);
-  border-radius: 32px;
-  box-shadow: 0 16px 64px color-mix(in srgb, var(--accent) 16%, transparent);
-  overflow: hidden;
-}
-.workbench-toolbar {
-  padding: 20px 28px;
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-  flex-shrink: 0;
-}
-.workbench-toolbar .brand {
-  font-family: Inter, "Microsoft YaHei", sans-serif;
-  font-size: 22px;
-  margin-right: auto;
-  gap: 12px;
-  color: var(--accent);
-}
-.brand-tile {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: linear-gradient(
-    135deg,
-    var(--accent),
-    color-mix(in srgb, var(--accent) 70%, #f4d1a6)
-  );
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 8%, transparent);
-}
-.workbench-toolbar .mode-nav {
-  background: color-mix(in srgb, var(--ink) 5%, transparent);
-  padding: 6px;
-  border-radius: 16px;
-  gap: 6px;
-}
-.workbench-toolbar .mode-nav button {
-  padding: 9px 16px;
-  border-radius: 12px;
-  font-weight: 500;
-}
-.workbench-toolbar .mode-nav button.active {
-  background: linear-gradient(
-    135deg,
-    var(--accent),
-    color-mix(in srgb, var(--accent) 75%, #e89a7e)
-  );
-  color: var(--action-ink);
-  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 8%, transparent);
-}
-.workbench-toolbar .toolbar-actions {
-  gap: 5px;
-}
-.workbench-toolbar .icon-button {
-  width: 34px;
-  height: 34px;
-  border-radius: 12px;
-}
-.workbench-workspace {
-  min-height: 0;
-  flex: 1;
-  padding: 24px;
-  overflow: auto;
-}
-.translation-cards {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px;
-  height: 100%;
-  min-height: 320px;
-}
 .glass-card {
   border: 1px solid var(--line);
   background: var(--panel);
@@ -200,41 +67,6 @@
   overflow: hidden;
   display: flex;
   flex-direction: column;
-}
-.card-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 20px 24px;
-  border-bottom: 1px solid var(--line);
-  gap: 12px;
-  font-weight: 500;
-  font-size: 15px;
-}
-.card-content {
-  flex: 1;
-  min-height: 0;
-  padding: 24px;
-  overflow-y: auto;
-}
-.card-content .source-editor {
-  min-height: 100%;
-  height: 100%;
-  overflow-y: auto;
-  font-family: Inter, "Microsoft YaHei", sans-serif;
-  font-size: var(--reading-size);
-  line-height: 1.8;
-}
-.glass-card > .block-footer {
-  margin: 0;
-  padding: 16px 20px;
-  min-height: 65px;
-}
-.card-content .result-message {
-  height: 100%;
-}
-.card-content .translation-text {
-  line-height: 1.8;
 }
 .feature-document {
   max-width: 720px;
@@ -627,67 +459,14 @@
 .capture-dialog-frame blockquote {
   margin: 32px 0;
 }
-@media (min-width: 1450px) {
-  .design-demo[data-style="workbench"] {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .workbench-frame {
-    height: 85vh;
-  }
-}
-@media (max-width: 1100px) {
-  .workbench-toolbar {
-    padding: 18px 20px;
-    gap: 12px;
-  }
-  .workbench-toolbar .mode-nav button {
-    padding: 8px 12px;
-  }
-  .workbench-toolbar .brand {
-    font-size: 20px;
-    gap: 8px;
-  }
-  .workbench-toolbar .brand-tile {
-    width: 34px;
-    height: 34px;
-  }
-}
+
 @media (max-width: 850px) {
-  .design-demo[data-style="workbench"] {
-    padding: 24px 16px 32px;
-  }
-  .workbench-toolbar {
-    gap: 10px;
-    padding: 16px;
-  }
-  .workbench-toolbar .mode-nav button {
-    padding: 8px 10px;
-    font-size: 13px;
-  }
-  .workbench-toolbar .brand {
-    font-size: 17px;
-  }
-  .workbench-toolbar .brand-tile {
-    display: none;
-  }
-  .workbench-workspace {
-    padding: 16px;
-  }
-  .translation-cards,
   .feature-card-layout {
     gap: 16px;
   }
   .poetry-toolbar {
     gap: 20px;
     padding: 12px 24px;
-  }
-  .card-heading {
-    padding: 16px;
-  }
-  .card-content {
-    padding: 18px;
   }
   .glass-card > .block-footer {
     padding: 12px;
@@ -700,30 +479,8 @@
   }
 }
 @media (max-width: 760px) {
-  .translation-cards {
-    grid-template-columns: 1fr;
-    height: auto;
-  }
-  .translation-cards .glass-card {
-    min-height: 340px;
-  }
-  .card-content .source-editor {
-    height: 230px;
-  }
   .feature-card-layout {
     grid-template-columns: 1fr;
-  }
-  .workbench-toolbar .mode-nav button {
-    padding: 7px 10px;
-  }
-  .workbench-toolbar .mode-nav button svg {
-    display: block;
-  }
-  .workbench-toolbar .mode-nav button span {
-    display: none;
-  }
-  .workbench-toolbar .mode-nav {
-    margin-left: auto;
   }
   .poetry-toolbar {
     gap: 16px;
@@ -797,21 +554,6 @@
   }
   .poetry-toolbar .icon-button {
     width: 28px;
-  }
-  .workbench-toolbar {
-    padding: 12px;
-  }
-  .workbench-toolbar .brand {
-    display: none;
-  }
-  .workbench-toolbar .mode-nav {
-    margin-left: 0;
-  }
-  .workbench-toolbar .toolbar-actions {
-    margin-left: auto;
-  }
-  .workbench-frame {
-    border-radius: 22px;
   }
   .document-flow,
   .feature-document {
