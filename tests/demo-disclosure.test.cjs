@@ -66,6 +66,24 @@ function focusTarget(keyboard) {
 }
 global.matchMedia = () => ({ matches: true });
 
+test("Poetry reveal cannot turn a quick logo press into a task activation", () => {
+  const render = disclosure("poetry");
+  let nav = render();
+  nav.children[0].props.onPointerEnter();
+  nav = render();
+  nav.ref.current = { getBoundingClientRect: () => ({ x: 100, y: 24, width: 800, height: 68 }) };
+  let prevented = 0, stopped = 0;
+  const event = { clientX: 500, clientY: 58,
+    preventDefault: () => prevented++, stopPropagation: () => stopped++ };
+  nav.onPointerDownCapture(event);
+  nav.onClickCapture(event);
+  assert.equal(prevented, 2);
+  assert.equal(stopped, 2);
+  nav.onPointerDownCapture({ ...event, clientX: 260 });
+  nav.onClickCapture(event);
+  assert.equal(prevented, 2, "a deliberate press away from the moving logo is accepted");
+});
+
 test("mouse-focused task buttons do not pin folded navigation after pointer departure", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   for (const variant of ["poetry", "workbench", "classic"]) {

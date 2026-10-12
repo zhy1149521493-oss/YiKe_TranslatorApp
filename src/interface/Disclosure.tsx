@@ -26,6 +26,8 @@ export function NavigationCapsule({
   const ref = useRef<HTMLElement>(null);
   const pressedExpanded = useRef(false);
   const pointerInside = useRef(false);
+  const revealTime = useRef(-Infinity);
+  const suppressClick = useRef(false);
   const [centerShift, setCenterShift] = useState(0);
   const [foldClip, setFoldClip] = useState("inset(0 100% 100% 0 round 21px)");
   const persistent = behavior === "persistent";
@@ -72,6 +74,7 @@ export function NavigationCapsule({
     if (!matchMedia("(hover: hover) and (pointer: fine)").matches) return;
     pointerInside.current = true;
     cancel();
+    if (!expanded) revealTime.current = performance.now();
     setRevealed(true);
   };
   const Tag = variant === "workbench" ? "aside" : "header";
@@ -102,10 +105,29 @@ export function NavigationCapsule({
         cancel();
         timer.current = setTimeout(() => setRevealed(false), 180);
       }}
-      onPointerDownCapture={() => {
+      onPointerDownCapture={(event) => {
         // A mouse/touch press may focus a button without keyboard intent,
         // including a button that was already focused before the press.
         setFocused(false);
+        suppressClick.current = false;
+        // Poetry moves its centered logo left while revealing. A quick press at
+        // the old logo position must not activate the task sliding underneath.
+        if (event && variant === "poetry" && !persistent && !workspaceOpen
+          && performance.now() - revealTime.current < 180) {
+          const rect = ref.current?.getBoundingClientRect();
+          if (rect && Math.abs(event.clientX - rect.x - rect.width / 2) <= 25
+            && Math.abs(event.clientY - rect.y - rect.height / 2) <= 25) {
+            suppressClick.current = true;
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }
+      }}
+      onClickCapture={event => {
+        if (!suppressClick.current) return;
+        suppressClick.current = false;
+        event.preventDefault();
+        event.stopPropagation();
       }}
       onFocusCapture={(event) => {
         // Focus pins navigation separately; it must not cancel a pending

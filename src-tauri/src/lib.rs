@@ -11,6 +11,7 @@ mod audio;
 mod audio_samples;
 mod streaming;
 mod capture_bounds;
+mod main_surface;
 
 /// Job Object 句柄包装:HANDLE(*mut c_void) 本身不是 Send/Sync,
 /// 但内核句柄是进程级资源,跨线程移动/共享安全,显式标记以便放入 managed state。
@@ -1673,7 +1674,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, component_status, download_ocr_models, download_asr_model, download_denoise_model, uninstall_component, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity, audio_set_denoise, audio_get_denoise])
+        .invoke_handler(tauri::generate_handler![main_surface::set_main_surface, greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, component_status, download_ocr_models, download_asr_model, download_denoise_model, uninstall_component, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity, audio_set_denoise, audio_get_denoise])
         .setup(|app| {
             // 【Ollama 启动(Wave 10 便携版)】
             // 1) 先清理上次退出异常留下的"本应用目录" ollama(按 exe 路径匹配,不误杀朋友系统的 Ollama)

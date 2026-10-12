@@ -12,6 +12,8 @@ Persistent navigation is the default. Hover mode folds navigation to the logo af
 
 ## Component and functional mapping
 
+The follow-up [native drawer correction](NATIVE_DRAWER.md) removes the empty desktop rectangle after folding. It clips the main window's painting and hit testing to navigation/logo bounds while retaining the expanded reading canvas. The previous candidate described below remains archived.
+
 | Presentation component | Live state / command | Preserved behavior |
 | --- | --- | --- |
 | `ConnectedMain`, `Layouts`, `Disclosure` | MainWindow mode/settings, local disclosure state | Three silhouettes, workspace pinning, folded selection clearing, keyboard/reduced-motion handling; folding never stops a job |

@@ -14,6 +14,8 @@
 
 ## Components
 
+The main-window [native drawer surface](NATIVE_DRAWER.md) is synchronized by `src/interface/useNativeSurface.ts` and `nativeSurface.ts`. Its main-only `set_main_surface` IPC applies a Windows region in `src-tauri/src/main_surface.rs`; hidden areas neither paint nor intercept desktop input. The WebView keeps its expanded canvas size, so window clipping does not trigger narrow-layout breakpoints or remount business state.
+
 `src/App.tsx` routes to main, translation floating, audio floating or screenshot overlay components using the native window label. The main window owns configuration and provider selection, and orchestrates translation. React and CSS are embedded into the portable executable by the Tauri CLI release build.
 
 `src/interface/` implements the connected Poetry/Workbench/Classic presentation. `controller.ts` defines live view data and explicit commands; MainWindow retains configuration, inference routing, queues and native handlers. `ConnectedMain` owns workspace visibility only. Original settings forms and classic text controls remain slots; native floating components remain in App.tsx. CSS is scoped to `.connected-ui` so auxiliary windows retain their original layout. `src/assets/fonts/` supplies shared offline fonts to production and Demo. `settings.design` stores the new style/navigation separately from the legacy `settings.uiLayout` fallback. See [configuration and functional mapping](INTERFACE_INTEGRATION.md). `scripts/ui-preview.mjs` supplies development-only fixture IPC and is not included in the production frontend.

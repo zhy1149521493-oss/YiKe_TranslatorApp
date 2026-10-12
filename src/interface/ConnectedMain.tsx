@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode, type MouseEvent } from "react";
 import { actionInk } from "./preferences";
 import { MainLayout } from "./Layouts";
+import { useNativeSurface } from "./useNativeSurface";
 import type { InterfaceController } from "./controller";
 import type { MainStyle, Mode, Preferences } from "./model";
 import "./theme.css";
@@ -24,6 +25,7 @@ export function ConnectedMain(props: {
   const [systemDark, setSystemDark] = useState(() => matchMedia("(prefers-color-scheme: dark)").matches);
   const [motion, setMotion] = useState("pointer");
   const root = useRef<HTMLDivElement>(null);
+  useNativeSurface(root);
   const previousMode = useRef(props.controller.state.mode);
   const previousSettings = useRef(props.settingsOpen);
   useEffect(() => {
@@ -58,6 +60,9 @@ export function ConnectedMain(props: {
   return <div ref={root} className="connected-ui" data-style={props.style}
     data-tone={tone} data-navigation={props.navigation} data-workspace-open={open}
     data-motion-input={motion} style={style}
+    onMouseDownCapture={e => {
+      if ((e.target as HTMLElement).closest(".navigation-capsule")) props.onDrag(e);
+    }}
     onKeyDownCapture={() => setMotion("keyboard")} onPointerDownCapture={() => setMotion("pointer")} onPointerMoveCapture={() => setMotion("pointer")}
     onKeyDown={e => { if (e.key === "Escape" && !e.defaultPrevented && !props.ignoreEscape) {
       if (props.settingsOpen) props.onBack(); else fold();

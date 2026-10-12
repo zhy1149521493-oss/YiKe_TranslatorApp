@@ -2,6 +2,8 @@
 
 Connected interface candidate: [three styles, live controls, compatibility and acceptance](docs/INTERFACE_INTEGRATION.md). The independent [design Demo](docs/DESIGN_DEMO.md) remains available; existing portable builds are retained.
 
+The [native drawer correction](docs/NATIVE_DRAWER.md) makes folded navigation the only visible desktop surface and preserves existing workspaces and tasks.
+
 译刻是一款 Windows 桌面翻译软件：文本翻译、划词翻译、截图翻译、视频实时字幕、音频实时翻译（电脑音频 / 麦克风）一个应用全搞定。本地模型离线可用，也可以接 DeepSeek、Kimi、通义等云端 API。
 
 ## 特性

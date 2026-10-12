@@ -1,5 +1,11 @@
 # Local checkpoints and rollback
 
+## Native drawer correction
+
+Branch `fix/native-drawer-surface` extends the connected UI with native clipping. The complete pre-correction source is retained at `checkpoint/design-integration-2026-10-12-candidate`; its separate `译刻-新版界面.exe` and [archive](../../TranslatorApp/archives/design-integration-2026-10-12-candidate/README.md) are untouched. Exit the tray instance before switching executables. There is no config migration; legacy business data and the same three-style design preferences remain compatible. See [behavior and native limitations](NATIVE_DRAWER.md).
+
+The completed correction is tagged `checkpoint/native-drawer-2026-10-12-candidate`, with the executable, complete-history Git bundle and identity manifest in the [native drawer archive](../../TranslatorApp/archives/native-drawer-2026-10-12-candidate/README.md). Run the previous `译刻-新版界面.exe` after tray exit to restore the preceding UI behavior. Source inspection can use a new detached worktree at the pre-correction tag; avoid resetting a checkout containing changes.
+
 ## Connected candidate rollback
 
 `ui/design-integration` in `E:/TranslatorApp-icon-update` connects the approved designs to real handlers. `译刻-新版界面.exe` is a separate local candidate; the original, repair and prior workbench binaries are not overwritten. The prior icon-only checkpoint `checkpoint/clay-icon-2026-10-12` and Demo checkpoint `checkpoint/design-demo-v3.2-candidate` remain intact. The merge base before controller integration is `19548cf`. Commit `a51f70e` contains the connected implementation. Tag `checkpoint/design-integration-2026-10-12-candidate` and the [source/binary archive](../../TranslatorApp/archives/design-integration-2026-10-12-candidate/README.md) preserve the delivery candidate.

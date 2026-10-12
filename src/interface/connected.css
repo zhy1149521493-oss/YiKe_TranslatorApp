@@ -22,6 +22,9 @@
 .connected-ui .reading-topbar { -webkit-app-region: no-drag; }
 
 .connected-ui .native-drag-strip { position: absolute; left: 0; right: 130px; top: 0; height: 18px; z-index: 90; }
+/* Workbench already has a draggable topbar. Its drawer handle occupies this
+   same strip, so a second overlay would intercept the handle's clicks. */
+.connected-ui[data-style="workbench"] .native-drag-strip { pointer-events: none; }
 .connected-ui .connected-feedback:has(.conflict-bar) { bottom: 72px; }
 .connected-ui[data-workspace-open="false"] .connected-feedback { display: none; }
 .connected-ui .settings-center { --ios-label2: var(--muted); --ios-fill: var(--line); }

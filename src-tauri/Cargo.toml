@@ -38,6 +38,7 @@ windows = { version = "0.62", features = [
     # 音频:WASAPI loopback 捕获系统内部播放音频(第7波)
     "Win32_Media_Audio",
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
     # 拖动语音窗:SetCapture/GetCursorPos/SetWindowPos/GetAsyncKeyState

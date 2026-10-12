@@ -1,5 +1,7 @@
 # YiKe developer documentation
 
+The [native drawer correction](NATIVE_DRAWER.md) on `fix/native-drawer-surface` makes folded navigation the only visible and interactive desktop surface. It supersedes the connected candidate's content-only folding behavior.
+
 The approved three-style UI is now connected to the real desktop controller on isolated branch `ui/design-integration`. See [connected controls, configuration compatibility and pending desktop acceptance](INTERFACE_INTEGRATION.md). The independent [design Demo](DESIGN_DEMO.md) remains available for comparison. The prior executables and source checkpoints remain available for rollback.
 
 YiKe is a Windows desktop translator built with React, TypeScript and Tauri. It translates text using local Ollama models or an OpenAI-compatible API, and includes selection/clipboard translation, screenshot OCR, video subtitle OCR and streaming audio recognition. OCR and ASR are separate recognition components; this repository does not train translation models.
