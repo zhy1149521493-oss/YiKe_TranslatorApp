@@ -589,3 +589,77 @@
     padding: 5px 10px;
   }
 }
+
+/* Source identity is explicit in both recognition and translation panels. */
+.audio-source-cards {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  min-width: 0;
+}
+.audio-source-cards[data-channels="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.feature-source-cards {
+  flex: 1;
+}
+.audio-source-block,
+.audio-channel-result {
+  min-width: 0;
+}
+.audio-channel-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  color: var(--accent);
+}
+.audio-source-cards .section-heading {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.audio-source-cards .recognized-source {
+  margin-bottom: 0;
+}
+.audio-results-stack {
+  display: grid;
+  gap: 24px;
+  min-width: 0;
+}
+.audio-results-stack[data-channels="2"] {
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+.feature-card-layout .audio-results-stack {
+  align-self: stretch;
+}
+.feature-card-layout .audio-results-stack .feature-results {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.audio-channel-result > .translation-text,
+.audio-channel-result > .result-message {
+  flex: 1;
+}
+.feature-card-layout .audio-channel-result > .translation-text {
+  max-height: min(36vh, 360px);
+  overflow: auto;
+}
+.feature-recognition-layout {
+  align-items: stretch;
+}
+@media (max-width: 1000px) {
+  .feature-source-cards .feature-recognized-source {
+    padding: 16px;
+  }
+}
+@media (max-width: 760px) {
+  .audio-results-stack {
+    gap: 16px;
+  }
+}
+@media (max-width: 540px) {
+  .audio-source-cards[data-channels="2"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

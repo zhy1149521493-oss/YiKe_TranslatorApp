@@ -222,7 +222,6 @@ export function DemoApp() {
         {floatingOpen && (
           <FloatingPreview
             key={prefs.floatingStyle}
-            prefs={prefs}
             controller={controller}
             onSettings={() => {
               setSettingsPage("floating");

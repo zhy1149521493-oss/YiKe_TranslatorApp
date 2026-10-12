@@ -4,6 +4,11 @@ import {
   previewReducer,
   sampleResult,
   sampleSource,
+  audioChannels,
+  audioFixtures,
+  selectedAudioChannels,
+  type AudioChannel,
+  type AudioSource,
   type Mode,
   type Scenario,
 } from "./model";
@@ -23,12 +28,45 @@ export function usePreview() {
   const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const previousText = useRef(sampleSource);
   const clipboard = useRef(sampleSource);
+  const audioChoice = useRef(state.audioSource);
+  audioChoice.current = state.audioSource;
+  const audioTimers = useRef<
+    Partial<Record<AudioChannel, ReturnType<typeof setTimeout>>>
+  >({});
   const invalidate = useCallback((mode: Mode) => {
+    if (mode === "audio") {
+      Object.values(audioTimers.current).forEach(clearTimeout);
+      audioTimers.current = {};
+    }
     clearTimeout(timers.current[mode]);
     delete timers.current[mode];
   }, []);
+  const startAudio = useCallback(
+    (source: AudioSource, preserve = false) => {
+      invalidate("audio");
+      dispatch({ type: "audio-start", source, preserve });
+      for (const channel of selectedAudioChannels(source)) {
+        audioTimers.current[channel] = setTimeout(
+          () => {
+            dispatch({
+              type: "audio-task",
+              channel,
+              patch: { ...audioFixtures[channel], phase: "success" },
+            });
+            delete audioTimers.current[channel];
+          },
+          channel === "system" ? 900 : 1300,
+        );
+      }
+    },
+    [invalidate],
+  );
   const run = useCallback(
     (mode: Mode, source?: string) => {
+      if (mode === "audio") {
+        startAudio(audioChoice.current);
+        return;
+      }
       if (mode === "text") clearTimeout(debounce.current);
       invalidate(mode);
       dispatch({
@@ -37,24 +75,20 @@ export function usePreview() {
         patch: {
           phase: "loading",
           result: "",
-          running: mode === "audio" || mode === "subtitle",
+          running: mode === "subtitle",
         },
       });
       timers.current[mode] = setTimeout(() => {
         const fixtureSource =
           mode === "text"
             ? (source ?? "")
-            : mode === "audio"
-              ? "Good design makes everyday things feel effortless."
-              : "The best way to predict the future is to invent it.";
+            : "The best way to predict the future is to invent it.";
         const result =
           mode === "text"
             ? fixtureSource === sampleSource
               ? sampleResult
               : "这是一段固定演示译文，用于检查排版与交互。\n\n真实翻译将在 Demo 验收后接入；现在输入的文字不会发送到模型或外部服务。"
-            : mode === "audio"
-              ? "好的设计，让日常之事变得轻松自然。"
-              : "预测未来的最好方法就是创造它。";
+            : "预测未来的最好方法就是创造它。";
         dispatch({
           type: "task",
           mode,
@@ -63,7 +97,7 @@ export function usePreview() {
         delete timers.current[mode];
       }, 900);
     },
-    [invalidate],
+    [invalidate, startAudio],
   );
   const edit = (text: string) => {
     invalidate("text");
@@ -83,6 +117,8 @@ export function usePreview() {
     () => () => {
       clearTimeout(debounce.current);
       Object.values(timers.current).forEach(clearTimeout);
+      for (const channel of audioChannels)
+        clearTimeout(audioTimers.current[channel]);
     },
     [],
   );
@@ -94,6 +130,10 @@ export function usePreview() {
   const stop = (mode: Mode) => {
     if (mode === "text") clearTimeout(debounce.current);
     invalidate(mode);
+    if (mode === "audio") {
+      dispatch({ type: "audio-stop" });
+      return;
+    }
     dispatch({ type: "task", mode, patch: { running: false, phase: "idle" } });
   };
   const scenario = (value: Scenario) => {
@@ -115,6 +155,11 @@ export function usePreview() {
     setNotice,
     edit,
     run,
+    selectAudioSource: (source: AudioSource) => {
+      audioChoice.current = source;
+      if (state.tasks.audio.running) startAudio(source, true);
+      else dispatch({ type: "audio", source });
+    },
     stop,
     scenario,
     composing,

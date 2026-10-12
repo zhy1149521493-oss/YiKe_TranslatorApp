@@ -264,43 +264,16 @@ export function Settings({
         )}
         {page === "floating" && (
           <div className="settings-section">
-            <h2>悬浮窗样式</h2>
+            <h2>经典悬浮窗</h2>
             <p>
-              独立于主界面选择，共享主题颜色。预览用浏览器边界模拟桌面，尚未创建系统窗口。
+              三套主界面统一使用经典悬浮窗，共享主题颜色。浏览器预览尚未创建系统窗口。
             </p>
-            <div className="floating-style-picker">
-              {(
-                [
-                  ["classic", "经典悬浮窗", "保持紧凑卡片与原有入口"],
-                  [
-                    "capsule",
-                    "胶囊悬浮窗",
-                    "独立胶囊，拖到边缘收起，点击书签唤出",
-                  ],
-                ] as const
-              ).map(([id, label, hint]) => (
-                <button
-                  key={id}
-                  className={prefs.floatingStyle === id ? "selected" : ""}
-                  aria-pressed={prefs.floatingStyle === id}
-                  onClick={() => update({ floatingStyle: id })}
-                >
-                  <span className={`floating-miniature ${id}`}>
-                    <i />
-                    <i />
-                    <i />
-                  </span>
-                  <b>{label}</b>
-                  <small>{hint}</small>
-                </button>
-              ))}
-            </div>
             <button className="primary-button" onClick={onFloating}>
               <Icon name="windows" size={17} />
-              试用当前悬浮窗
+              试用经典悬浮窗
             </button>
             <div className="setting-note">
-              拖动握柄贴靠左右边缘，点击书签展开功能。收起不停止任务；关闭音频面板会停止音频演示。经典样式的截图、字幕、选区、透明度和关闭按钮保留在窗内。
+              截图、字幕、选区、透明度和关闭按钮保留在经典翻译窗内。音频使用独立窗口，双路文本分别显示；收起音频窗不停止任务，关闭会停止音频演示。
             </div>
           </div>
         )}

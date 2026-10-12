@@ -4,7 +4,7 @@ The user supplied `E:/TranslatorApp/图标.svg`: two overlapping speech bubbles 
 
 - `yike-app.svg` preserves the original drawing, transparent canvas and embedded provenance metadata. Only the independent bottom-right watermark group at `translate(855,972) scale(1)` was removed at the user's request. No crop or replacement patch was applied.
 - An identical cleaned export is saved as `E:/TranslatorApp/图标-无水印.svg`.
-- `../BrandMark.tsx` redraws the same motif as small outline geometry using `currentColor`. Main navigation, the floating launcher and edge bookmark, and the hover-navigation setting use this mark. Functional icons retain their meanings.
+- `../BrandMark.tsx` redraws the same motif as small outline geometry using `currentColor`. Main navigation and the hover-navigation setting use this mark. Earlier checkpoints also used it in the retired Capsule floating launcher. Functional icons retain their meanings.
 - `demo.html` uses the cleaned full-color SVG as its favicon. Production native/tray/executable icons are unchanged pending integration acceptance.
 - Raster inspection evidence is in [the demo guide](../../../docs/DESIGN_DEMO.md). Full-page visual acceptance remains pending.
 

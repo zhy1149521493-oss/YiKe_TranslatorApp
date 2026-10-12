@@ -1,5 +1,6 @@
 import { Icon } from "./Icon";
-import { modes, type Mode } from "./model";
+import { modes, selectedAudioChannels, audioLabels, type Mode } from "./model";
+import { AudioRecognized, AudioTranslations } from "./AudioTranscript";
 import type { PreviewController } from "./usePreview";
 import {
   Ornament,
@@ -19,9 +20,15 @@ export function FeatureControls({
 }) {
   const task = controller.state.tasks[mode];
   const isRunning = task.running || task.phase === "loading";
-  const supportedAudio = ["auto", "zh", "en", "ja", "ko"].includes(
-    controller.state.src,
+  const unsupported = selectedAudioChannels(
+    controller.state.audioSource,
+  ).filter(
+    (channel) =>
+      !["auto", "zh", "en", "ja", "ko"].includes(
+        controller.state.audioChannels[channel].src,
+      ),
   );
+  const supportedAudio = unsupported.length === 0;
   return (
     <>
       {mode === "audio" && (
@@ -36,9 +43,7 @@ export function FeatureControls({
             <button
               key={value}
               aria-pressed={controller.state.audioSource === value}
-              onClick={() =>
-                controller.dispatch({ type: "audio", source: value })
-              }
+              onClick={() => controller.selectAudioSource(value)}
             >
               <Icon name={icon} size={17} />
               {label}
@@ -99,7 +104,8 @@ export function FeatureControls({
       </div>
       {mode === "audio" && !supportedAudio && (
         <p className="mode-warning">
-          音频识别支持自动检测、中文、英语、日语和韩语，请调整源语言。
+          {unsupported.map((channel) => audioLabels[channel]).join("、")}
+          的识别语言不受支持。请选择自动检测、中文、英语、日语或韩语。
         </p>
       )}
     </>
@@ -197,7 +203,7 @@ export function FeatureView({
 }) {
   const meta = modes.find((m) => m.id === mode)!;
   const task = controller.state.tasks[mode];
-  const sourceOnLeft = card && mode === "audio";
+  const sourceOnLeft = card;
   const controlCard = (
     <section
       className={
@@ -223,34 +229,45 @@ export function FeatureView({
   );
   return (
     <div
-      className={`feature-document${card ? " feature-card-layout" : ""}${sourceOnLeft ? " feature-audio-layout" : ""}`}
+      className={`feature-document${card ? " feature-card-layout feature-recognition-layout" : ""}`}
     >
       {sourceOnLeft ? (
         <div className="feature-left-column">
           {controlCard}
-          <section
-            className="glass-card feature-audio-source"
-            aria-label="听见的原文"
-          >
-            <RecognizedText mode={mode} controller={controller} />
-          </section>
+          {mode === "audio" ? (
+            <AudioRecognized controller={controller} card />
+          ) : (
+            <section
+              className="glass-card feature-recognized-source"
+              aria-label="识别文本"
+            >
+              <RecognizedText mode={mode} controller={controller} />
+            </section>
+          )}
         </div>
       ) : (
         controlCard
       )}
       {!card && <Ornament />}
-      <section
-        className={card ? "glass-card feature-results" : "feature-results"}
-      >
-        {!sourceOnLeft && (
-          <RecognizedText mode={mode} controller={controller} />
-        )}
-        <SectionHeading side="tgt" controller={controller}>
-          Translation
-        </SectionHeading>
-        <ResultBody task={task} />
-        <ResultActions controller={controller} mode={mode} />
-      </section>
+      {mode === "audio" ? (
+        <>
+          {!sourceOnLeft && <AudioRecognized controller={controller} />}
+          <AudioTranslations controller={controller} card={card} />
+        </>
+      ) : (
+        <section
+          className={card ? "glass-card feature-results" : "feature-results"}
+        >
+          {!sourceOnLeft && (
+            <RecognizedText mode={mode} controller={controller} />
+          )}
+          <SectionHeading side="tgt" controller={controller}>
+            Translation
+          </SectionHeading>
+          <ResultBody task={task} />
+          <ResultActions controller={controller} mode={mode} />
+        </section>
+      )}
     </div>
   );
 }

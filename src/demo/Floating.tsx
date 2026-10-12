@@ -6,12 +6,11 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Icon, IconButton } from "./Icon";
-import { BrandMark } from "./BrandMark";
-import { clampPanel, modes, type Mode, type Preferences } from "./model";
-import { dockSide } from "./floatingGeometry";
+import { clampPanel, modes, type Mode } from "./model";
 import type { PreviewController } from "./usePreview";
 import { ResultBody, TextEditor } from "./Translation";
 import { FeatureControls } from "./Features";
+import { AudioRecognized, AudioTranslations } from "./AudioTranscript";
 
 function usePanelDrag(
   initial = { x: Math.max(8, window.innerWidth - 510), y: 165 },
@@ -183,15 +182,23 @@ function FloatingPanel({
                 controller={controller}
                 onCapture={onCapture}
               />
-              <div className="floating-source" dir="auto">
-                {task.source || "开始演示后，原文会显示在这里。"}
-              </div>
+              {mode === "audio" ? (
+                <AudioRecognized controller={controller} />
+              ) : (
+                <div className="floating-source" dir="auto">
+                  {task.source || "开始演示后，原文会显示在这里。"}
+                </div>
+              )}
             </>
           )}
-          <div className="floating-result">
-            <div className="floating-section-label">译文</div>
-            <ResultBody task={task} />
-          </div>
+          {mode === "audio" ? (
+            <AudioTranslations controller={controller} />
+          ) : (
+            <div className="floating-result">
+              <div className="floating-section-label">译文</div>
+              <ResultBody task={task} />
+            </div>
+          )}
           <footer>
             <span>
               {task.running ? "演示任务运行中" : "仅预览 · 无真实设备访问"}
@@ -209,24 +216,20 @@ function FloatingPanel({
   );
 }
 export function FloatingPreview({
-  prefs,
   controller,
   onSettings,
   onCapture,
   onClose,
 }: {
-  prefs: Preferences;
   controller: PreviewController;
   onSettings: () => void;
   onCapture: (mode: "screenshot" | "subtitle") => void;
   onClose: () => void;
 }) {
-  const [panelMode, setPanelMode] = useState<Mode | null>(
-    prefs.floatingStyle === "classic" ? "text" : null,
-  );
-  const closePanel = () => {
-    if (panelMode === "audio") controller.stop("audio");
-    setPanelMode(null);
+  const audio = controller.state.mode === "audio";
+  const exit = () => {
+    if (audio) controller.stop("audio");
+    onClose();
   };
   return (
     <div
@@ -236,8 +239,7 @@ export function FloatingPreview({
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.stopPropagation();
-          closePanel();
-          onClose();
+          exit();
         }
       }}
     >
@@ -245,16 +247,10 @@ export function FloatingPreview({
         <div>
           <Icon name="monitor" size={17} />
           <span>
-            桌面浮窗预览<small>浏览器模拟桌面边界 · 未创建系统窗口</small>
+            经典浮窗预览<small>浏览器模拟桌面边界 · 未创建系统窗口</small>
           </span>
         </div>
-        <button
-          className="quiet-button"
-          onClick={() => {
-            closePanel();
-            onClose();
-          }}
-        >
+        <button className="quiet-button" onClick={exit}>
           <Icon name="back" size={15} />
           返回应用
         </button>
@@ -268,200 +264,33 @@ export function FloatingPreview({
         </h2>
         <div />
         <p>
-          把胶囊拖到左边或右边，
+          经典浮窗，保持熟悉的入口。
           <br />
-          需要时，再从边缘轻轻唤出。
+          拖动标题栏调整位置。
         </p>
       </div>
-      {prefs.floatingStyle === "capsule" && (
-        <CapsuleLauncher
-          panelMode={panelMode}
-          onSelect={setPanelMode}
+      {audio ? (
+        <FloatingPanel
+          mode="audio"
+          controller={controller}
+          onClose={exit}
           onSettings={onSettings}
-          onClose={() => {
-            closePanel();
-            onClose();
-          }}
+          onCapture={onCapture}
         />
-      )}
-      {prefs.floatingStyle === "classic" && (
+      ) : (
         <ClassicFloating
           controller={controller}
           onCapture={onCapture}
-          onClose={onClose}
-        />
-      )}
-      {prefs.floatingStyle === "capsule" && panelMode && (
-        <FloatingPanel
-          key={panelMode}
-          mode={panelMode}
-          controller={controller}
-          onClose={closePanel}
-          onSettings={onSettings}
-          onCapture={onCapture}
+          onClose={exit}
         />
       )}
       <div className="floating-preview-caption">
         <Icon name="windows" size={13} />
-        {prefs.floatingStyle === "capsule"
-          ? "拖动胶囊的握柄贴边 · 点击边缘书签唤出 · 面板独立移动"
-          : "经典窗内按钮 · 拖动标题移动 · 右下角缩放"}
+        经典模式 · 控件保留在窗内 · 关闭音频窗会停止演示
       </div>
     </div>
   );
 }
-
-function CapsuleLauncher({
-  panelMode,
-  onSelect,
-  onSettings,
-  onClose,
-}: {
-  panelMode: Mode | null;
-  onSelect: (mode: Mode) => void;
-  onSettings: () => void;
-  onClose: () => void;
-}) {
-  const drag = usePanelDrag({
-    x: Math.max(8, window.innerWidth - 175),
-    y: 145,
-  });
-  const [expanded, setExpanded] = useState(false);
-  const [dock, setDock] = useState<"left" | "right" | null>(null);
-  const [peek, setPeek] = useState(false);
-  const hidden = !!dock && !peek;
-  const edgeRef = useRef<HTMLButtonElement>(null);
-  const keyboardPeek = useRef(false);
-  useEffect(() => {
-    if (hidden) edgeRef.current?.focus();
-    else if (peek && keyboardPeek.current)
-      drag.ref.current?.querySelector<HTMLElement>(".capsule-grip")?.focus();
-  }, [hidden, peek]);
-  const dockAt = (side: "left" | "right") => {
-    setDock(side);
-    setPeek(false);
-  };
-  return (
-    <>
-      {hidden && (
-        <button
-          ref={edgeRef}
-          className={`capsule-edge-tab ${dock}`}
-          style={{
-            top: Math.min(
-              drag.position.y,
-              Math.max(8, window.innerHeight - 110),
-            ),
-          }}
-          aria-label="唤出贴边胶囊"
-          onClick={(event) => {
-            keyboardPeek.current = event.detail === 0;
-            setPeek(true);
-            setExpanded(true);
-          }}
-        >
-          <BrandMark size={20} />
-          <span>译刻</span>
-        </button>
-      )}
-      <div
-        ref={drag.ref}
-        className={`floating-capsule${expanded ? "" : " folded"}${drag.dragging ? " dragging" : ""}`}
-        style={{
-          left:
-            dock === "left" ? 8 : dock === "right" ? "auto" : drag.position.x,
-          right: dock === "right" ? 8 : undefined,
-          top: drag.position.y,
-          visibility: hidden ? "hidden" : undefined,
-        }}
-        inert={hidden ? true : undefined}
-        onMouseLeave={(event) => {
-          if (
-            dock &&
-            !drag.dragging &&
-            !event.currentTarget.contains(document.activeElement)
-          )
-            setPeek(false);
-        }}
-      >
-        <span
-          className="capsule-grip"
-          role="button"
-          tabIndex={0}
-          aria-label="拖动胶囊，靠近左右边缘后贴边；方向键移动"
-          onPointerDown={(e) => {
-            setDock(null);
-            setPeek(false);
-            drag.onPointerDown(e);
-          }}
-          onPointerMove={drag.onPointerMove}
-          onPointerUp={() => {
-            drag.onPointerUp();
-            const rect = drag.ref.current?.getBoundingClientRect();
-            if (rect) {
-              const side = dockSide(rect.left, rect.width, window.innerWidth);
-              if (side) dockAt(side);
-            }
-          }}
-          onPointerCancel={drag.onPointerUp}
-          onLostPointerCapture={drag.onLostPointerCapture}
-          onKeyDown={(e) => {
-            if (e.key.startsWith("Arrow")) setDock(null);
-            drag.onKeyDown(e);
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              dockAt("right");
-            }
-          }}
-        >
-          <Icon name="grip" size={16} />
-        </span>
-        <button
-          className="capsule-brand"
-          aria-label={expanded ? "收起功能胶囊" : "展开功能胶囊"}
-          aria-expanded={expanded}
-          onClick={() => setExpanded(!expanded)}
-        >
-          <BrandMark size={24} />
-          <span>译刻</span>
-        </button>
-        {expanded && (
-          <nav className="capsule-functions" aria-label="悬浮胶囊功能">
-            <span className="capsule-separator" />
-            {modes.map((mode) => (
-              <button
-                key={mode.id}
-                aria-label={mode.label}
-                aria-pressed={panelMode === mode.id}
-                className={panelMode === mode.id ? "active" : ""}
-                onClick={() => {
-                  onSelect(mode.id);
-                  if (dock) setPeek(false);
-                }}
-              >
-                <Icon name={mode.icon} size={16} />
-                <span>{mode.short}</span>
-              </button>
-            ))}
-            <span className="capsule-separator" />
-            <IconButton
-              icon="back"
-              label="胶囊贴靠右侧边缘"
-              onClick={() => dockAt("right")}
-            />
-            <IconButton
-              icon="settings"
-              label="悬浮窗设置"
-              onClick={onSettings}
-            />
-            <IconButton icon="close" label="关闭悬浮窗演示" onClick={onClose} />
-          </nav>
-        )}
-      </div>
-    </>
-  );
-}
-
 function ClassicFloating({
   controller,
   onCapture,

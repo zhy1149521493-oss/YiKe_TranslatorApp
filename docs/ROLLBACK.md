@@ -28,6 +28,14 @@ The stable repair checkpoint is the Git tag `checkpoint/core-repairs-2026-10-08`
 
 The repair commit is `994ddfa73ffc825e28b212b6c86695389264cdf8`. An independent complete-history Git bundle is stored at `E:/TranslatorApp/archives/core-repairs-2026-10-08/source.bundle`. Its refs were verified with `git bundle verify`.
 
+`checkpoint/design-demo-before-recognition-split` preserves commit `756fab3`, before the screenshot/video source relocation, independent audio-channel cards and removal of Capsule floating previews. `checkpoint/design-demo-v3.2-candidate` preserves the new candidate, with its [source/build archive](../../TranslatorApp/archives/design-demo-v3.2-candidate/README.md). Both are implementation checkpoints; browser/visual acceptance remains pending. To inspect the previous candidate without resetting current work:
+
+```powershell
+git worktree add --detach E:/TranslatorApp-demo-before-recognition-split checkpoint/design-demo-before-recognition-split
+```
+
+Run the old demo on a different port or stop the current server first. Old Capsule floating behavior remains recoverable through this checkpoint and earlier archives. Only demo appearance storage is normalized in the new candidate; no production settings are migrated.
+
 ## Switch the UI only
 
 In `译刻-工作台版.exe`, click **Classic interface** in the title bar (or Settings > General > Interface layout > Classic). Input, translations and settings are retained. Click **Workbench interface** to return. This does not require restarting or replacing files. See [the workbench guide](WORKBENCH.md).

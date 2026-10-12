@@ -5,9 +5,25 @@ export type Tone = "light" | "dark";
 export type Scenario = "sample" | "empty" | "loading" | "error" | "long";
 export type Phase = "idle" | "loading" | "success" | "error";
 export type AudioSource = "system" | "mic" | "both";
+export type AudioChannel = Exclude<AudioSource, "both">;
+export const audioChannels = ["system", "mic"] as const;
+export const selectedAudioChannels = (
+  source: AudioSource,
+): readonly AudioChannel[] => (source === "both" ? audioChannels : [source]);
+export const audioLabels = { system: "电脑音频", mic: "麦克风" } as const;
+export const audioFixtures = {
+  system: {
+    source: "Good design makes everyday things feel effortless.",
+    result: "好的设计，让日常之事变得轻松自然。",
+  },
+  mic: {
+    source: "Could you explain that last point again?",
+    result: "可以再解释一下刚才那一点吗？",
+  },
+} as const;
 export type Preferences = {
   mainStyle: MainStyle;
-  floatingStyle: "classic" | "capsule";
+  floatingStyle: "classic";
   navigation: "persistent" | "hover";
   theme: Theme;
   accent: "clay" | "ocean" | "forest" | "custom";
@@ -19,7 +35,7 @@ export type Preferences = {
 export const STORAGE_KEY = "yike-design-demo-v1";
 export const defaults: Preferences = {
   mainStyle: "poetry",
-  floatingStyle: "capsule",
+  floatingStyle: "classic",
   navigation: "persistent",
   theme: "light",
   accent: "clay",
@@ -52,7 +68,7 @@ export function normalizePreferences(value: unknown): Preferences {
     )
       ? (raw.mainStyle as MainStyle)
       : defaults.mainStyle,
-    floatingStyle: raw.floatingStyle === "classic" ? "classic" : "capsule",
+    floatingStyle: "classic",
     navigation: raw.navigation === "hover" ? "hover" : "persistent",
     theme: ["light", "dark", "system"].includes(String(raw.theme))
       ? (raw.theme as Theme)
@@ -163,6 +179,7 @@ export type PreviewState = {
   src: string;
   tgt: string;
   audioSource: AudioSource;
+  audioChannels: Record<AudioChannel, TaskState & { src: string; tgt: string }>;
   scenario: Scenario;
   model: string;
 };
@@ -211,6 +228,10 @@ export function createPreviewState(): PreviewState {
     src: "auto",
     tgt: "zh",
     audioSource: "system",
+    audioChannels: {
+      system: { ...createTask(), src: "auto", tgt: "zh" },
+      mic: { ...createTask(), src: "auto", tgt: "zh" },
+    },
     scenario: "sample",
     model: "HY-MT2 · 本地",
   };
@@ -223,6 +244,15 @@ export type PreviewAction =
   | { type: "language"; side: "src" | "tgt"; value: string }
   | { type: "swap" }
   | { type: "audio"; source: AudioSource }
+  | { type: "audio-start"; source: AudioSource; preserve?: boolean }
+  | { type: "audio-stop" }
+  | { type: "audio-task"; channel: AudioChannel; patch: Partial<TaskState> }
+  | {
+      type: "audio-language";
+      channel: AudioChannel;
+      side: "src" | "tgt";
+      value: string;
+    }
   | { type: "model"; model: string };
 export function previewReducer(
   state: PreviewState,
@@ -259,10 +289,106 @@ export function previewReducer(
         ? state
         : { ...state, src: state.tgt, tgt: state.src };
     case "audio":
-      return { ...state, audioSource: action.source };
+      return summarizeAudio({ ...state, audioSource: action.source });
+    case "audio-language":
+      return {
+        ...state,
+        audioChannels: {
+          ...state.audioChannels,
+          [action.channel]: {
+            ...state.audioChannels[action.channel],
+            [action.side]: action.value,
+          },
+        },
+      };
+    case "audio-task":
+      return summarizeAudio({
+        ...state,
+        audioChannels: {
+          ...state.audioChannels,
+          [action.channel]: {
+            ...state.audioChannels[action.channel],
+            ...action.patch,
+          },
+        },
+      });
+    case "audio-start": {
+      const selected = selectedAudioChannels(action.source);
+      const channels = { ...state.audioChannels };
+      for (const channel of audioChannels) {
+        const task = channels[channel];
+        const active = selected.includes(channel);
+        channels[channel] = {
+          ...task,
+          running: active,
+          phase: active
+            ? action.preserve && task.result
+              ? "success"
+              : "loading"
+            : task.phase === "loading"
+              ? "idle"
+              : task.phase,
+          ...(active && !action.preserve ? { source: "", result: "" } : {}),
+        };
+      }
+      return summarizeAudio({
+        ...state,
+        audioSource: action.source,
+        audioChannels: channels,
+      });
+    }
+    case "audio-stop": {
+      const channels = { ...state.audioChannels };
+      for (const channel of audioChannels)
+        channels[channel] = {
+          ...channels[channel],
+          running: false,
+          phase:
+            channels[channel].phase === "loading"
+              ? "idle"
+              : channels[channel].phase,
+        };
+      return summarizeAudio({ ...state, audioChannels: channels });
+    }
     case "model":
       return { ...state, model: action.model };
     case "scenario": {
+      if (state.mode === "audio") {
+        const channels = { ...state.audioChannels };
+        for (const channel of selectedAudioChannels(state.audioSource)) {
+          const fixture = audioFixtures[channel];
+          const source =
+            action.scenario === "empty"
+              ? ""
+              : action.scenario === "long"
+                ? Array(24).fill(fixture.source).join("\n\n")
+                : fixture.source;
+          const result =
+            action.scenario === "sample"
+              ? fixture.result
+              : action.scenario === "long"
+                ? Array(24).fill(fixture.result).join("\n\n")
+                : "";
+          channels[channel] = {
+            ...channels[channel],
+            ...createTask(source, result),
+            phase:
+              action.scenario === "loading"
+                ? "loading"
+                : action.scenario === "error"
+                  ? "error"
+                  : result
+                    ? "success"
+                    : "idle",
+            running: action.scenario === "loading",
+          };
+        }
+        return summarizeAudio({
+          ...state,
+          scenario: action.scenario,
+          audioChannels: channels,
+        });
+      }
       const source =
         action.scenario === "empty"
           ? ""
@@ -298,6 +424,41 @@ export function previewReducer(
       };
     }
   }
+}
+/** Compatibility summary for shared task status; channel data remains independent. */
+function summarizeAudio(state: PreviewState): PreviewState {
+  const selected = selectedAudioChannels(state.audioSource);
+  const tasks = selected.map((channel) => state.audioChannels[channel]);
+  const text = (field: "source" | "result") =>
+    selected
+      .map((channel) => {
+        const value = state.audioChannels[channel][field];
+        return value && selected.length > 1
+          ? `${audioLabels[channel]}\n${value}`
+          : value;
+      })
+      .filter(Boolean)
+      .join("\n\n");
+  const phase: Phase = tasks.some((task) => task.phase === "loading")
+    ? "loading"
+    : tasks.some((task) => task.phase === "error")
+      ? "error"
+      : tasks.some((task) => task.result)
+        ? "success"
+        : "idle";
+  return {
+    ...state,
+    tasks: {
+      ...state.tasks,
+      audio: {
+        ...state.tasks.audio,
+        source: text("source"),
+        result: text("result"),
+        phase,
+        running: tasks.some((task) => task.running),
+      },
+    },
+  };
 }
 export function clampPanel(
   x: number,

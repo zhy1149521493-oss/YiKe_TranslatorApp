@@ -309,73 +309,6 @@ input[type="range"] {
   min-height: 28px;
   padding: 4px 10px;
 }
-.floating-style-picker {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin-bottom: 24px;
-}
-.floating-style-picker > button {
-  display: flex;
-  flex-direction: column;
-  text-align: left;
-  gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 18px;
-  background: transparent;
-  min-width: 0;
-}
-.floating-style-picker > button.selected {
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
-}
-.floating-style-picker b {
-  font-size: 13px;
-  font-weight: 500;
-}
-.floating-style-picker small {
-  color: var(--muted);
-  font-size: 11px;
-}
-.floating-miniature {
-  height: 85px;
-  width: 100%;
-  position: relative;
-  background: var(--paper);
-  border-radius: 7px;
-  border: 1px solid var(--line);
-}
-.floating-miniature i {
-  display: block;
-  position: absolute;
-  background: var(--panel-solid);
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  box-shadow: var(--shadow-soft);
-}
-.floating-miniature.classic i:first-child {
-  inset: 15px 25px;
-}
-.floating-miniature.classic i:nth-child(2) {
-  height: 1px;
-  top: 31px;
-  left: 25px;
-  right: 25px;
-  border: 0;
-  background: var(--line);
-}
-.floating-miniature.capsule i:first-child {
-  height: 13px;
-  top: 10px;
-  left: 15%;
-  right: 15%;
-  border-radius: 20px;
-  background: color-mix(in srgb, var(--accent) 10%, var(--panel-solid));
-}
-.floating-miniature.capsule i:nth-child(2) {
-  inset: 31px 20% 12px;
-}
 .setting-note {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -443,9 +376,6 @@ input[type="range"] {
   .settings-row {
     gap: 10px;
   }
-  .floating-style-picker > button {
-    padding: 12px;
-  }
 }
 @media (max-width: 600px) {
   .settings-shell {
@@ -503,12 +433,6 @@ input[type="range"] {
   }
   .choice-title {
     font-size: 11px;
-  }
-  .floating-style-picker {
-    gap: 10px;
-  }
-  .floating-style-picker small {
-    font-size: 10px;
   }
   .swatches {
     gap: 8px;

@@ -1,22 +1,42 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { Icon, IconButton } from "./Icon";
-import { languages, type Mode, type TaskState } from "./model";
+import {
+  languages,
+  type Mode,
+  type TaskState,
+  type AudioChannel,
+} from "./model";
 import type { PreviewController } from "./usePreview";
 
 export function LanguageSelect({
   side,
   controller,
+  audioChannel,
 }: {
   side: "src" | "tgt";
   controller: PreviewController;
+  audioChannel?: AudioChannel;
 }) {
   return (
     <select
       className="language-select"
-      aria-label={side === "src" ? "源语言" : "目标语言"}
-      value={controller.state[side]}
+      aria-label={`${audioChannel ? (audioChannel === "system" ? "电脑音频" : "麦克风") : ""}${side === "src" ? "源语言" : "目标语言"}`}
+      value={
+        audioChannel
+          ? controller.state.audioChannels[audioChannel][side]
+          : controller.state[side]
+      }
       onChange={(e) =>
-        controller.dispatch({ type: "language", side, value: e.target.value })
+        controller.dispatch(
+          audioChannel
+            ? {
+                type: "audio-language",
+                channel: audioChannel,
+                side,
+                value: e.target.value,
+              }
+            : { type: "language", side, value: e.target.value },
+        )
       }
     >
       {languages
@@ -53,16 +73,22 @@ export function SectionHeading({
   children,
   side,
   controller,
+  audioChannel,
 }: {
   children: ReactNode;
   side?: "src" | "tgt";
   controller?: PreviewController;
+  audioChannel?: AudioChannel;
 }) {
   return (
     <div className="section-heading">
       <span>{children}</span>
       {side && controller && (
-        <LanguageSelect side={side} controller={controller} />
+        <LanguageSelect
+          side={side}
+          controller={controller}
+          audioChannel={audioChannel}
+        />
       )}
       <span className="heading-line" />
     </div>

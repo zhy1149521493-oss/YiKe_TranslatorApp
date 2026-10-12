@@ -30,7 +30,7 @@ test("preview preferences reject corrupt persisted fields and keep the real conf
   assert.deepEqual(prefs.background, { light: "#112233", dark: null });
 });
 
-test("all three layouts and both floating styles share custom theme colors", () => {
+test("all three layouts and classic floating share custom theme colors", () => {
   const custom = {
     ...defaults,
     accent: "custom",
@@ -41,7 +41,7 @@ test("all three layouts and both floating styles share custom theme colors", () 
   for (const tone of ["light", "dark"]) {
     const expected = themeColors(custom, tone);
     for (const mainStyle of ["poetry", "workbench", "classic"])
-      for (const floatingStyle of ["classic", "capsule"]) {
+      for (const floatingStyle of ["classic"]) {
         assert.deepEqual(
           themeColors({ ...custom, mainStyle, floatingStyle }, tone),
           expected,
@@ -147,14 +147,13 @@ test("paired reading only accepts known complete fixtures, never equal paragraph
   assert.equal(fixturePairs({ ...long, result: sampleResult }), null);
 });
 
-test("capsule docking follows both work-area edges and leaves the center free", () => {
-  const { dockSide } = load("demo/floatingGeometry");
-  assert.equal(dockSide(8, 140, 960), "left");
-  assert.equal(dockSide(24, 140, 960), "left");
-  assert.equal(dockSide(25, 140, 960), null);
-  assert.equal(dockSide(400, 140, 960), null);
-  assert.equal(dockSide(804, 140, 960), "right");
-  assert.equal(dockSide(25, 671, 720), "right");
+test("retired floating preferences migrate to classic without changing main styles", () => {
+  for (const mainStyle of ["poetry", "workbench", "classic"])
+    for (const floatingStyle of ["capsule", "classic", null, "unknown"])
+      assert.equal(
+        normalizePreferences({ mainStyle, floatingStyle }).floatingStyle,
+        "classic",
+      );
 });
 
 test("navigation preferences migrate older saved values to persistent navigation", () => {

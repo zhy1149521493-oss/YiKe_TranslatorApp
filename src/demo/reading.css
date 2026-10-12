@@ -379,17 +379,17 @@
   min-width: 0;
   min-height: 100%;
 }
-.feature-audio-source {
+.feature-recognized-source {
   flex: 1;
   padding: 24px;
 }
-.feature-audio-source .recognized-source {
+.feature-recognized-source .recognized-source {
   margin-bottom: 0;
   max-height: min(32vh, 360px);
   overflow-y: auto;
 }
-.feature-audio-layout .feature-results > .translation-text,
-.feature-audio-layout .feature-results > .result-message {
+.feature-recognition-layout .feature-results > .translation-text,
+.feature-recognition-layout .feature-results > .result-message {
   flex: 1;
 }
 @media (max-width: 850px) {
