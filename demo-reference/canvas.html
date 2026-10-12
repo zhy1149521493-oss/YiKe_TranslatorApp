@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>译刻 · 画布式</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap');
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --canvas-bg: #F8F6F3;
+            --panel-bg: #FFFFFF;
+            --text-primary: #2A2826;
+            --text-secondary: #7A7673;
+            --text-tertiary: #B0ADA9;
+            --accent-primary: #C8886D;
+            --accent-secondary: #7A9299;
+            --border-light: rgba(42, 40, 38, 0.08);
+            --shadow-panel: 0 2px 16px rgba(42, 40, 38, 0.06);
+            --shadow-hover: 0 4px 24px rgba(42, 40, 38, 0.1);
+            --grid-color: rgba(42, 40, 38, 0.03);
+        }
+
+        [data-theme="dark"] {
+            --canvas-bg: #1A1816;
+            --panel-bg: #2A2826;
+            --text-primary: #E8E6E3;
+            --text-secondary: #A8A5A2;
+            --text-tertiary: #6A6865;
+            --accent-primary: #D9987F;
+            --accent-secondary: #8FA8AF;
+            --border-light: rgba(232, 230, 227, 0.1);
+            --shadow-panel: 0 2px 16px rgba(0, 0, 0, 0.3);
+            --shadow-hover: 0 4px 24px rgba(0, 0, 0, 0.4);
+            --grid-color: rgba(232, 230, 227, 0.02);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--canvas-bg);
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        /* 画布网格背景 */
+        .canvas-container {
+            width: 100%;
+            height: 100vh;
+            position: relative;
+            background-image:
+                repeating-linear-gradient(0deg, var(--grid-color), var(--grid-color) 1px, transparent 1px, transparent 24px),
+                repeating-linear-gradient(90deg, var(--grid-color), var(--grid-color) 1px, transparent 1px, transparent 24px);
+            background-size: 24px 24px;
+        }
+
+        /* 顶部浮动工具栏 */
+        .floating-toolbar {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            padding: 10px 24px;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 40px;
+            box-shadow: var(--shadow-panel);
+            border: 1px solid var(--border-light);
+        }
+
+        [data-theme="dark"] .floating-toolbar {
+            background: rgba(42, 40, 38, 0.95);
+        }
+
+        .toolbar-logo {
+            font-family: 'Noto Serif SC', serif;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .toolbar-divider {
+            width: 1px;
+            height: 24px;
+            background: var(--border-light);
+        }
+
+        .toolbar-modes {
+            display: flex;
+            gap: 6px;
+        }
+
+        .mode-tab {
+            padding: 6px 16px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 13px;
+            font-weight: 500;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .mode-tab:hover {
+            background: rgba(200, 136, 109, 0.1);
+            color: var(--text-primary);
+        }
+
+        .mode-tab.active {
+            background: var(--accent-primary);
+            color: white;
+        }
+
+        .toolbar-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .toolbar-btn:hover {
+            background: rgba(200, 136, 109, 0.1);
+            color: var(--accent-primary);
+        }
+
+        /* 可拖拽的浮动面板 */
+        .floating-panel {
+            position: absolute;
+            background: var(--panel-bg);
+            border-radius: 12px;
+            box-shadow: var(--shadow-panel);
+            border: 1px solid var(--border-light);
+            overflow: hidden;
+            transition: box-shadow 0.3s ease;
+            display: none;
+        }
+
+        .floating-panel.active {
+            display: block;
+        }
+
+        .floating-panel:hover {
+            box-shadow: var(--shadow-hover);
+        }
+
+        .floating-panel.dragging {
+            cursor: move;
+            box-shadow: 0 8px 32px rgba(42, 40, 38, 0.15);
+        }
+
+        /* 面板头部 */
+        .panel-header {
+            padding: 12px 16px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-light);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: move;
+            user-select: none;
+        }
+
+        .panel-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .panel-controls {
+            display: flex;
+            gap: 6px;
+        }
+
+        .panel-btn {
+            width: 24px;
+            height: 24px;
+            border: none;
+            background: transparent;
+            color: var(--text-tertiary);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+
+        .panel-btn:hover {
+            background: rgba(200, 136, 109, 0.1);
+            color: var(--accent-primary);
+        }
+
+        /* 面板内容 */
+        .panel-content {
+            padding: 20px;
+        }
+
+        /* 文本翻译面板 */
+        #panel-text {
+            width: 800px;
+            height: 560px;
+            top: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        #panel-text .panel-content {
+            height: calc(100% - 48px);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .text-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .section-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .lang-mini {
+            padding: 3px 10px;
+            border: 1px solid var(--border-light);
+            border-radius: 12px;
+            background: transparent;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+
+        .text-area-large {
+            flex: 1;
+            border: none;
+            background: transparent;
+            resize: none;
+            outline: none;
+            font-family: 'Noto Serif SC', serif;
+            font-size: 15px;
+            line-height: 1.8;
+            color: var(--text-primary);
+        }
+
+        .text-area-large::placeholder {
+            color: var(--text-tertiary);
+        }
+
+        .text-display-output {
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            line-height: 1.8;
+            color: var(--text-primary);
+            white-space: pre-wrap;
+        }
+
+        .section-divider {
+            height: 1px;
+            background: linear-gradient(to right, transparent, var(--border-light) 20%, var(--border-light) 80%, transparent);
+        }
+
+        /* 截图面板 */
+        #panel-screenshot {
+            width: 480px;
+            height: 400px;
+            top: 120px;
+            right: 80px;
+        }
+
+        .feature-panel-content {
+            text-align: center;
+            padding: 40px 30px;
+        }
+
+        .feature-icon-area {
+            width: 120px;
+            height: 120px;
+            margin: 0 auto 24px;
+            border: 2px dashed var(--border-light);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(200, 136, 109, 0.02);
+        }
+
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            opacity: 0.3;
+        }
+
+        .feature-name {
+            font-family: 'Noto Serif SC', serif;
+            font-size: 22px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 12px;
+        }
+
+        .feature-hint {
+            font-size: 14px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            margin-bottom: 24px;
+        }
+
+        .feature-btn {
+            padding: 10px 28px;
+            border: 2px solid var(--accent-primary);
+            background: transparent;
+            color: var(--accent-primary);
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 24px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .feature-btn:hover {
+            background: var(--accent-primary);
+            color: white;
+        }
+
+        /* 字幕面板 */
+        #panel-subtitle {
+            width: 480px;
+            height: 400px;
+            bottom: 100px;
+            left: 80px;
+        }
+
+        /* 音频面板 */
+        #panel-audio {
+            width: 480px;
+            height: 400px;
+            bottom: 100px;
+            right: 80px;
+        }
+
+        /* SVG 图标 */
+        .icon-svg {
+            stroke: currentColor;
+            stroke-width: 2;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        /* 滚动条 */
+        .text-section::-webkit-scrollbar,
+        .panel-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .text-section::-webkit-scrollbar-track,
+        .panel-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .text-section::-webkit-scrollbar-thumb,
+        .panel-content::-webkit-scrollbar-thumb {
+            background: rgba(200, 136, 109, 0.2);
+            border-radius: 3px;
+        }
+
+        /* 提示信息 */
+        .canvas-hint {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            background: rgba(42, 40, 38, 0.9);
+            color: rgba(255, 255, 255, 0.9);
+            border-radius: 20px;
+            font-size: 12px;
+            opacity: 0;
+            animation: fadeInOut 3s ease-in-out;
+            pointer-events: none;
+        }
+
+        @keyframes fadeInOut {
+            0%, 100% { opacity: 0; }
+            10%, 90% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="canvas-container" id="canvas">
+        <!-- 顶部工具栏 -->
+        <div class="floating-toolbar">
+            <div class="toolbar-logo">
+                <svg viewBox="0 0 24 24" style="width: 18px; height: 18px;" class="icon-svg">
+                    <circle cx="5" cy="12" r="2"/>
+                    <circle cx="12" cy="12" r="2"/>
+                    <circle cx="19" cy="12" r="2"/>
+                </svg>
+                <span>译刻</span>
+            </div>
+
+            <div class="toolbar-divider"></div>
+
+            <div class="toolbar-modes">
+                <button class="mode-tab active" onclick="showPanel('text')">文本</button>
+                <button class="mode-tab" onclick="showPanel('screenshot')">截图</button>
+                <button class="mode-tab" onclick="showPanel('subtitle')">字幕</button>
+                <button class="mode-tab" onclick="showPanel('audio')">音频</button>
+            </div>
+
+            <div class="toolbar-divider"></div>
+
+            <button class="toolbar-btn" onclick="toggleTheme()">
+                <svg viewBox="0 0 24 24" style="width: 16px; height: 16px;" class="icon-svg">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- 文本翻译面板 -->
+        <div id="panel-text" class="floating-panel active">
+            <div class="panel-header">
+                <span class="panel-title">文本翻译</span>
+                <div class="panel-controls">
+                    <button class="panel-btn">⚙</button>
+                    <button class="panel-btn">−</button>
+                </div>
+            </div>
+            <div class="panel-content">
+                <div class="text-section">
+                    <div class="section-label">
+                        <span>源文本</span>
+                        <select class="lang-mini">
+                            <option>Auto</option>
+                            <option>EN</option>
+                            <option>中文</option>
+                        </select>
+                    </div>
+                    <textarea class="text-area-large" placeholder="在画布上自由排布...
+
+像在白板上写字，想放哪就放哪。
+
+拖动面板，调整布局，完全由你掌控。">The canvas layout gives you complete freedom.
+
+Arrange panels wherever you want, like organizing tools on a workbench.
+
+Drag, resize, and compose your perfect translation workspace.</textarea>
+                </div>
+
+                <div class="section-divider"></div>
+
+                <div class="text-section">
+                    <div class="section-label">
+                        <span>译文</span>
+                        <select class="lang-mini">
+                            <option>中文</option>
+                            <option>EN</option>
+                        </select>
+                    </div>
+                    <div class="text-display-output">画布布局给你完全的自由。
+
+随心所欲地排列面板，就像在工作台上整理工具。
+
+拖拽、调整大小，打造你的完美翻译工作区。</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 截图面板 -->
+        <div id="panel-screenshot" class="floating-panel">
+            <div class="panel-header">
+                <span class="panel-title">截图翻译</span>
+                <div class="panel-controls">
+                    <button class="panel-btn">−</button>
+                </div>
+            </div>
+            <div class="panel-content feature-panel-content">
+                <div class="feature-icon-area">
+                    <svg class="feature-icon icon-svg" viewBox="0 0 24 24">
+                        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                        <circle cx="12" cy="13" r="4"/>
+                    </svg>
+                </div>
+                <h3 class="feature-name">截图翻译</h3>
+                <p class="feature-hint">框选屏幕区域，自动识别并翻译</p>
+                <button class="feature-btn">开始截图</button>
+            </div>
+        </div>
+
+        <!-- 字幕面板 -->
+        <div id="panel-subtitle" class="floating-panel">
+            <div class="panel-header">
+                <span class="panel-title">视频字幕</span>
+                <div class="panel-controls">
+                    <button class="panel-btn">−</button>
+                </div>
+            </div>
+            <div class="panel-content feature-panel-content">
+                <div class="feature-icon-area">
+                    <svg class="feature-icon icon-svg" viewBox="0 0 24 24">
+                        <polygon points="5 3 19 12 5 21 5 3"/>
+                    </svg>
+                </div>
+                <h3 class="feature-name">视频字幕</h3>
+                <p class="feature-hint">实时监听字幕区域，边看边译</p>
+                <button class="feature-btn">开始监听</button>
+            </div>
+        </div>
+
+        <!-- 音频面板 -->
+        <div id="panel-audio" class="floating-panel">
+            <div class="panel-header">
+                <span class="panel-title">音频翻译</span>
+                <div class="panel-controls">
+                    <button class="panel-btn">−</button>
+                </div>
+            </div>
+            <div class="panel-content feature-panel-content">
+                <div class="feature-icon-area">
+                    <svg class="feature-icon icon-svg" viewBox="0 0 24 24">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" y1="19" x2="12" y2="23"/>
+                        <line x1="8" y1="23" x2="16" y2="23"/>
+                    </svg>
+                </div>
+                <h3 class="feature-name">音频翻译</h3>
+                <p class="feature-hint">识别系统音频或麦克风，边听边译</p>
+                <button class="feature-btn">开始录音</button>
+            </div>
+        </div>
+
+        <!-- 提示信息 -->
+        <!-- <div class="canvas-hint">拖动面板标题栏可移动位置</div> -->
+    </div>
+
+    <script>
+        // 面板拖拽
+        let isDragging = false;
+        let currentPanel = null;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        document.querySelectorAll('.panel-header').forEach(header => {
+            header.addEventListener('mousedown', function(e) {
+                isDragging = true;
+                currentPanel = this.closest('.floating-panel');
+                currentPanel.classList.add('dragging');
+
+                const rect = currentPanel.getBoundingClientRect();
+                offsetX = e.clientX - rect.left;
+                offsetY = e.clientY - rect.top;
+
+                e.preventDefault();
+            });
+        });
+
+        document.addEventListener('mousemove', function(e) {
+            if (!isDragging || !currentPanel) return;
+
+            const x = e.clientX - offsetX;
+            const y = e.clientY - offsetY;
+
+            currentPanel.style.left = x + 'px';
+            currentPanel.style.top = y + 'px';
+            currentPanel.style.transform = 'none';
+        });
+
+        document.addEventListener('mouseup', function() {
+            if (currentPanel) {
+                currentPanel.classList.remove('dragging');
+            }
+            isDragging = false;
+            currentPanel = null;
+        });
+
+        // 显示/隐藏面板
+        function showPanel(mode) {
+            // 更新标签状态
+            document.querySelectorAll('.mode-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // 切换面板
+            document.querySelectorAll('.floating-panel').forEach(panel => {
+                panel.classList.remove('active');
+            });
+
+            const panel = document.getElementById('panel-' + mode);
+            if (panel) {
+                panel.classList.add('active');
+            }
+        }
+
+        // 主题切换
+        function toggleTheme() {
+            document.body.toggleAttribute('data-theme', 'dark');
+        }
+
+        // 最小化面板
+        document.querySelectorAll('.panel-controls .panel-btn').forEach(btn => {
+            if (btn.textContent === '−') {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const panel = this.closest('.floating-panel');
+                    panel.classList.remove('active');
+                });
+            }
+        });
+    </script>
+</body>
+</html>

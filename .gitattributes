@@ -1,0 +1,3 @@
+# Preserve user-supplied references and upstream license files byte for byte.
+demo-reference/*.html -text
+src/demo/fonts/*-OFL.txt -text whitespace=-blank-at-eol

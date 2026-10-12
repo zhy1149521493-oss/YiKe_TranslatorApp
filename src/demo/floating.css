@@ -1,0 +1,337 @@
+.floating-panel {
+  position: absolute;
+  z-index: 65;
+  width: 480px;
+  height: min(380px, calc(100vh - 190px));
+  min-width: 280px;
+  min-height: 170px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  resize: both;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-lift);
+  display: flex;
+  flex-direction: column;
+  animation: panel-enter 180ms ease-out;
+}
+.floating-panel.dragging {
+  box-shadow: 0 12px 48px rgba(20, 18, 15, 0.25);
+}
+.floating-panel.collapsed {
+  height: auto !important;
+  min-height: 0;
+  resize: none;
+}
+.floating-panel-header {
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  flex-shrink: 0;
+  min-height: 49px;
+  gap: 8px;
+}
+.dragging .floating-panel-header {
+  cursor: grabbing;
+}
+.floating-panel-header > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.floating-panel-header small {
+  font-size: 9px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-weight: 400;
+}
+.floating-panel-header .inline-actions {
+  gap: 1px;
+}
+.floating-panel-header .icon-button {
+  width: 26px;
+  height: 26px;
+  padding: 4px;
+}
+.floating-panel-header .icon-button svg {
+  width: 15px;
+  height: 15px;
+}
+.floating-panel-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 20px 12px;
+}
+.floating-panel-content .source-editor {
+  font-size: 15px;
+  line-height: 1.8;
+  height: 130px;
+  min-height: 130px;
+  overflow: auto;
+}
+.floating-section-label {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.floating-result {
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.floating-result .translation-text {
+  font-size: 14px;
+  line-height: 1.8;
+}
+.floating-result .result-message {
+  min-height: 110px;
+  padding: 10px;
+}
+.floating-panel-content footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 12px;
+}
+.floating-panel-content .feature-controls {
+  margin-top: 0;
+  gap: 8px;
+  justify-content: flex-start;
+}
+.floating-panel-content .feature-controls .primary-button {
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.floating-panel-content .feature-controls .quiet-button {
+  font-size: 12px;
+  padding: 5px 10px;
+}
+.floating-source {
+  font-family: "Noto Serif SC", serif;
+  font-size: 14px;
+  line-height: 1.8;
+  margin: 18px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.floating-panel-content .audio-sources {
+  margin: 0 0 14px;
+}
+.floating-panel-content .audio-sources button {
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.floating-preview-caption {
+  position: absolute;
+  bottom: 10px;
+  right: 16px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  z-index: 70;
+  pointer-events: none;
+}
+@keyframes panel-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.floating-preview .floating-panel {
+  transform-origin: top right;
+}
+.floating-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: color-mix(in srgb, var(--paper) 96%, var(--accent));
+  overflow: hidden;
+}
+.desktop-preview-header {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 17px 24px;
+  border-bottom: 1px solid var(--line);
+  gap: 12px;
+}
+.desktop-preview-header > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+.desktop-preview-header small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}
+.desktop-preview-header .quiet-button {
+  font-size: 12px;
+}
+.desktop-reading-card {
+  position: absolute;
+  left: 11%;
+  top: 28%;
+  color: var(--muted);
+  pointer-events: none;
+}
+.desktop-reading-card > small {
+  font-size: 9px;
+  letter-spacing: 3px;
+  color: var(--accent);
+}
+.desktop-reading-card h2 {
+  font:
+    400 34px/1.65 "Noto Serif SC",
+    serif;
+  letter-spacing: 3px;
+  color: var(--ink);
+  margin: 24px 0;
+}
+.desktop-reading-card > div {
+  width: 32px;
+  height: 1px;
+  background: var(--accent);
+  margin-bottom: 25px;
+}
+.desktop-reading-card p {
+  font:
+    12px/2 "Noto Serif SC",
+    serif;
+}
+.restored-classic {
+  width: 380px;
+  height: 220px;
+  min-width: 280px;
+  min-height: 160px;
+  border-radius: 16px;
+  background: color-mix(
+    in srgb,
+    var(--panel-solid) var(--float-opacity, 92%),
+    transparent
+  );
+  backdrop-filter: blur(24px);
+}
+.restored-classic .floating-panel-header {
+  min-height: 48px;
+  padding: 10px 16px;
+}
+.restored-classic .floating-panel-header strong {
+  font:
+    600 13px Inter,
+    "Microsoft YaHei",
+    sans-serif;
+}
+.restored-classic .icon-button {
+  width: 22px;
+  height: 22px;
+  padding: 4px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+.restored-classic .icon-button[aria-pressed="true"] {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.restored-classic .inline-actions {
+  gap: 4px;
+}
+.restored-classic-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+.restored-classic-source {
+  max-height: 40%;
+  flex-shrink: 0;
+  overflow: auto;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.restored-classic-divider {
+  height: 1px;
+  background: var(--line);
+  flex-shrink: 0;
+}
+.restored-classic-body .translation-text {
+  font:
+    14px/1.6 Inter,
+    "Microsoft YaHei",
+    sans-serif;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+.restored-classic-body .result-message {
+  min-height: 80px;
+  padding: 10px;
+}
+.classic-opacity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.classic-opacity input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+@media (max-width: 650px) {
+  .desktop-reading-card {
+    padding: 28px;
+  }
+  .desktop-reading-card h2 {
+    font-size: 25px;
+  }
+  .floating-preview-caption {
+    font-size: 9px;
+  }
+}
+.floating-panel-content .audio-channel-result {
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.floating-panel-content .audio-channel-result .translation-text {
+  font-size: 15px;
+  min-height: 70px;
+}
+.floating-panel-content .audio-channel-result .result-message {
+  min-height: 100px;
+}
+.floating-panel-content .audio-source-cards {
+  grid-template-columns: 1fr;
+}

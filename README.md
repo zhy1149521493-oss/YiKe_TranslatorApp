@@ -1,5 +1,7 @@
 # 译刻 (YiKe) — 本地优先的全场景翻译助手
 
+Independent design preview: [run and review the three-layout demo](docs/DESIGN_DEMO.md). This branch has not integrated the new designs into the production application.
+
 译刻是一款 Windows 桌面翻译软件：文本翻译、划词翻译、截图翻译、视频实时字幕、音频实时翻译（电脑音频 / 麦克风）一个应用全搞定。本地模型离线可用，也可以接 DeepSeek、Kimi、通义等云端 API。
 
 ## 特性
