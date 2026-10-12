@@ -176,7 +176,9 @@ export function ReadingWorkbench(props: LayoutProps) {
               aria-label={mode.label}
               title={mode.label}
               aria-current={
-                !props.settingsOpen && controller.state.mode === mode.id
+                props.drawerOpen &&
+                !props.settingsOpen &&
+                controller.state.mode === mode.id
                   ? "page"
                   : undefined
               }
@@ -194,7 +196,7 @@ export function ReadingWorkbench(props: LayoutProps) {
           </button>
           <button
             aria-label="设置中心"
-            aria-pressed={props.settingsOpen}
+            aria-pressed={props.drawerOpen && props.settingsOpen}
             onClick={props.onSettings}
           >
             <Icon name="settings" size={20} />

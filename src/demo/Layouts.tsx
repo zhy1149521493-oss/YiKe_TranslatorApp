@@ -32,9 +32,13 @@ export type LayoutProps = {
 function ModeNav({
   controller,
   settingsOpen,
+  drawerOpen,
   onMode,
   short = false,
-}: Pick<LayoutProps, "controller" | "settingsOpen" | "onMode"> & {
+}: Pick<
+  LayoutProps,
+  "controller" | "settingsOpen" | "drawerOpen" | "onMode"
+> & {
   short?: boolean;
 }) {
   return (
@@ -45,10 +49,12 @@ function ModeNav({
           aria-label={mode.label}
           title={mode.label}
           className={
-            !settingsOpen && controller.state.mode === mode.id ? "active" : ""
+            drawerOpen && !settingsOpen && controller.state.mode === mode.id
+              ? "active"
+              : ""
           }
           aria-current={
-            !settingsOpen && controller.state.mode === mode.id
+            drawerOpen && !settingsOpen && controller.state.mode === mode.id
               ? "page"
               : undefined
           }
@@ -73,7 +79,7 @@ function ToolbarActions(props: LayoutProps) {
       <IconButton
         icon="settings"
         label="设置中心"
-        aria-pressed={props.settingsOpen}
+        aria-pressed={props.drawerOpen && props.settingsOpen}
         onClick={props.onSettings}
       />
       <IconButton
@@ -170,12 +176,16 @@ export function ClassicLayout(props: LayoutProps) {
                 aria-label={mode.label}
                 title={mode.label}
                 className={
-                  !props.settingsOpen && controller.state.mode === mode.id
+                  props.drawerOpen &&
+                  !props.settingsOpen &&
+                  controller.state.mode === mode.id
                     ? "active"
                     : ""
                 }
                 aria-pressed={
-                  !props.settingsOpen && controller.state.mode === mode.id
+                  props.drawerOpen &&
+                  !props.settingsOpen &&
+                  controller.state.mode === mode.id
                 }
                 onClick={() => props.onMode(mode.id)}
               >
