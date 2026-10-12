@@ -1,5 +1,7 @@
 # YiKe developer documentation
 
+The [responsive Poetry layout](POETRY_LAYOUT.md) retains continuous vertical reading with compact empty/short-text spacing and an editor that reflows when resized. Screenshot/subtitle placeholders become compact controls on `fix/poetry-responsive-layout`. Revised desktop visual acceptance is pending.
+
 The [native drawer correction](NATIVE_DRAWER.md) on `fix/native-drawer-surface` makes folded navigation the only visible and interactive desktop surface. It supersedes the connected candidate's content-only folding behavior.
 
 The approved three-style UI is now connected to the real desktop controller on isolated branch `ui/design-integration`. See [connected controls, configuration compatibility and pending desktop acceptance](INTERFACE_INTEGRATION.md). The independent [design Demo](DESIGN_DEMO.md) remains available for comparison. The prior executables and source checkpoints remain available for rollback.

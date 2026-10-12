@@ -12,6 +12,8 @@ Persistent navigation is the default. Hover mode folds navigation to the logo af
 
 ## Component and functional mapping
 
+The follow-up [responsive Poetry layout](POETRY_LAYOUT.md) retains the continuous document with smaller empty/short-text minimums, responsive editor remeasurement and no redundant screenshot/subtitle preview boxes. Real recognition controls and source/result data remain connected in all three styles. Revised desktop visual acceptance is pending.
+
 The follow-up [native drawer correction](NATIVE_DRAWER.md) removes the empty desktop rectangle after folding. It clips the main window's painting and hit testing to navigation/logo bounds while retaining the expanded reading canvas. The previous candidate described below remains archived.
 
 | Presentation component | Live state / command | Preserved behavior |

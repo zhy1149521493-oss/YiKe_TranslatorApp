@@ -105,29 +105,38 @@ export function Ornament() {
 }
 export function TextEditor({
   controller,
-  compact = false,
+  flowing = false,
 }: {
   controller: InterfaceController;
-  compact?: boolean;
+  flowing?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const source = controller.state.tasks.text.source;
   useLayoutEffect(() => {
-    if (!ref.current || compact) return;
+    const editor = ref.current;
+    if (!editor || !flowing) return;
     let active = true;
     const fit = () => {
-      if (!active || !ref.current) return;
-      ref.current.style.height = "auto";
-      ref.current.style.height = `${Math.max(280, ref.current.scrollHeight)}px`;
+      if (!active) return;
+      // Let the document grow with real text, rather than a large empty minimum.
+      editor.style.height = "0px";
+      editor.style.height = `${editor.scrollHeight}px`;
     };
+    let width = editor.parentElement?.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = editor.parentElement?.clientWidth;
+      if (nextWidth !== width) { width = nextWidth; fit(); }
+    });
+    if (editor.parentElement) observer.observe(editor.parentElement);
     fit();
     window.addEventListener("resize", fit);
     void document.fonts.ready.then(fit);
     return () => {
       active = false;
+      observer.disconnect();
       window.removeEventListener("resize", fit);
     };
-  }, [source, compact]);
+  }, [source, flowing]);
   return (
     <textarea
       ref={ref}
@@ -135,7 +144,7 @@ export function TextEditor({
       dir="auto"
       aria-label="待翻译原文"
       value={source}
-      placeholder={"在此输入或粘贴文本…\n\n像读一本书一样，让文字在这里流淌。"}
+      placeholder="在此输入或粘贴文本…"
       onChange={(e) => controller.edit(e.target.value)}
       onCompositionStart={() => controller.setComposing(true)}
       onCompositionEnd={() => controller.setComposing(false)}
@@ -261,7 +270,9 @@ export function TextFlow({ controller }: { controller: InterfaceController }) {
         <SectionHeading side="src" controller={controller}>
           Source Text
         </SectionHeading>
-        <TextEditor controller={controller} />
+        <div className="text-content">
+          <TextEditor controller={controller} flowing />
+        </div>
         <SourceActions controller={controller} />
       </section>
       <Ornament />
@@ -269,7 +280,9 @@ export function TextFlow({ controller }: { controller: InterfaceController }) {
         <SectionHeading side="tgt" controller={controller}>
           Translation
         </SectionHeading>
-        <ResultBody task={controller.state.tasks.text} />
+        <div className="text-content" role="region" aria-label="译文内容" tabIndex={0}>
+          <ResultBody task={controller.state.tasks.text} />
+        </div>
         <ResultActions controller={controller} mode="text" />
       </section>
     </div>

@@ -9,6 +9,7 @@ import "./layouts.css";
 import "./reading.css";
 import "./disclosure.css";
 import "./connected.css";
+import "./poetry.css";
 
 export function ConnectedMain(props: {
   style: MainStyle; navigation: Preferences["navigation"];

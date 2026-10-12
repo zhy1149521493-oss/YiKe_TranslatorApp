@@ -17,7 +17,13 @@
 .connected-ui .live-level > span { display: flex; align-items: center; gap: 10px; color: var(--accent); }
 .connected-ui .live-level meter { width: 100%; height: 10px; accent-color: var(--accent); }
 .connected-ui .live-level small { overflow-wrap: anywhere; }
-.connected-ui .capture-stage { gap: 14px; }
+.connected-ui .capture-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; margin-top: 12px; color: var(--muted); }
+.connected-ui .capture-summary > small { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12px; }
+.connected-ui .capture-summary .quiet-button { padding: 5px 10px; font-size: 12px; }
+.connected-ui .feature-translation-block { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.connected-ui .feature-result-content { flex: 1; }
+.connected-ui .feature-control-card:has(.capture-summary) .feature-intro { margin-bottom: 12px; }
+.connected-ui .feature-control-card:has(.capture-summary) .feature-controls { margin-top: 12px; }
 .connected-ui .audio-channel-result .section-heading { flex-wrap: wrap; }
 .connected-ui .reading-topbar { -webkit-app-region: no-drag; }
 

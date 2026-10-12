@@ -1,5 +1,9 @@
 # Local checkpoints and rollback
 
+## Flowing Poetry reading candidate
+
+`fix/poetry-responsive-layout` retains vertical document reading while reducing empty spacing, reflowing the editor after resize/font loading and removing redundant OCR preview boxes. Its separate executable is `译刻-诗集阅读修正版.exe`; the earlier `译刻-诗集优化版.exe` is a rejected equal-height experiment. Revised desktop visual acceptance remains pending. Exit through the tray and run `译刻-拉窗修正版.exe` to return to the previous native-drawer UI. Configuration and runtime resources stay shared; this change adds no schema migration. Tag `checkpoint/poetry-reading-2026-10-12-candidate` and the [source/binary archive](../../TranslatorApp/archives/poetry-reading-2026-10-12-candidate/README.md) preserve the revision. See [layout behavior and acceptance scope](POETRY_LAYOUT.md).
+
 ## Native drawer correction
 
 Branch `fix/native-drawer-surface` extends the connected UI with native clipping. The complete pre-correction source is retained at `checkpoint/design-integration-2026-10-12-candidate`; its separate `译刻-新版界面.exe` and [archive](../../TranslatorApp/archives/design-integration-2026-10-12-candidate/README.md) are untouched. Exit the tray instance before switching executables. There is no config migration; legacy business data and the same three-style design preferences remain compatible. See [behavior and native limitations](NATIVE_DRAWER.md).

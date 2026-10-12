@@ -130,10 +130,8 @@ export function FeatureStage({
       </div>;
     })}
   </div>;
-  return <div className={`capture-stage${task.region || task.source ? " has-capture" : ""}`}>
-    <Icon name={mode === "screenshot" ? "camera" : "target"} size={42} />
-    <p>{mode === "screenshot" ? "框选屏幕上的文字" : task.region ? "字幕识别区域已就绪" : "选择字幕区域，或开始时使用默认区域"}</p>
-    <small role="status">{task.status || "使用真实屏幕识别；Esc 或右键取消选区"}</small>
+  return <div className="capture-summary">
+    <small role="status">{task.phase !== "error" && task.status === task.source && task.source ? "识别完成" : task.status || (mode === "subtitle" ? task.region ? "字幕区域已就绪" : "未选区域时使用默认字幕区域" : "框选后识别并翻译；Esc 或右键取消选区")}</small>
     {mode === "subtitle" && <button className="quiet-button" onClick={controller.testOcr}><Icon name="flask" size={14} />系统 OCR 测试</button>}
   </div>;
 }
@@ -147,17 +145,17 @@ function RecognizedText({
 }) {
   const task = controller.state.tasks[mode];
   return (
-    <>
+    <div className="recognized-text-block">
       <SectionHeading side="src" controller={controller}>
         {mode === "audio" ? "听见的原文" : "识别文本"}
       </SectionHeading>
-      <div className="recognized-source" dir="auto">
+      <div className="recognized-source" dir="auto" role="region" aria-label="识别原文内容" tabIndex={0}>
         {task.source ||
           (task.phase === "loading"
             ? "正在识别文字…"
             : "识别到的原文会显示在这里。")}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -201,6 +199,7 @@ export function FeatureView({
   return (
     <div
       className={`feature-document${card ? " feature-card-layout feature-recognition-layout" : ""}`}
+      data-feature={mode}
     >
       {sourceOnLeft ? (
         <div className="feature-left-column">
@@ -219,7 +218,7 @@ export function FeatureView({
       ) : (
         controlCard
       )}
-      {!card && <Ornament />}
+      {!card && mode === "audio" && <Ornament />}
       {mode === "audio" ? (
         <>
           {!sourceOnLeft && <AudioRecognized controller={controller} />}
@@ -232,11 +231,15 @@ export function FeatureView({
           {!sourceOnLeft && (
             <RecognizedText mode={mode} controller={controller} />
           )}
-          <SectionHeading side="tgt" controller={controller}>
-            Translation
-          </SectionHeading>
-          <ResultBody task={task} />
-          <ResultActions controller={controller} mode={mode} />
+          <div className="feature-translation-block">
+            <SectionHeading side="tgt" controller={controller}>
+              Translation
+            </SectionHeading>
+            <div className="feature-result-content" role="region" aria-label="译文内容" tabIndex={0}>
+              <ResultBody task={task} />
+            </div>
+            <ResultActions controller={controller} mode={mode} />
+          </div>
         </section>
       )}
     </div>

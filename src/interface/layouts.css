@@ -101,35 +101,13 @@
   color: var(--accent);
   flex-shrink: 0;
 }
-.connected-ui .capture-stage {
-  min-height: 280px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 35%, var(--line));
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  color: var(--muted);
-  padding: 24px;
-  gap: 12px;
-  background: color-mix(in srgb, var(--accent) 2%, transparent);
-}
-.connected-ui .capture-stage > svg {
-  opacity: 0.45;
-}
-.connected-ui .capture-stage p,
 .connected-ui .audio-stage p {
   margin: 0;
   font-size: 14px;
 }
-.connected-ui .capture-stage small,
 .connected-ui .audio-stage small {
   font-size: 12px;
   opacity: 0.8;
-}
-.connected-ui .capture-stage.has-capture {
-  padding: 16px;
 }
 .connected-ui .selection-corners {
   position: absolute;
@@ -457,10 +435,6 @@
   }
   .connected-ui .feature-card-layout .feature-intro {
     margin-bottom: 16px;
-  }
-  .connected-ui .feature-card-layout .capture-stage {
-    min-height: 150px;
-    padding: 12px;
   }
   .connected-ui .feature-card-layout .feature-controls {
     margin-top: 16px;

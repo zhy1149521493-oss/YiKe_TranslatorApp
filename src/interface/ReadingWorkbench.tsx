@@ -42,7 +42,7 @@ function ReadingDesk({ controller }: { controller: InterfaceController }) {
           </span>
           <small>TRANSLATION</small>
         </header>
-        <div className="reading-page"><TextEditor controller={controller} compact /></div>
+        <div className="reading-page"><TextEditor controller={controller} /></div>
         <div className="reading-page"><ResultBody task={task} /></div>
         <footer className="reading-page-footer">
           <button className="quiet-button" onClick={controller.paste}>

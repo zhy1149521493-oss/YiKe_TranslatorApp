@@ -94,6 +94,45 @@ test('all existing settings categories render in all three connected layouts', (
   }
 });
 
+test('OCR pages remove the duplicate preview while preserving real controls and complete results', () => {
+  const longSource = 'Recognized line. '.repeat(180);
+  const longResult = '完整译文。'.repeat(180);
+  for (const layout of ['poetry', 'studio', 'classic']) for (const mode of ['screenshot', 'subtitle']) {
+    const html = render(mode, 'MainWindow', layout, {
+      screenshotSrc: longSource,
+      subCurrent: { text: longSource, result: longResult },
+      modeOutput: { text: '', audio: '', screenshot: longResult, subtitle: longResult },
+    });
+    assert.doesNotMatch(html, /capture-stage/);
+    assert.match(html, /识别原文内容/);
+    assert.ok(html.includes(longSource));
+    assert.ok(html.includes(longResult));
+    assert.match(html, /目标语言/);
+    assert.match(html, /复制/);
+    for (const label of mode === 'screenshot' ? ['截图翻译'] : ['字幕区域', '开始视频字幕', '字幕识别频率', '系统 OCR 测试']) {
+      assert.ok(html.includes(label), `${layout}/${mode} retains ${label}`);
+    }
+  }
+});
+
+test('Poetry keeps long input and output in separate accessible reading areas with editing actions', () => {
+  const input = 'A long original passage. '.repeat(200);
+  const result = '完整译文。'.repeat(200);
+  const html = render('text', 'MainWindow', 'poetry', { input, modeOutput: { text: result, audio: '', screenshot: '', subtitle: '' } });
+  assert.ok(html.includes(input));
+  assert.ok(html.includes(result));
+  for (const label of ['待翻译原文', '译文内容', '粘贴剪贴板文本', '交换语言方向', '清空', '重新翻译', '复制']) {
+    assert.ok(html.includes(label));
+  }
+  assert.doesNotMatch(html, /style="height:/);
+});
+
+test('compact screenshot status never labels recognition errors as completed', () => {
+  const html = render('screenshot', 'MainWindow', 'poetry', { screenshotSrc: '识别失败：OCR 未安装' });
+  assert.match(html, /role="status">识别失败：OCR 未安装/);
+  assert.doesNotMatch(html, /识别完成/);
+});
+
 
 test('connected controls dispatch to real model, language, clipboard and native handlers', async () => {
   const h = mount('text', 'MainWindow', 'studio', {providers:[{id:'mock',alias:'Mock',model:'first',models:['first','second'],baseUrl:'http://example.invalid',apiKey:'dummy'}]});

@@ -1,0 +1,137 @@
+/* A flowing reading page, rather than two panels stretched to fill the window. */
+.connected-ui .poetry-workspace:not(.showing-settings) {
+  padding: 118px clamp(24px, 6vw, 120px) 24px;
+  overflow-y: auto;
+}
+.connected-ui .poetry-workspace > .document-flow,
+.connected-ui .poetry-workspace > .feature-document {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 0;
+}
+.connected-ui .poetry-workspace .text-block {
+  margin: 0;
+}
+.connected-ui .poetry-workspace .section-heading {
+  margin-bottom: 12px;
+}
+.connected-ui .poetry-workspace .source-editor {
+  min-height: clamp(64px, 12vh, 112px);
+  font-size: max(18px, var(--reading-size));
+  line-height: 1.9;
+}
+.connected-ui .poetry-workspace .translation-text,
+.connected-ui .poetry-workspace .recognized-source {
+  font-family: "Noto Serif SC", serif;
+  font-size: max(18px, var(--reading-size));
+  line-height: 1.9;
+}
+.connected-ui .poetry-workspace .block-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+}
+.connected-ui .poetry-workspace .ornament {
+  margin: 14px 0;
+}
+.connected-ui .poetry-workspace .result-message {
+  min-height: clamp(64px, 14vh, 120px);
+  padding: 8px;
+  gap: 6px;
+}
+.connected-ui .poetry-workspace .result-message > svg { flex-shrink: 0; }
+.connected-ui .poetry-workspace .result-message small { display: none; }
+.connected-ui .poetry-workspace .feature-control-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 20px;
+  margin-bottom: 20px;
+}
+.connected-ui .poetry-workspace .feature-control-card .feature-intro {
+  margin: 0;
+  gap: 12px;
+}
+.connected-ui .poetry-workspace .feature-intro h2 { font-size: 21px; }
+.connected-ui .poetry-workspace .feature-emblem { width: 40px; height: 40px; }
+.connected-ui .poetry-workspace .feature-control-card .feature-controls {
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.connected-ui .poetry-workspace .capture-summary {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.connected-ui .poetry-workspace .recognized-source {
+  min-height: clamp(48px, 10vh, 96px);
+  margin: 0 0 18px;
+}
+.connected-ui .poetry-workspace .feature-translation-block {
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+/* Audio keeps its independently labelled sources and real levels. */
+.connected-ui .poetry-workspace .feature-document[data-feature="audio"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 18px;
+}
+.connected-ui .poetry-workspace [data-feature="audio"] > .feature-control-card {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.connected-ui .poetry-workspace [data-feature="audio"] > .ornament { display: none; }
+.connected-ui .poetry-workspace .live-audio-stage {
+  grid-column: 1;
+  grid-row: 2 / 4;
+  height: auto;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.connected-ui .poetry-workspace .live-level { gap: 4px; }
+.connected-ui .poetry-workspace .audio-sources { grid-column: 2; grid-row: 2; margin: 0; }
+.connected-ui .poetry-workspace [data-feature="audio"] .feature-controls { grid-row: 3; }
+.connected-ui .poetry-workspace .audio-source-cards[data-channels="2"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+.connected-ui .poetry-workspace .audio-channel-result > .translation-text {
+  max-height: 35vh;
+  overflow: auto;
+}
+/* The page scrolls only when its actual passages outgrow the window. */
+.connected-ui .poetry-workspace,
+.connected-ui .poetry-workspace * {
+  scrollbar-color: color-mix(in srgb, var(--muted) 35%, transparent) transparent;
+  scrollbar-width: thin;
+}
+.connected-ui .poetry-workspace::-webkit-scrollbar,
+.connected-ui .poetry-workspace ::-webkit-scrollbar { width: 5px; height: 5px; }
+.connected-ui .poetry-workspace::-webkit-scrollbar-track,
+.connected-ui .poetry-workspace ::-webkit-scrollbar-track { background: transparent; }
+.connected-ui .poetry-workspace::-webkit-scrollbar-thumb,
+.connected-ui .poetry-workspace ::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+  border-radius: 8px;
+}
+@media (max-height: 600px) {
+  .connected-ui .poetry-workspace:not(.showing-settings) { padding-bottom: 12px; }
+  .connected-ui .poetry-workspace .source-editor { min-height: 40px; }
+  .connected-ui .poetry-workspace .section-heading { margin-bottom: 6px; }
+  .connected-ui .poetry-workspace .block-footer { margin-top: 6px; padding-top: 6px; }
+  .connected-ui .poetry-workspace .inline-actions .icon-button { width: 28px; height: 28px; }
+  .connected-ui .poetry-workspace .quiet-button { padding: 4px 10px; }
+  .connected-ui .poetry-workspace .ornament { margin: 6px 0; }
+  .connected-ui .poetry-workspace .result-message { min-height: 28px; padding: 4px; }
+  .connected-ui .poetry-workspace .result-message > svg { display: none; }
+  .connected-ui .poetry-workspace .feature-intro p { display: none; }
+  .connected-ui .poetry-workspace .feature-control-card { margin-bottom: 12px; }
+}
+@media (max-width: 800px) {
+  .connected-ui .poetry-workspace .feature-intro h2 { font-size: 18px; }
+  .connected-ui .poetry-workspace .feature-emblem { display: none; }
+  .connected-ui .poetry-workspace .feature-controls .primary-button,
+  .connected-ui .poetry-workspace .feature-controls .quiet-button { padding: 8px 12px; }
+}
