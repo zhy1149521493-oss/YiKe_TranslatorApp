@@ -161,6 +161,29 @@ export function FeatureStage({
     </div>
   );
 }
+function RecognizedText({
+  mode,
+  controller,
+}: {
+  mode: Exclude<Mode, "text">;
+  controller: PreviewController;
+}) {
+  const task = controller.state.tasks[mode];
+  return (
+    <>
+      <SectionHeading side="src" controller={controller}>
+        {mode === "audio" ? "听见的原文" : "识别文本"}
+      </SectionHeading>
+      <div className="recognized-source" dir="auto">
+        {task.source ||
+          (task.phase === "loading"
+            ? "正在识别示例内容…"
+            : "识别到的原文会显示在这里。")}
+      </div>
+    </>
+  );
+}
+
 export function FeatureView({
   mode,
   controller,
@@ -174,42 +197,54 @@ export function FeatureView({
 }) {
   const meta = modes.find((m) => m.id === mode)!;
   const task = controller.state.tasks[mode];
-  return (
-    <div className={`feature-document${card ? " feature-card-layout" : ""}`}>
-      <section
-        className={
-          card ? "glass-card feature-control-card" : "feature-control-card"
-        }
-      >
-        <div className="feature-intro">
-          <span className="feature-emblem">
-            <Icon name={meta.icon} size={25} />
-          </span>
-          <div>
-            <h2>{meta.label}</h2>
-            <p>{meta.hint}</p>
-          </div>
+  const sourceOnLeft = card && mode === "audio";
+  const controlCard = (
+    <section
+      className={
+        card ? "glass-card feature-control-card" : "feature-control-card"
+      }
+    >
+      <div className="feature-intro">
+        <span className="feature-emblem">
+          <Icon name={meta.icon} size={25} />
+        </span>
+        <div>
+          <h2>{meta.label}</h2>
+          <p>{meta.hint}</p>
         </div>
-        <FeatureStage mode={mode} controller={controller} />
-        <FeatureControls
-          mode={mode}
-          controller={controller}
-          onCapture={onCapture}
-        />
-      </section>
+      </div>
+      <FeatureStage mode={mode} controller={controller} />
+      <FeatureControls
+        mode={mode}
+        controller={controller}
+        onCapture={onCapture}
+      />
+    </section>
+  );
+  return (
+    <div
+      className={`feature-document${card ? " feature-card-layout" : ""}${sourceOnLeft ? " feature-audio-layout" : ""}`}
+    >
+      {sourceOnLeft ? (
+        <div className="feature-left-column">
+          {controlCard}
+          <section
+            className="glass-card feature-audio-source"
+            aria-label="听见的原文"
+          >
+            <RecognizedText mode={mode} controller={controller} />
+          </section>
+        </div>
+      ) : (
+        controlCard
+      )}
       {!card && <Ornament />}
       <section
         className={card ? "glass-card feature-results" : "feature-results"}
       >
-        <SectionHeading side="src" controller={controller}>
-          {mode === "audio" ? "听见的原文" : "识别文本"}
-        </SectionHeading>
-        <div className="recognized-source" dir="auto">
-          {task.source ||
-            (task.phase === "loading"
-              ? "正在识别示例内容…"
-              : "识别到的原文会显示在这里。")}
-        </div>
+        {!sourceOnLeft && (
+          <RecognizedText mode={mode} controller={controller} />
+        )}
         <SectionHeading side="tgt" controller={controller}>
           Translation
         </SectionHeading>

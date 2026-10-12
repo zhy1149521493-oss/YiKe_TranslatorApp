@@ -372,6 +372,31 @@
 .reading-feature .feature-intro h2 {
   font-size: 21px;
 }
+.feature-left-column {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  min-height: 100%;
+}
+.feature-audio-source {
+  flex: 1;
+  padding: 24px;
+}
+.feature-audio-source .recognized-source {
+  margin-bottom: 0;
+  max-height: min(32vh, 360px);
+  overflow-y: auto;
+}
+.feature-audio-layout .feature-results > .translation-text,
+.feature-audio-layout .feature-results > .result-message {
+  flex: 1;
+}
+@media (max-width: 850px) {
+  .feature-left-column {
+    gap: 16px;
+  }
+}
 @media (min-width: 1200px) {
   .reading-workspace {
     padding: 36px 42px 38px;
