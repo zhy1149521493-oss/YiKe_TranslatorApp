@@ -2,7 +2,7 @@
 
 ## Motion candidate
 
-`fix/fluid-interface-motion` is based on `checkpoint/context-menu-audio-2026-10-12-candidate` (`ef4d8ae`). The separate `译刻-动画优化版-v2.exe` retains all menu/audio corrections. To return to that preceding candidate, save input, exit through the tray and run the retained `译刻-右键与音频修正版.exe`. No configuration migration or task logic change is included. Focused native motion checks cover the three layouts; final Workbench control visibility awaits recheck. Tag `checkpoint/fluid-motion-2026-10-12-candidate` and the [source/binary archive](../../TranslatorApp/archives/fluid-motion-2026-10-12-candidate/README.md) retain this revision.
+`fix/fluid-interface-motion` is based on `checkpoint/context-menu-audio-2026-10-12-candidate` (`ef4d8ae`). The separate `译刻-动画优化版-v2.exe` retains all menu/audio corrections. To return to that preceding candidate, save input, exit through the tray and run the retained `译刻-右键与音频修正版.exe`. No configuration migration or task logic change is included. Focused native motion checks cover the three layouts; final v2 Workbench control visibility and single/dual-source page scrolling also pass. Tag `checkpoint/fluid-motion-2026-10-12-candidate` and the [source/binary archive](../../TranslatorApp/archives/fluid-motion-2026-10-12-candidate/README.md) retain this revision.
 
 ## Context-menu and audio-reading candidate
 

@@ -1,6 +1,6 @@
 # YiKe developer documentation
 
-The [motion correction](MOTION.md) keeps drawer shells stable across task changes, adds a small interruptible content fade and synchronizes native/CSS drawer timing on `fix/fluid-interface-motion`. Focused native motion checks cover all three layouts; the final Workbench control-card correction awaits a recheck.
+The [motion correction](MOTION.md) keeps drawer shells stable across task changes, adds a small interruptible content fade and synchronizes native/CSS drawer timing on `fix/fluid-interface-motion`. Focused native motion checks cover all three layouts; final v2 Workbench single/dual-source controls and complete page scrolling also pass.
 
 The [themed application context menu](CONTEXT_MENU.md) adds session-only main-window pinning and useful window actions. The audio correction applies the [Poetry reading measure](POETRY_LAYOUT.md) to controls and per-channel paired passages on isolated branch `fix/context-menu-audio-reading`.
 
