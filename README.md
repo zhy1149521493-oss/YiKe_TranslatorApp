@@ -1,38 +1,39 @@
-# 译刻 (YiKe) — 本地优先的全场景翻译助手
+# 译刻 (YiKe) — 全场景翻译助手 · v1.2.0
 
-The current [window coordination correction](docs/WINDOW_BEHAVIOR.md) adds draggable branding, a stationary Poetry collapse anchor and rectangular magnetic floating windows. [Durable settings and startup](docs/STARTUP_AND_SETTINGS.md) covers saved pinning, cross-window preference writes and nonblocking preparation; see [rollback](docs/ROLLBACK.md) before switching candidates.
+诗集、工作台、经典三套界面，在设置中切换，共享主题配色。支持收起为导航或图标、拖动品牌区域移动窗口，以及矩形悬浮窗的边缘磁吸和共享透明度。
 
-Connected interface candidate: [three styles, live controls, compatibility and acceptance](docs/INTERFACE_INTEGRATION.md). The independent [design Demo](docs/DESIGN_DEMO.md) remains available; existing portable builds are retained.
-
-The [native drawer correction](docs/NATIVE_DRAWER.md) makes folded navigation the only visible desktop surface and preserves existing workspaces and tasks.
-
-The [flowing Poetry reading revision](docs/POETRY_LAYOUT.md) reduces empty spacing, fixes editor reflow and removes redundant OCR preview boxes; revised desktop visual acceptance is pending.
+v1.2.0 整合新版界面，并修复翻译竞态、音频状态管理、置顶缩窗与设置保存问题。开发与验证记录见 [docs/README.md](docs/README.md)。
 
 译刻是一款 Windows 桌面翻译软件：文本翻译、划词翻译、截图翻译、视频实时字幕、音频实时翻译（电脑音频 / 麦克风）一个应用全搞定。本地模型离线可用，也可以接 DeepSeek、Kimi、通义等云端 API。
 
 ## 特性
 
 - **文本翻译**：19 种语言选项，实时流式输出；源语言可手动选择或自动检测（不确定时由模型判断）
-- **可回退工作台**：侧栏切换、双栏对照、粘贴/清空/复制和深浅主题，随时切回经典布局；[使用与回退说明](docs/WORKBENCH.md)
+- **三套可切换界面**：诗集竖版阅读、工作台双栏对照、经典布局；样式只在设置中切换，切换保留内容和任务
+- **可展开导航与磁吸悬浮窗**：导航可常驻或悬停展开，支持保持置顶，三个矩形悬浮窗支持不同尺寸的边缘拼接
 - **划词翻译**：选中任意文字即译，透明悬浮窗显示（Ctrl+Shift+D）
 - **截图翻译**：框选屏幕区域直接识别并翻译（Ctrl+Shift+S）
 - **视频实时字幕**：系统 OCR / RapidOCR 双引擎，看视频带实时字幕
 - **音频实时翻译**：抓取电脑播放的声音或麦克风，实时识别 + 翻译（支持 中/英/日/韩 识别）
-- **本地优先**：内嵌 Ollama 推理引擎，断网也能用；无显卡也可纯 CPU 运行
+- **本地推理**：可搭配 Ollama 引擎与已下载的模型离线使用；无显卡也可纯 CPU 运行，轻量版需自行准备引擎
 - **外接 API**：OpenAI 兼容接口，预设 DeepSeek / Kimi / 通义 / 智谱 / OpenAI，一键切换
 - **绿色便携**：解压即用，不写注册表，删除文件夹即卸载
 
 ## 下载与安装
 
-到 [Releases](https://github.com/zhy1149521493-oss/YiKe_TranslatorApp/releases) 页面下载最新版压缩包（如 `译刻-正式版-v1.0.0.zip`）。
+到 [Releases](https://github.com/zhy1149521493-oss/YiKe_TranslatorApp/releases/latest) 下载 `YiKe-Lite-v1.2.0.zip`。从本版本开始，后续仅发布轻量版，不再上传包含大型运行库或模型的完整版；历史版本仍保留。
 
-> 注意：压缩包为 7z 格式（因 GitHub 附件限制后缀为 .zip），请用 **7-Zip / Bandizip / WinRAR / 360压缩** 等软件解压，不要使用 Windows 自带的右键“全部解压缩”。
+新版使用标准 ZIP，Windows 自带解压即可。解压后进入文件夹，双击 `译刻.exe`。轻量版保留全部业务功能，但不附带 Ollama、翻译模型和 OCR／ASR／降噪模型。
 
-解压后双击 `译刻.exe` 即可运行，无需安装。
+- **API 用户**：在设置中配置 OpenAI 兼容接口即可使用文本翻译。
+- **本地翻译用户**：保留旧完整版的 `ollama/` 与 `models/`，或自行准备完整的便携 Ollama 引擎；仅下载翻译模型不能代替引擎。
+- **截图／字幕／音频用户**：按需在设置 → 模型下载识别组件。Windows 系统 OCR 取决于系统安装的识别语言。
+
+升级前先保存输入并从托盘退出旧版，再用新版文件覆盖原目录的程序和同名 DLL。保留 `config.json`、`ollama/`、`models/`、`ocr/` 和 `asr/`；压缩包不包含这些个人配置或数据。详见 [轻量版发布与升级说明](docs/RELEASES.md)。
 
 ## 首次使用：下载或导入模型
 
-发布包不内置 AI 模型（体积原因），第一次使用需要：
+轻量版不内置 AI 模型；本地翻译需先准备程序旁的完整 `ollama/` 引擎目录，再操作以下步骤。只使用 API 时可跳过：
 
 1. 打开应用 → 右上角 ⚙ 设置 → 模型；
 2. 点「下载 HY-MT2（推荐，约 1.1GB）」或「下载 gemma3（约 3.3GB）」，可实时查看进度 / 速度 / 剩余时间；
@@ -61,7 +62,7 @@ The [flowing Poetry reading revision](docs/POETRY_LAYOUT.md) reduces empty spaci
 ## 隐私与安全
 
 - 软件完全本地运行，翻译数据不出本机（外接 API 模式会把文本发给对应服务商，属于正常使用）
-- API Key 只保存在本机应用目录的 `config.json` 中，不会上传或外发
+- API Key 保存在本机应用目录的 `config.json` 中，调用 API 时用于所选服务的身份验证；发布包不包含个人密钥
 - 未签名的 exe 可能被杀毒软件（如火绒）拦截，请将 `译刻.exe` 加入信任/白名单
 
 ## 卸载

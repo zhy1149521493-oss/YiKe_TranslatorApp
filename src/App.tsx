@@ -1635,7 +1635,7 @@ function MainWindow() {
     } catch (e: any) {
       setLocalModels([]);
       setLocalModelsLoaded(true);
-      if (!silent) setEngineStatus("本地模型服务未连接:纯文字版请到「设置 → 模型」下载本地模型,或配置「外接 API」后切换引擎");
+      if (!silent) setEngineStatus("本地模型服务未连接：轻量版需先补充程序旁的 ollama 引擎目录，再下载本地模型；也可配置「外接 API」后切换引擎。");
       return [];
     }
   };
@@ -2366,6 +2366,7 @@ function MainWindow() {
                       <h3>本地模型</h3>
                       <button className="btn-float" onClick={() => refreshLocalModels()} title="重新读取本地模型列表"><Icon name="refresh" size={13} /> 刷新列表</button>
                     </div>
+                    <p className="settings-note">轻量版不附带 Ollama 引擎。使用本地翻译时，请保留旧版的 ollama 目录，或先补充完整的便携引擎，再下载模型；外接 API 不需要本地引擎。</p>
                     <div className="settings-row">
                       <span>下载</span>
                       <button className="btn-float" disabled={!!pullJobs["maternion/hy-mt2:1.8b"]} onClick={() => downloadModel("maternion/hy-mt2:1.8b")} title="Ollama 模型库 maternion/hy-mt2:1.8b(翻译专用小模型,约 1.1GB)">

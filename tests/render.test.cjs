@@ -30,7 +30,7 @@ function mount(mode, component = 'MainWindow', layout = 'studio', overrides = {}
     useFloatingAppearance: (surface, defaults) => ({ ready: true, tone: 'light', opacity: 88, setOpacity() {}, style: floatingAppearance.floatingThemeVariables(floatingAppearance.restoreFloatingAppearance({}, defaults), surface, false) }),
     ...floatingAppearance, ...load('audio-sensitivity'),
     useFrontendReady: () => {}, ...load('config-writer'),
-    useStyleWindowSize: () => {}, appVersion: "1.1.0", exports: {}, ...load("interface/preferences"), ...load('latest-task'), ...load('audio-tasks'), ...load('text-tools'), ...load('request'),
+    useStyleWindowSize: () => {}, appVersion: require('../src-tauri/tauri.conf.json').version, exports: {}, ...load("interface/preferences"), ...load('latest-task'), ...load('audio-tasks'), ...load('text-tools'), ...load('request'),
     getCurrentWebviewWindow: () => ({ label: component === 'AudioFloatingWindow' ? 'audio-floating' : 'main', close: async () => calls.push(['close']), startDragging: async () => calls.push(['drag']) }),
     invoke: async (command, args) => { calls.push([command, args]); },
     readText: async () => 'Clipboard original', writeText: async text => { calls.push(['clipboard-write', text]); },

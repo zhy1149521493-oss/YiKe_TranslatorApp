@@ -1,5 +1,9 @@
 # YiKe developer documentation
 
+Version 1.2.0 integrates the reviewed interface and window/settings corrections. [Release packaging and upgrades](RELEASES.md) defines the Lite-only distribution policy, package contents, version checks and safe upgrade procedure. Historical local candidate paths below describe retained development checkpoints, not extra public release assets.
+
+See the [public version changelog](CHANGELOG.md) for the integrated release scope.
+
 The [window coordination correction](WINDOW_BEHAVIOR.md) fixes brand dragging and the Poetry collapse anchor, adds rectangular [shared floating windows](FLOATING_WINDOWS.md) with magnetic edges, and preserves geometry when pinning. Native acceptance is recorded separately from compilation.
 
 [Startup and durable preferences](STARTUP_AND_SETTINGS.md) explains asynchronous engine/window preparation, serialized configuration patches and settings restoration across normal exit/restart.
