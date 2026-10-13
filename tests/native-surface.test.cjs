@@ -23,7 +23,7 @@ test('folded desktop bounds fit each original navigation silhouette and logo', (
   assert.deepEqual(navigationSurface(rail, rect(20, 30, 42, 42), true, false), { ...rail, radius: 10 });
   assert.deepEqual(navigationSurface(poetry, rect(142, 37, 42, 42), true, true), { ...poetry, radius: 34 });
   assert.deepEqual(navigationSurface(classic, rect(24, 8, 42, 42), true, false), { ...classic, radius: 10 });
-  assert.deepEqual(navigationSurface(poetry, rect(142, 37, 42, 42), false, true), { ...rect(459, 37, 42, 42), radius: 21 });
+  assert.deepEqual(navigationSurface(poetry, rect(142, 37, 42, 42), false, true), { ...rect(142, 37, 42, 42), radius: 21 });
   assert.deepEqual(navigationSurface(rail, rect(20, 30, 42, 42), false, false), { ...rect(20, 30, 42, 42), radius: 21 });
 });
 

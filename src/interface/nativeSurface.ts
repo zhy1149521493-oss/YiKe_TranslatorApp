@@ -3,7 +3,7 @@ export interface SurfaceRect { x: number; y: number; width: number; height: numb
 /** Preserve the reading canvas while removing hidden desktop hit areas. */
 export function navigationSurface(nav: DOMRect, logo: DOMRect, expanded: boolean, poetry: boolean): SurfaceRect {
   if (expanded) return { x: nav.x, y: nav.y, width: nav.width, height: nav.height, radius: poetry ? nav.height / 2 : 10 };
-  return { x: poetry ? nav.x + (nav.width - logo.width) / 2 : logo.x,
+  return { x: logo.x,
     y: logo.y, width: logo.width, height: logo.height, radius: logo.height / 2 };
 }
 

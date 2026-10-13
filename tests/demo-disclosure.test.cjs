@@ -34,6 +34,8 @@ function disclosure(variant) {
     if (id === "react") return hooks;
     if (id === "./Icon") return { IconButton: () => null };
     if (id === "./BrandMark") return { BrandMark: () => null };
+    if (id === "@tauri-apps/api/core") return { isTauri: () => false, invoke: () => Promise.resolve() };
+    if (id === "./brandDrag") return require('./load-ts.cjs')('interface/brandDrag');
     return require(id);
   };
   loaded._compile(
@@ -66,22 +68,14 @@ function focusTarget(keyboard) {
 }
 global.matchMedia = () => ({ matches: true });
 
-test("Poetry reveal cannot turn a quick logo press into a task activation", () => {
+test("Poetry brand keeps the same position while revealing and folding", () => {
   const render = disclosure("poetry");
   let nav = render();
+  assert.equal(nav.children[0].props.style?.transform, undefined);
   nav.children[0].props.onPointerEnter();
   nav = render();
-  nav.ref.current = { getBoundingClientRect: () => ({ x: 100, y: 24, width: 800, height: 68 }) };
-  let prevented = 0, stopped = 0;
-  const event = { clientX: 500, clientY: 58,
-    preventDefault: () => prevented++, stopPropagation: () => stopped++ };
-  nav.onPointerDownCapture(event);
-  nav.onClickCapture(event);
-  assert.equal(prevented, 2);
-  assert.equal(stopped, 2);
-  nav.onPointerDownCapture({ ...event, clientX: 260 });
-  nav.onClickCapture(event);
-  assert.equal(prevented, 2, "a deliberate press away from the moving logo is accepted");
+  assert.equal(nav.children[0].props.style?.transform, undefined);
+  assert.match(nav.style.clipPath, /round 64px/);
 });
 
 test("mouse-focused task buttons do not pin folded navigation after pointer departure", (t) => {

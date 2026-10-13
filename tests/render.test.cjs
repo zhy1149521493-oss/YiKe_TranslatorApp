@@ -8,6 +8,8 @@ const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const load = require('./load-ts.cjs');
 const { ConnectedMain } = require('../src/interface/ConnectedMain.tsx');
+const { FloatingChrome, FloatingHint, FloatingOpacity } = require('../src/interface/FloatingChrome.tsx');
+const floatingAppearance = load('interface/floatingAppearance');
 global.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
 
 // Render the actual JSX with empty startup state and effects/IPC disabled.
@@ -24,7 +26,11 @@ function mount(mode, component = 'MainWindow', layout = 'studio', overrides = {}
   const states = {}; const calls = [];
   let hookIndex = 0;
   const ctx = {
-    React, ConnectedMain, useStyleWindowSize: () => {}, appVersion: "1.1.0", exports: {}, ...load("interface/preferences"), ...load('latest-task'), ...load('audio-tasks'), ...load('text-tools'), ...load('request'),
+    React, ConnectedMain, FloatingChrome, FloatingHint, FloatingOpacity,
+    useFloatingAppearance: (surface, defaults) => ({ ready: true, tone: 'light', opacity: 88, setOpacity() {}, style: floatingAppearance.floatingThemeVariables(floatingAppearance.restoreFloatingAppearance({}, defaults), surface, false) }),
+    ...floatingAppearance, ...load('audio-sensitivity'),
+    useFrontendReady: () => {}, ...load('config-writer'),
+    useStyleWindowSize: () => {}, appVersion: "1.1.0", exports: {}, ...load("interface/preferences"), ...load('latest-task'), ...load('audio-tasks'), ...load('text-tools'), ...load('request'),
     getCurrentWebviewWindow: () => ({ label: component === 'AudioFloatingWindow' ? 'audio-floating' : 'main', close: async () => calls.push(['close']), startDragging: async () => calls.push(['drag']) }),
     invoke: async (command, args) => { calls.push([command, args]); },
     readText: async () => 'Clipboard original', writeText: async text => { calls.push(['clipboard-write', text]); },
@@ -51,6 +57,58 @@ test('all main translation modes render safely with empty startup history', () =
 
 test('audio floating window renders safely before the first recognition event', () => {
   assert.match(render('audio', 'AudioFloatingWindow'), /电脑音频/);
+});
+
+test('translation and audio floats share chrome while retaining all real task controls', () => {
+  const translation = render('text', 'FloatingWindow');
+  const audio = render('audio', 'AudioFloatingWindow');
+  for (const html of [translation, audio]) {
+    assert.match(html, /floating-card/); assert.match(html, /floating-bar/);
+    assert.match(html, /floating-resize-zone/); assert.match(html, /悬浮窗设置/);
+    assert.match(html, /--floating-card-bg:rgba\(249, 247, 244, 0.88\)/);
+  }
+  for (const label of ['开始视频字幕', '调整字幕区域', '截图翻译', '关闭翻译悬浮窗']) assert.ok(translation.includes(label));
+  assert.match(audio, /关闭电脑音频并停止此音源/);
+});
+
+function elements(node) {
+  if (Array.isArray(node)) return node.flatMap(elements);
+  if (!node || typeof node !== 'object' || !node.props) return [];
+  return [node, ...elements(node.props.children)];
+}
+
+test('floating settings open actual windows without starting audio capture', async () => {
+  const h = mount('text', 'MainWindow', 'poetry', { settingsOpen: true, settingsPage: 'floating' });
+  const nodes = elements(h.element.props.settings);
+  for (const text of ['打开翻译窗', '打开电脑音频窗', '打开麦克风窗']) {
+    const button = nodes.find(node => node.type === 'button' && renderToStaticMarkup(node).includes(text));
+    assert.ok(button, text); await button.props.onClick();
+  }
+  assert.equal(h.states.floatingOpen, true);
+  assert.deepEqual(h.calls.map(([command]) => command), ['open_floating_window', 'open_audio_floating_window', 'open_audio_floating_window']);
+  assert.equal(h.calls[1][1].source, 'system'); assert.equal(h.calls[2][1].source, 'mic');
+});
+
+test('a Settings auxiliary opacity slider updates every float while keeping main opacity independent', () => {
+  const h = mount('text', 'MainWindow', 'poetry', { settingsOpen: true, settingsPage: 'floating' });
+  const groups = elements(h.element.props.settings).filter(node => node.props.className === 'appearance-group');
+  const microphone = groups.find(node => renderToStaticMarkup(node).includes('麦克风窗'));
+  const slider = elements(microphone).find(node => node.type === 'input' && node.props.type === 'range');
+  slider.props.onChange({ target: { value: '54' } });
+  for (const key of floatingAppearance.FLOATING_SURFACES) assert.equal(h.states.appearance[key].opacity, 54);
+  assert.equal(h.states.appearance.main.opacity, 100);
+});
+
+test('the opt-in shared theme action keeps main appearance, opacity and font sizes', () => {
+  const custom = Object.fromEntries(['main', 'floating', 'audio', 'audioMic', 'subtitle'].map((key, index) => [key, { bg: '#123456', textColor: '#ABCDEF', opacity: 70 + index, fontSize: 14 + index }]));
+  const h = mount('text', 'MainWindow', 'poetry', { settingsOpen: true, settingsPage: 'floating', appearance: custom });
+  const button = elements(h.element.props.settings).find(node => node.type === 'button' && renderToStaticMarkup(node).includes('统一跟随主题'));
+  button.props.onClick();
+  assert.deepEqual(h.states.appearance.main, custom.main);
+  for (const key of floatingAppearance.FLOATING_SURFACES) {
+    assert.equal(h.states.appearance[key].bg, ''); assert.equal(h.states.appearance[key].textColor, '');
+    assert.equal(h.states.appearance[key].opacity, custom[key].opacity); assert.equal(h.states.appearance[key].fontSize, custom[key].fontSize);
+  }
 });
 
 test('classic retains all four modes, with layout switching only in settings', () => {

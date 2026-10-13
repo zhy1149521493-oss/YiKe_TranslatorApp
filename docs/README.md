@@ -1,8 +1,12 @@
 # YiKe developer documentation
 
+The [window coordination correction](WINDOW_BEHAVIOR.md) fixes brand dragging and the Poetry collapse anchor, adds rectangular [shared floating windows](FLOATING_WINDOWS.md) with magnetic edges, and preserves geometry when pinning. Native acceptance is recorded separately from compilation.
+
+[Startup and durable preferences](STARTUP_AND_SETTINGS.md) explains asynchronous engine/window preparation, serialized configuration patches and settings restoration across normal exit/restart.
+
 The [motion correction](MOTION.md) keeps drawer shells stable across task changes, adds a small interruptible content fade and synchronizes native/CSS drawer timing on `fix/fluid-interface-motion`. Focused native motion checks cover all three layouts; final v2 Workbench single/dual-source controls and complete page scrolling also pass.
 
-The [themed application context menu](CONTEXT_MENU.md) adds session-only main-window pinning and useful window actions. The audio correction applies the [Poetry reading measure](POETRY_LAYOUT.md) to controls and per-channel paired passages on isolated branch `fix/context-menu-audio-reading`.
+The [themed application context menu](CONTEXT_MENU.md) adds persistent main-window pinning and useful window actions. The audio correction applies the [Poetry reading measure](POETRY_LAYOUT.md) to controls and per-channel paired passages on isolated branch `fix/context-menu-audio-reading`.
 
 The [responsive Poetry layout and style-specific window sizes](POETRY_LAYOUT.md) retain continuous vertical reading, a centered golden-ratio reading column and an editor that reflows when resized. Poetry defaults to a portrait window; Workbench and Classic default to landscape, with independent remembered manual sizes. Screenshot/subtitle placeholders remain compact controls on `fix/style-window-orientation`.
 

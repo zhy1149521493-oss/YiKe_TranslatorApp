@@ -1,5 +1,7 @@
 # 译刻 (YiKe) — 本地优先的全场景翻译助手
 
+The current [window coordination correction](docs/WINDOW_BEHAVIOR.md) adds draggable branding, a stationary Poetry collapse anchor and rectangular magnetic floating windows. [Durable settings and startup](docs/STARTUP_AND_SETTINGS.md) covers saved pinning, cross-window preference writes and nonblocking preparation; see [rollback](docs/ROLLBACK.md) before switching candidates.
+
 Connected interface candidate: [three styles, live controls, compatibility and acceptance](docs/INTERFACE_INTEGRATION.md). The independent [design Demo](docs/DESIGN_DEMO.md) remains available; existing portable builds are retained.
 
 The [native drawer correction](docs/NATIVE_DRAWER.md) makes folded navigation the only visible desktop surface and preserves existing workspaces and tasks.

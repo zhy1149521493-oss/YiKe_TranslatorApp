@@ -512,19 +512,21 @@ body,
 .floating-root {
   height: 100%;
   background: transparent;
-  padding: 6px;
+  padding: 0;
   user-select: none;
+  font-family: Inter, "Microsoft YaHei", "Segoe UI", sans-serif;
+  color: var(--ios-text);
+  color-scheme: light;
 }
+.floating-root[data-tone="dark"] { color-scheme: dark; }
 
 .floating-card {
   position: relative;
   height: 100%;
   background: var(--floating-card-bg);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  border-radius: var(--radius-lg);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow: var(--shadow-float);
+  border-radius: 0;
+  border: 1px solid var(--ios-separator);
+  box-shadow: none;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -540,12 +542,26 @@ body,
   cursor: nwse-resize;
   z-index: 5;
 }
+.floating-resize-zone::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-right: 1px solid var(--ios-secondary);
+  border-bottom: 1px solid var(--ios-secondary);
+  opacity: 0.4;
+}
 
 .floating-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  min-height: 44px;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 7px 10px 7px 14px;
   border-bottom: 1px solid var(--ios-separator);
   cursor: grab;
 }
@@ -554,8 +570,13 @@ body,
 }
 
 .floating-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
   font-size: 13px;
-  font-weight: 640;
+  font-weight: 500;
   color: var(--ios-text);
   letter-spacing: -0.2px;
 }
@@ -563,44 +584,39 @@ body,
 .floating-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 1px;
+  flex-shrink: 0;
 }
 
-.floating-btn {
-  background: rgba(60, 60, 67, 0.1);
-  border: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  font-size: 11px;
-  color: var(--ios-secondary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.floating-btn:hover {
-  background: rgba(60, 60, 67, 0.2);
-}
-
+.floating-btn,
 .floating-close {
-  background: rgba(60, 60, 67, 0.1);
+  background: transparent;
   border: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
+  width: 27px;
+  height: 27px;
+  padding: 5px;
+  border-radius: 4px;
   font-size: 11px;
   color: var(--ios-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s ease;
+  transition: background-color 140ms ease, color 140ms ease;
 }
-
+.floating-btn:hover,
 .floating-close:hover {
-  background: rgba(60, 60, 67, 0.2);
+  background: color-mix(in srgb, var(--ios-text) 8%, transparent);
   color: var(--ios-text);
+}
+.floating-root button:focus-visible,
+.floating-root input:focus-visible {
+  outline: 2px solid var(--ios-blue);
+  outline-offset: 1px;
+}
+.floating-root button[aria-expanded="true"] {
+  color: var(--ios-blue);
+  background: rgba(var(--ios-accent-rgb), 0.12);
 }
 
 .floating-settings {
@@ -611,6 +627,9 @@ body,
   gap: 6px;
   font-size: 12px;
   color: var(--ios-secondary);
+  flex: 0 1 auto;
+  overflow: auto;
+  max-height: 45%;
 }
 .floating-settings label {
   display: flex;
@@ -619,19 +638,35 @@ body,
   cursor: pointer;
 }
 .floating-settings input[type="range"] {
-  width: 80px;
+  width: auto;
+  min-width: 40px;
+  flex: 1;
   accent-color: var(--ios-blue);
 }
 .floating-settings input[type="checkbox"] {
   accent-color: var(--ios-blue);
 }
+.floating-opacity output {
+  min-width: 33px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.floating-settings-error {
+  margin: 2px 0 0;
+  color: var(--ios-text);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.floating-open-actions { justify-content: flex-start; flex-wrap: wrap; gap: 8px; }
 
 .floating-body {
   flex: 1;
-  padding: 12px;
+  min-height: 0;
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
   overflow: auto;
+  user-select: text;
 }
 
 .floating-trans {
@@ -639,7 +674,8 @@ body,
   display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow: auto;
+  min-height: 0;
+  overflow: visible;
 }
 /* 语音窗四行显示:原文区(上一句+当前句) / 译文区(上一句+当前句),定稿时各自上滚 */
 .voice-panel {
@@ -683,6 +719,16 @@ body,
   color: var(--ios-secondary);
   opacity: 0.75;
 }
+.floating-root .voice-section {
+  padding: 0;
+  flex: 0 0 auto;
+  overflow: visible;
+  gap: 6px;
+}
+.floating-root .voice-section-label { opacity: 1; letter-spacing: 0.04em; }
+.floating-root .voice-line { font-size: var(--w-font, 14px); line-height: 1.7; }
+.floating-root .voice-line-prev { font-size: calc(var(--w-font, 14px) - 1px); }
+.floating-root .voice-divider { margin: 14px 0; }
 .voice-line-cur {
   color: var(--ios-text);
 }
@@ -701,11 +747,11 @@ body,
   to { transform: translateY(0); opacity: 0.75; }
 }
 .floating-src {
-  font-size: 12px;
+  font-size: calc(var(--w-font, 14px) - 1px);
   color: var(--ios-secondary);
-  line-height: 1.5;
-  max-height: 40%;
-  overflow: auto;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .floating-divider {
   height: 1px;
@@ -715,9 +761,9 @@ body,
 .floating-result {
   font-size: var(--w-font, 14px);
   color: var(--ios-text);
-  line-height: 1.6;
-  flex: 1;
-  overflow: auto;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .floating-hint {
   flex: 1;
@@ -727,14 +773,20 @@ body,
   justify-content: center;
   gap: 6px;
   color: var(--ios-secondary);
+  padding: 12px 0;
+  text-align: center;
 }
+.floating-hint > svg { color: var(--ios-blue); margin-bottom: 5px; }
 .floating-hint p {
-  font-size: 18px;
-  font-weight: 680;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
   color: var(--ios-text);
 }
 .floating-hint span {
   font-size: 12px;
+  line-height: 1.7;
+  max-width: 30em;
 }
 .floating-status {
   flex: 1;
@@ -745,6 +797,10 @@ body,
   color: var(--ios-secondary);
   text-align: center;
   padding: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .floating-root .voice-line-prev { animation: none; }
+  .floating-root button { transition: none; }
 }
 
 /* ============ 视频实时字幕(第 6 波) ============ */
@@ -929,7 +985,7 @@ body,
 
 /* 悬浮窗字幕页 */
 .floating-subtitle .floating-result {
-  font-size: 16px;
+  font-size: var(--w-font, 14px);
 }
 
 /* ============ Wave 9: 设置中心 ============ */

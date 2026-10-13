@@ -17,8 +17,15 @@ import "./Studio.css";
 import { ConnectedMain } from "./interface/ConnectedMain";
 import type { InterfaceController, LanguagePair } from "./interface/controller";
 import type { AudioChannel, MainStyle } from "./interface/model";
-import { restoreDesign, restoreAudioLanguages, mergeSavedConfig } from "./interface/preferences";
+import { restoreDesign, restoreAudioLanguages } from "./interface/preferences";
 import { useStyleWindowSize } from "./interface/useStyleWindowSize";
+import { ConfigWriter } from "./config-writer";
+import { useFrontendReady } from "./startup";
+import { startupModels } from "./startup-models";
+import { FloatingChrome, FloatingHint, FloatingOpacity } from "./interface/FloatingChrome";
+import { useFloatingAppearance } from "./interface/useFloatingAppearance";
+import { AudioSensitivityWriter } from "./audio-sensitivity";
+import { normalizeFloatingAppearance, withFloatingOpacity, followFloatingTheme } from "./interface/floatingAppearance";
 
 const appWindow = getCurrentWebviewWindow();
 
@@ -427,6 +434,7 @@ let engineCfg: { mode: EngineMode; providers: ProviderCfg[]; activeProviderId: s
 /* 本地模型列表镜像:MainWindow 渲染时同步,供 translateStream/translateFull 做“未配置模型”守卫 */
 let localModelStore: LocalModelInfo[] = [];
 let localModelsReady = false;
+let localModelDiscovery: Promise<void> = Promise.resolve();
 
 function activeProvider(): ProviderCfg | null {
   return engineCfg.providers.find((p) => p.id === engineCfg.activeProviderId) ?? null;
@@ -543,6 +551,8 @@ async function translateStream(
   return boundedRequest(async (requestSignal) => {
   const eng = resolveEngine();
   if (eng.kind === "api") return fetchApiStream(eng.provider, source, target, text, onToken, requestSignal, onReasoning);
+  await localModelDiscovery;
+  if (requestSignal.aborted) throw new DOMException("Request cancelled", "AbortError");
   /* 无本地模型守卫:给友好提示而不是裸 API 报错(列表加载完才开始拦截,避免启动瞬间误报) */
   if (localModelsReady) {
     if (localModelStore.length === 0) {
@@ -561,6 +571,8 @@ async function translateFull(model: string, source: string, target: string, text
   return boundedRequest(async (requestSignal) => {
   const eng = resolveEngine();
   if (eng.kind === "api") return fetchApiFull(eng.provider, source, target, text);
+  await localModelDiscovery;
+  if (requestSignal.aborted) throw new DOMException("Request cancelled", "AbortError");
   if (localModelsReady) {
     if (localModelStore.length === 0) {
       const hasApiModel = engineCfg.providers.some((p) => p.models.length > 0);
@@ -617,6 +629,7 @@ function MainWindow() {
   const [confirmDeleteComponent, setConfirmDeleteComponent] = useState<"ocr" | "asr-multi" | "asr-ko" | "denoise" | null>(null);
   /* 降噪开关(设置 → 音频):识别前用 GTCRN 压掉喘气/底噪 */
   const [audioDenoise, setAudioDenoise] = useState(false);
+  const [audioMode, setAudioMode] = useState<"system" | "mic" | "both">("system");
   const [importName, setImportName] = useState("");
   const [importPath, setImportPath] = useState("");
   const [importBusy, setImportBusy] = useState(false);
@@ -625,7 +638,11 @@ function MainWindow() {
   const [confirmDeleteModel, setConfirmDeleteModel] = useState<string | null>(null);
   const [mainClose, setMainClose] = useState<"hide" | "quit">("hide"); // 主窗口 ✕ 行为(Wave 9 设置面板提供 UI,默认隐藏到托盘)
   const configLoadedRef = useRef(false);
-  const savedConfigRef = useRef<Record<string, any>>({});
+  const [configWriter] = useState(() => new ConfigWriter(
+    config => invoke("save_app_config", { config }),
+    () => setActionNotice("设置未能保存，请检查程序目录是否可写，或重试刚才的修改"),
+  ));
+  const [sensitivityWriter] = useState(() => new AudioSensitivityWriter(invoke));
   /* ollama 实际推理后端(GPU/CPU):CPU 时提示本地翻译较慢(无 GPU 回退提示) */
   const [ollamaBackend, setOllamaBackend] = useState("");
   /* Wave 9: 设置中心 / 主题 / 外观 / 快捷键 */
@@ -633,6 +650,7 @@ function MainWindow() {
   const [uiLayout, setUiLayout] = useState<"poetry" | "studio" | "classic">("studio");
   const [navigation, setNavigation] = useState<"persistent" | "hover">("persistent");
   const [windowSizingReady, setWindowSizingReady] = useState(false);
+  useFrontendReady(windowSizingReady, true);
   useStyleWindowSize(uiLayout === "studio" ? "workbench" : uiLayout, windowSizingReady);
   const [composing, setComposing] = useState(false);
   const [audioControlsBusy, setAudioControlsBusy] = useState(false);
@@ -640,6 +658,7 @@ function MainWindow() {
   const [audioChannelLanguages, setAudioChannelLanguages] = useState<Record<AudioChannel, LanguagePair | null>>({ system: null, mic: null });
   const [screenshotWorking, setScreenshotWorking] = useState(false);
   const [actionNotice, setActionNotice] = useState("");
+  const [configReadError, setConfigReadError] = useState("");
   useEffect(() => {
     document.documentElement.dataset.layout = uiLayout;
     return () => { delete document.documentElement.dataset.layout; };
@@ -723,10 +742,10 @@ function MainWindow() {
       .then((cfg) => {
         if (cancelled) return;
         configLoadedRef.current = true;
+        configWriter.hydrate(cfg ?? {});
         if (!cfg) return;
         if (cfg.engineMode) setEngineMode(cfg.engineMode);
         if (cfg.mainClose === "quit") setMainClose("quit");
-        savedConfigRef.current = cfg;
         const s = cfg.settings ?? {};
         const design = restoreDesign(s);
         setUiLayout(design.mainStyle === "workbench" ? "studio" : design.mainStyle);
@@ -743,10 +762,11 @@ function MainWindow() {
         }
         setTheme(s.theme === "dark" || s.theme === "system" ? s.theme : "light");
         setAccentColor(typeof s.accentColor === "string" ? s.accentColor : "");
-        setAppearance(mergeAppearance(DEFAULT_APPEARANCE, s.appearance));
+        setAppearance(normalizeFloatingAppearance(mergeAppearance(DEFAULT_APPEARANCE, s.appearance)));
         setShortcuts({ ...DEFAULT_SHORTCUTS, ...(s.shortcuts ?? {}) });
         setConflictHint(s.translate?.conflictHint !== false);
         if (s.translate) {
+          if (typeof s.translate.model === "string" && s.translate.model.trim()) setModel(s.translate.model);
           if (s.translate.sourceLang) setSourceLang(s.translate.sourceLang);
           if (s.translate.targetLang) setTargetLang(s.translate.targetLang);
           if (typeof s.translate.streamOn === "boolean") setStreamOn(s.translate.streamOn);
@@ -760,6 +780,7 @@ function MainWindow() {
           });
         }
         if (s.clipboard) setClipAuto(!!s.clipboard.auto);
+        if (s.audio?.mode === "mic" || s.audio?.mode === "both") setAudioMode(s.audio.mode);
         /* 降噪开关:读配置 + 同步到 Rust(识别前是否先压噪) */
         if (s.audio && typeof s.audio.denoise === "boolean") {
           setAudioDenoise(s.audio.denoise);
@@ -773,13 +794,6 @@ function MainWindow() {
           // 新版语义=只保留用户明确添加/使用的模型。
           if (cfg.configVersion !== 3) {
             list = list.map((p: ProviderCfg) => ({ ...p, models: p.model && p.model.trim() ? [p.model] : [] }));
-            invoke("save_app_config", {
-              config: {
-                ...cfg,
-                configVersion: 3,
-                providers: list,
-              },
-            }).catch(() => {});
           }
           setProviders(list);
           if (cfg.activeProviderId && list.some((p: ProviderCfg) => p.id === cfg.activeProviderId)) {
@@ -787,7 +801,11 @@ function MainWindow() {
           }
         }
       })
-      .catch(() => { if (!cancelled) configLoadedRef.current = true; })
+      .catch(error => {
+        if (cancelled) return;
+        configWriter.block(error);
+        setConfigReadError("无法读取设置，已暂停自动保存以保护原文件。请检查配置文件或目录权限");
+      })
       .finally(() => { if (!cancelled) setWindowSizingReady(true); });
     return () => { cancelled = true; };
   }, []);
@@ -820,6 +838,8 @@ function MainWindow() {
 
   /* ===== 视频实时字幕(第 6 波 3.4/3.5) ===== */
   const [subtitleOn, setSubtitleOn] = useState(false);          // 字幕开关
+  const subtitleOnRef = useRef(subtitleOn);
+  subtitleOnRef.current = subtitleOn;
   const [subFps, setSubFps] = useState(2);                      // 截帧频率 1-5 次/秒
   const [subMode, setSubMode] = useState<"trans-first" | "ocr-first">("trans-first"); // 翻译优先/原文优先
   const [subEngine, setSubEngine] = useState<"win" | "rapid">("win"); // 字幕 OCR 引擎:win=系统OCR(快)/rapid=RapidOCR
@@ -827,54 +847,50 @@ function MainWindow() {
   const [subRegion, setSubRegion] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const subRegionRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  /* mainClose 立即落盘:用户可能马上点 ✕(Rust 直接从文件读,不能等 400ms 防抖) */
+  /* Persist only changed fields immediately; writes are serialized across React updates. */
   useEffect(() => {
-    if (!configLoadedRef.current) return;
-    invoke("save_app_config", {
-      config: mergeSavedConfig(savedConfigRef.current, {
-        configVersion: 3, mainClose, engineMode, activeProviderId, providers,
-        settings: {
-          theme, accentColor, appearance, shortcuts, uiLayout: uiLayout === "classic" ? "classic" : "studio",
-          design: { mainStyle: uiLayout === "studio" ? "workbench" : uiLayout, navigation },
-          translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs },
-          subtitle: { fps: subFps, mode: subMode, engine: subEngine, region: subRegionRef.current },
-          clipboard: { auto: clipAuto },
-          audio: { denoise: audioDenoise, channelLanguages: audioChannelLanguages },
-        },
-      }),
-    }).catch((e) => console.error("保存配置失败", e));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mainClose, uiLayout, navigation]);
+    if (!windowSizingReady || !configLoadedRef.current) return;
+    const settings = {
+      theme, accentColor, appearance, shortcuts, uiLayout: uiLayout === "classic" ? "classic" : "studio",
+      design: { mainStyle: uiLayout === "studio" ? "workbench" : uiLayout, navigation },
+      translate: { model, sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs },
+      subtitle: { fps: subFps, mode: subMode, engine: subEngine, region: subRegionRef.current },
+      clipboard: { auto: clipAuto },
+      audio: { mode: audioMode, denoise: audioDenoise, channelLanguages: audioChannelLanguages },
+    };
+    void configWriter.update({ configVersion: 3, mainClose, engineMode, activeProviderId, providers, settings }).catch(() => {});
+  }, [configWriter, windowSizingReady, engineMode, activeProviderId, providers, mainClose, theme, uiLayout, accentColor, appearance, shortcuts, model, sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs, subFps, subMode, subEngine, subRegion, clipAuto, audioDenoise, audioMode, navigation, audioChannelLanguages]);
 
-  /* 配置变更防抖保存(400ms)+ 广播外观到其他窗口 + 重注册快捷键(须在相关 state 声明之后) */
   useEffect(() => {
-    if (!configLoadedRef.current) return;
-    const t = setTimeout(() => {
-      const settings = {
-        theme,
-        uiLayout: uiLayout === "classic" ? "classic" : "studio",
-        design: { mainStyle: uiLayout === "studio" ? "workbench" : uiLayout, navigation },
-        accentColor,
-        appearance,
-        shortcuts,
-        translate: { sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs },
-        subtitle: { fps: subFps, mode: subMode, engine: subEngine, region: subRegionRef.current },
-        clipboard: { auto: clipAuto },
-        audio: { denoise: audioDenoise, channelLanguages: audioChannelLanguages },
-      };
-      invoke("save_app_config", { config: mergeSavedConfig(savedConfigRef.current, { configVersion: 3, mainClose, engineMode, activeProviderId, providers, settings }) }).catch((e) => console.error("保存配置失败", e));
-      invoke("broadcast_settings", { settings }).catch(() => {});
-      invoke("apply_shortcuts", { shortcuts }).catch(() => {});
-    }, 400);
-    return () => clearTimeout(t);
-  }, [engineMode, activeProviderId, providers, mainClose, theme, uiLayout, accentColor, appearance, shortcuts, sourceLang, targetLang, streamOn, numCtx, conflictHint, independentLang, modeLangs, subFps, subMode, subEngine, subRegion, clipAuto, audioDenoise, navigation, audioChannelLanguages]);
+    if (!windowSizingReady) return;
+    invoke("broadcast_settings", { settings: { theme, accentColor, appearance } }).catch(() => {});
+  }, [windowSizingReady, theme, accentColor, appearance]);
+  useEffect(() => {
+    if (windowSizingReady) invoke("apply_shortcuts", { shortcuts }).catch(() => {});
+  }, [windowSizingReady, shortcuts]);
+  useEffect(() => {
+    const flush = () => Promise.all([configWriter.flush(), sensitivityWriter.flush()]).then(() => {});
+    (window as any).__flushAppConfig = flush;
+    (window as any).__requestAppQuit = () => (configWriter.persistenceBlocked ? Promise.resolve() : flush()).then(() => invoke("quit_app"))
+      .catch(error => {
+        setActionNotice(`退出前保存失败：${errorMessage(error)}`);
+        void appWindow.show().then(() => appWindow.setFocus()).catch(() => {});
+      });
+    return () => { delete (window as any).__flushAppConfig; delete (window as any).__requestAppQuit; };
+  }, [configWriter, sensitivityWriter]);
+  useEffect(() => {
+    const listener = appWindow.listen<Partial<Record<SurfaceKey, AppearanceItem>>>("appearance-updated", ({ payload }) => {
+      configWriter.acceptExternal({ settings: { appearance: payload } });
+      setAppearance(previous => normalizeFloatingAppearance(mergeAppearance(previous, payload)));
+    });
+    return () => { void listener.then(unlisten => unlisten()); };
+  }, [configWriter]);
 
   /* 主窗口应用主题 + 外观(CSS 变量即时生效) */
   useWindowTheme("main", theme, appearance, accentColor);
   const [subCurrent, setSubCurrent] = useState<{ text: string; result: string } | null>(null); // 当前字幕(主窗口显示)
 
   /* ===== 音频实时字幕(第 7 波:系统内部音频 → ASR → 翻译) ===== */
-  const [audioMode, setAudioMode] = useState<"system" | "mic" | "both">("system"); // 音频来源模式
   const [audioSubOn, setAudioSubOn] = useState<Record<string, boolean>>({});       // 各来源开关
   const [audioStatus, setAudioStatus] = useState<Record<string, string>>({});      // 各来源状态
   const [, setAudioPartial] = useState<Record<string, string>>({});                 // 各来源增量文本(仅写入,显示改走 audioHist)
@@ -901,13 +917,18 @@ function MainWindow() {
     return sensitivities[lang];
   };
   /* 设置某语言灵敏度:更新本地 + 写 Rust(Rust 广播到所有端,联动共享);松手时应用生效 */
+  const sensitivityThrottleRef = useRef(0);
   const setSensitivityForLang = (lang: string, value: number) => {
     setSensitivities((prev) => ({ ...prev, [lang]: value }));
-    invoke("audio_set_sensitivity", { lang, value }).catch(() => {});
+    const now = Date.now();
+    if (now - sensitivityThrottleRef.current < 100) return;
+    sensitivityThrottleRef.current = now;
+    sensitivityWriter.update(lang, value, false).catch(error => setActionNotice(`断句设置未保存：${errorMessage(error)}`));
   };
   /* 滑块松手:应用灵敏度(重启识别器使端点生效,拖动过程不反复重启) */
-  const applySensitivityForLang = (lang: string) => {
-    invoke("audio_apply_sensitivity", { lang }).catch(() => {});
+  const applySensitivityForLang = (lang: string, value: number) => {
+    setSensitivities((prev) => ({ ...prev, [lang]: value }));
+    sensitivityWriter.update(lang, value, true).catch(error => setActionNotice(`断句设置未应用：${errorMessage(error)}`));
   };
   /* 启动时加载灵敏度配置 */
   useEffect(() => {
@@ -961,6 +982,8 @@ function MainWindow() {
   const submitSubtitle = useCallback(async (text: string) => {
     await subtitleTask.submit(text, async (text, { signal, isCurrent }) => {
       try {
+        await invoke("wait_floating_ready");
+        if (!isCurrent()) return;
         let src = langFor("subtitle").src;
         let tgt = langFor("subtitle").tgt;
         if (src === "auto") src = detectLang(text);
@@ -1291,9 +1314,10 @@ function MainWindow() {
         stopAllAudio();
         setActiveMode("subtitle");
         ensureSubRegion();
-        invoke("open_floating_window").catch(() => {});
+        invoke("open_floating_window").then(() => {
+          appWindow.emitTo("floating", "subtitle-state", subtitleOnRef.current ? "on" : "off").catch(() => {});
+        }).catch(error => setSubStatus(`悬浮窗准备失败：${errorMessage(error)}`));
         setFloatingOpen(true);
-        appWindow.emitTo("floating", "subtitle-state", "on").catch(() => {});
       } else {
         appWindow.emitTo("floating", "subtitle-state", "off").catch(() => {});
       }
@@ -1317,9 +1341,10 @@ function MainWindow() {
       stopAllAudio();
       setActiveMode("subtitle");
       ensureSubRegion();
-      invoke("open_floating_window").catch(() => {});
+      invoke("open_floating_window").then(() => {
+        appWindow.emitTo("floating", "subtitle-state", subtitleOnRef.current ? "on" : "off").catch(() => {});
+      }).catch(error => setSubStatus(`悬浮窗准备失败：${errorMessage(error)}`));
       setFloatingOpen(true);
-      appWindow.emitTo("floating", "subtitle-state", "on").catch(() => {});
       return true;
     });
   }, [stopAllAudio, subEngine, componentStatus]);
@@ -1598,9 +1623,11 @@ function MainWindow() {
   /* ---- 本地模型管理(Wave 10.5:模型页 列表/下载/删除/导入) ---- */
   const refreshLocalModels = async (silent = false): Promise<LocalModelInfo[]> => {
     try {
-      const resp = await fetch(`${OLLAMA_BASE}/api/tags`);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
+      const data = await boundedRequest(async signal => {
+        const response = await fetch(`${OLLAMA_BASE}/api/tags`, { signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      }, undefined, 5000);
       const list: LocalModelInfo[] = Array.isArray(data.models) ? data.models : [];
       setLocalModels(list);
       setLocalModelsLoaded(true);
@@ -1612,15 +1639,28 @@ function MainWindow() {
       return [];
     }
   };
-  /* 启动后拉取本地模型;若失败(serve 可能还在启动)3 秒后静默重试一次 */
+  /* First paint is independent of local inference; bounded retries cover cold service startup. */
   useEffect(() => {
-    let alive = true;
-    let t: ReturnType<typeof setTimeout> | undefined;
-    refreshLocalModels().then((list) => {
-      if (!alive || list.length) return;
-      t = setTimeout(() => { refreshLocalModels(true); }, 3000);
+    const controller = new AbortController();
+    localModelDiscovery = invoke("wait_local_engine").catch(() => {}).then(async () => {
+      const list = await startupModels<LocalModelInfo>(signal => boundedRequest(async requestSignal => {
+        const response = await fetch(`${OLLAMA_BASE}/api/tags`, { signal: requestSignal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        return Array.isArray(data.models) ? data.models : [];
+      }, signal, 2000), controller.signal);
+      if (!controller.signal.aborted) {
+        // Publish to inference before resolving the shared readiness promise.
+        localModelStore = list; localModelsReady = true;
+        setLocalModels(list); setLocalModelsLoaded(true);
+      }
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      localModelStore = []; localModelsReady = true;
+      setLocalModels([]); setLocalModelsLoaded(true);
+      setEngineStatus("本地模型服务未连接：请到「设置 → 模型」检查本地服务，或配置「外接 API」");
     });
-    return () => { alive = false; if (t) clearTimeout(t); };
+    return () => { controller.abort(); };
   }, []);
   /* 启动后检测识别组件(OCR/ASR)是否已安装 */
   useEffect(() => {
@@ -2208,10 +2248,11 @@ function MainWindow() {
                     <div className="settings-row" key={code}>
                       <span>{name}断句</span>
                       <input type="range" min="1" max="40" step="1"
-                        value={Math.round((sensitivityForLang(code) ?? 1.2) * 10)}
+                        value={Math.round((sensitivityForLang(code) ?? 0.6) * 10)}
                         onChange={(e) => setSensitivityForLang(code, Number(e.target.value) / 10)}
-                        onPointerUp={() => applySensitivityForLang(code)} />
-                      <b>{(sensitivityForLang(code) ?? 1.2).toFixed(1)}s</b>
+                        onPointerUp={(e) => applySensitivityForLang(code, Number(e.currentTarget.value) / 10)}
+                        onKeyUp={(e) => { if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key)) applySensitivityForLang(code, Number(e.currentTarget.value) / 10); }} />
+                      <b>{(sensitivityForLang(code) ?? 0.6).toFixed(1)}s</b>
                     </div>
                   ))}
                   <div className="settings-row">
@@ -2251,10 +2292,26 @@ function MainWindow() {
               {settingsPage === "floating" && (
                 <div className="settings-section">
                   <h2>悬浮窗外观</h2>
-                  <p className="settings-note">改动即时生效、重启保留;背景/文字颜色点「跟随主题」可恢复默认。圆角/边距/毛玻璃强度等不做(选项太多反而难用)。</p>
+                  <p className="settings-note">改动即时生效、重启保留。翻译、字幕、电脑音频与麦克风悬浮窗共享透明度；背景、文字颜色和字号可分别调整。点「跟随主题」可恢复默认颜色。</p>
+                  <div className="settings-row floating-open-actions">
+                    <button className="btn-float" onClick={async () => {
+                      try { await invoke("open_floating_window"); setFloatingOpen(true); }
+                      catch (cause) { setActionNotice(`打开翻译悬浮窗失败：${errorMessage(cause)}`); }
+                    }}><Icon name="windows" size={14} /> 打开翻译窗</button>
+                    <button className="btn-float" onClick={async () => {
+                      try { await invoke("open_audio_floating_window", { source: "system" }); }
+                      catch (cause) { setActionNotice(`打开电脑音频窗失败：${errorMessage(cause)}`); }
+                    }}><Icon name="volume" size={14} /> 打开电脑音频窗</button>
+                    <button className="btn-float" onClick={async () => {
+                      try { await invoke("open_audio_floating_window", { source: "mic" }); }
+                      catch (cause) { setActionNotice(`打开麦克风窗失败：${errorMessage(cause)}`); }
+                    }}><Icon name="mic" size={14} /> 打开麦克风窗</button>
+                    <button className="btn-float" onClick={() => setAppearance(previous => followFloatingTheme(previous))}>统一跟随主题</button>
+                  </div>
+                  <p className="settings-note">仅打开悬浮窗，不启动音频识别。可拖动标题栏排列、拼接窗口。</p>
                   <div className="appearance-preview">
                     <div className="appearance-preview-card" style={{
-                      background: hexToRgba(appearance.floating.bg || "#ffffff", appearance.floating.opacity / 100),
+                      background: hexToRgba(appearance.floating.bg || (resolvedDark ? "#282624" : "#F9F7F4"), appearance.floating.opacity / 100),
                       color: appearance.floating.textColor || "var(--ios-text)",
                       fontSize: `${appearance.floating.fontSize}px`,
                     }}>
@@ -2264,7 +2321,10 @@ function MainWindow() {
                   </div>
                   {(Object.keys(SURFACE_LABELS) as SurfaceKey[]).map((key) => {
                     const item = appearance[key];
-                    const patch = (p: Partial<AppearanceItem>) => setAppearance((prev) => ({ ...prev, [key]: { ...prev[key], ...p } }));
+                    const patch = (p: Partial<AppearanceItem>) => setAppearance((prev) => {
+                      const next = { ...prev, [key]: { ...prev[key], ...p } };
+                      return key !== "main" && typeof p.opacity === "number" ? withFloatingOpacity(next, p.opacity) : next;
+                    });
                     return (
                       <div className="appearance-group" key={key}>
                         <h3>{SURFACE_LABELS[key]}</h3>
@@ -2274,7 +2334,7 @@ function MainWindow() {
                           <button className="btn-float" onClick={() => patch({ bg: "" })}>跟随主题</button>
                         </div>
                         <div className="settings-row">
-                          <span>背景透明度</span>
+                          <span>{key === "main" ? "背景透明度" : "共享透明度"}</span>
                           <input type="range" min="0" max="100" value={item.opacity} onChange={(e) => patch({ opacity: Number(e.target.value) })} />
                           <b>{item.opacity}%</b>
                         </div>
@@ -2720,13 +2780,14 @@ function MainWindow() {
     onCapture={mode => { if (mode === "screenshot") void startScreenshot(); else invoke("open_screenshot_overlay", { from: "subtitle" }).catch(error => setSubStatus(`选区失败: ${errorMessage(error)}`)); }}
     onMinimize={() => { invoke("minimize_main_window").catch(error => setActionNotice(`最小化失败：${errorMessage(error)}`)); }}
     onMaximize={() => { invoke("toggle_maximize_main_window").catch(error => setActionNotice(`窗口操作失败：${errorMessage(error)}`)); }}
-    onClose={() => { appWindow.close().catch(error => setActionNotice(`关闭失败：${errorMessage(error)}`)); }} onDrag={onHeaderMouseDown}
-    notice={actionNotice} classicTask={classicTask} ignoreEscape={!!recordingAction} />;
+    onClose={() => { (configWriter.persistenceBlocked ? Promise.resolve() : Promise.all([configWriter.flush(), sensitivityWriter.flush()])).then(() => appWindow.close()).catch(error => setActionNotice(`关闭失败：${errorMessage(error)}`)); }} onDrag={onHeaderMouseDown}
+    notice={configReadError || actionNotice} classicTask={classicTask} ignoreEscape={!!recordingAction} />;
 
 }
 
 /* ============ 悬浮窗 ============ */
 function FloatingWindow() {
+  const [listenersReady, setListenersReady] = useState(false);
   const [trans, setTrans] = useState<{ text: string; src: string; tgt: string; result: string } | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -2735,40 +2796,12 @@ function FloatingWindow() {
   const [subStatus, setSubStatus] = useState<string | null>(null);   // 字幕状态提示
   const [subRunning, setSubRunning] = useState(false);               // 字幕是否运行中(主窗口同步)
 
-  /* Wave 9 外观:翻译页用 floating 外观,字幕页用 subtitle 外观 */
-  const [appr, setAppr] = useState<{ theme: string; accent: string; appearance: Record<SurfaceKey, AppearanceItem> } | null>(null);
+  /* Per-mode typography/colors; all auxiliary windows share opacity and chrome. */
   const surfaceKey: SurfaceKey = mode === "subtitle" ? "subtitle" : "floating";
-  const surfaceKeyRef = useRef<SurfaceKey>(surfaceKey);
-  surfaceKeyRef.current = surfaceKey;
-  const currentAppr = appr?.appearance[surfaceKey] ?? DEFAULT_APPEARANCE[surfaceKey];
-  const setSurfaceOpacity = (v: number) => {
-    const base = appr ?? { theme: "light", accent: "", appearance: DEFAULT_APPEARANCE };
-    const next = { theme: base.theme, accent: base.accent ?? "", appearance: { ...base.appearance, [surfaceKey]: { ...base.appearance[surfaceKey], opacity: v } } };
-    setAppr(next);
-    applyWindowTheme(surfaceKey, next.theme, next.appearance, next.accent);
-    invoke("update_appearance", { surface: surfaceKey, patch: { opacity: v } }).catch(() => {});
-  };
-
-  /* 加载配置应用本窗外观;接收设置中心广播即时更新 */
-  useEffect(() => {
-    invoke<any>("load_app_config").then((cfg) => {
-      const s = cfg?.settings ?? {};
-      const st = { theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light", accent: typeof s.accentColor === "string" ? s.accentColor : "", appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance) };
-      setAppr(st);
-      applyWindowTheme(surfaceKeyRef.current, st.theme, st.appearance, st.accent);
-    }).catch(() => {});
-    (window as any).__applyAppSettings = (s: any) => {
-      const st = { theme: s?.theme === "dark" || s?.theme === "system" ? s.theme : "light", accent: typeof s?.accentColor === "string" ? s.accentColor : "", appearance: mergeAppearance(DEFAULT_APPEARANCE, s?.appearance) };
-      setAppr(st);
-      applyWindowTheme(surfaceKeyRef.current, st.theme, st.appearance, st.accent);
-    };
-    return () => { delete (window as any).__applyAppSettings; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  /* 翻译页/字幕页切换时按当前界面重新应用外观 */
-  useWindowTheme(surfaceKey, appr?.theme ?? "light", appr?.appearance ?? DEFAULT_APPEARANCE, appr?.accent);
+  const appearance = useFloatingAppearance(surfaceKey, DEFAULT_APPEARANCE, listenersReady);
 
   useEffect(() => {
+    let active = true;
     const u = appWindow.listen<{ text: string; src: string; tgt: string; result: string; role?: string }>(
       "show-translation",
       (e) => { setTrans(e.payload); setStatus(null); setMode("trans"); }
@@ -2796,7 +2829,8 @@ function FloatingWindow() {
         if (on) setMode("subtitle");
       }
     );
-    return () => { u.then((f) => f()); s.then((f) => f()); c.then((f) => f()); st.then((f) => f()); ss.then((f) => f()); sr.then((f) => f()); };
+    Promise.all([u, s, c, st, ss, sr]).then(() => { if (active) setListenersReady(true); }).catch(error => console.error("Floating listeners could not initialize", error));
+    return () => { active = false; u.then((f) => f()); s.then((f) => f()); c.then((f) => f()); st.then((f) => f()); ss.then((f) => f()); sr.then((f) => f()); };
   }, []);
 
   const closeFloating = async () => {
@@ -2806,11 +2840,9 @@ function FloatingWindow() {
   };
 
   return (
-    <div className="floating-root">
-      <div className="floating-card">
-        <div className="floating-bar" onMouseDown={() => appWindow.startDragging()}>
-          <span className="floating-title">{mode === "subtitle" ? "字幕" : "翻译"}</span>
-          <div className="floating-actions">
+    <FloatingChrome title={mode === "subtitle" ? "视频字幕" : "翻译"} icon={mode === "subtitle" ? "film" : "globe"}
+      surface="floating" {...appearance} onClose={closeFloating} closeLabel="关闭翻译悬浮窗"
+      actions={<>
             <button className={`floating-btn${subRunning ? " active" : ""}`} title={subRunning ? "停止视频字幕" : "开始视频字幕"} onMouseDown={(e) => e.stopPropagation()}
               onClick={() => {
                 if (subRunning) {
@@ -2821,70 +2853,54 @@ function FloatingWindow() {
                   appWindow.emitTo("main", "subtitle-start").catch(() => {});  // 显式开始
                 }
               }}>
-              <Icon name="film" size={13} />
+              <Icon name="film" size={15} />
             </button>
             <button className="floating-btn" title="调整字幕区域" onMouseDown={(e) => e.stopPropagation()}
               onClick={() => { invoke("open_screenshot_overlay", { from: "subtitle" }).catch(() => {}); }}>
-              <Icon name="target" size={13} />
+              <Icon name="target" size={15} />
             </button>
             <button className="floating-btn" title="截图翻译" onMouseDown={(e) => e.stopPropagation()}
               onClick={async () => { try { await invoke("open_screenshot_overlay", { from: "floating" }); } catch {} }}>
-              <Icon name="camera" size={13} />
+              <Icon name="camera" size={15} />
             </button>
             <button
               className="floating-btn"
               title="设置"
+              aria-label="悬浮窗设置"
+              aria-expanded={showSettings}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => setShowSettings(!showSettings)}
             >
-              <Icon name="settings" size={13} />
+              <Icon name="settings" size={15} />
             </button>
-            <button className="floating-close" title="关闭" onMouseDown={(e) => e.stopPropagation()} onClick={closeFloating}><Icon name="close" size={12} /></button>
-          </div>
-        </div>
-
-        {showSettings && (
-          <div className="floating-settings">
-            <label>
-              透明度
-              <input type="range" min="0" max="100" value={Math.round(currentAppr.opacity)} onChange={(e) => setSurfaceOpacity(Number(e.target.value))} />
-            </label>
-          </div>
-        )}
-
-        <div className="floating-body">
+      </>}
+      settings={showSettings && <FloatingOpacity value={appearance.opacity} onChange={appearance.setOpacity} />}>
           {mode === "subtitle" ? (
             subStatus ? (
               <div className="floating-status">{subStatus}</div>
             ) : subtitle ? (
               <div className="floating-trans floating-subtitle">
+                <div className="voice-section-label">原文</div>
                 <div className="floating-src">{subtitle.text}</div>
-                {subtitle.result && (<><div className="floating-divider" /><div className="floating-result">{subtitle.result}</div></>)}
+                {subtitle.result && (<><div className="floating-divider" /><div className="voice-section-label">译文</div><div className="floating-result">{subtitle.result}</div></>)}
               </div>
             ) : (
-              <div className="floating-hint">
-                <p>视频字幕</p>
-                <span>在主窗口点击「视频字幕」开始字幕识别</span>
-              </div>
+              <FloatingHint icon="film" title="视频字幕">在主窗口选择字幕区域，开始字幕识别</FloatingHint>
             )
           ) : status ? (
             <div className="floating-status">{status}</div>
           ) : trans ? (
             <div className="floating-trans">
+              <div className="voice-section-label">原文</div>
               <div className="floating-src">{trans.text}</div>
               <div className="floating-divider" />
+              <div className="voice-section-label">译文</div>
               <div className="floating-result">{trans.result}</div>
             </div>
           ) : (
-            <div className="floating-hint">
-              <p>复制即译</p>
-              <span>复制任意文字,自动翻译</span>
-            </div>
+            <FloatingHint icon="globe" title="复制即译">复制文字，或使用顶部按钮截图翻译</FloatingHint>
           )}
-        </div>
-        <div className="floating-resize-zone" onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); invoke("floating_resize_begin", { kind: "floating" }).catch(() => {}); }} title="拖动右下角调整窗口大小" />
-      </div>
-    </div>
+    </FloatingChrome>
   );
 }
 
@@ -2892,6 +2908,15 @@ function FloatingWindow() {
 /* 与视频字幕窗分开:单独窗口,透明/置顶/可拖动,专显示音频识别原文+译文 */
 /* 电脑音频窗(label=audio-floating)与麦克风窗(label=audio-floating-mic)共用本组件 */
 function AudioFloatingWindow() {
+  const [listenersReady, setListenersReady] = useState(false);
+  const [sensitivityError, setSensitivityError] = useState("");
+  const [sensitivityWriter] = useState(() => new AudioSensitivityWriter(invoke));
+  useEffect(() => {
+    const target = window as unknown as { __flushAudioSettings?: () => Promise<void> };
+    const flush = () => sensitivityWriter.flush();
+    target.__flushAudioSettings = flush;
+    return () => { if (target.__flushAudioSettings === flush) delete target.__flushAudioSettings; };
+  }, [sensitivityWriter]);
   const source = appWindow.label === "audio-floating-mic" ? "mic" : "system";
   const isMic = source === "mic";
   /* 两句显示:hist 保留最近几句(最后一项=当前句,可能为空)。
@@ -2902,35 +2927,8 @@ function AudioFloatingWindow() {
   // 断句灵敏度(共享):语言 → 秒
   const [sens, setSens] = useState<Record<string, number>>({});
 
-  /* Wave 9 外观:电脑音频窗用 audio 外观,麦克风窗用 audioMic 外观 */
-  const [appr, setAppr] = useState<{ theme: string; accent: string; appearance: Record<SurfaceKey, AppearanceItem> } | null>(null);
   const surfaceKey: SurfaceKey = isMic ? "audioMic" : "audio";
-  const currentAppr = appr?.appearance[surfaceKey] ?? DEFAULT_APPEARANCE[surfaceKey];
-  const setSurfaceOpacity = (v: number) => {
-    const base = appr ?? { theme: "light", accent: "", appearance: DEFAULT_APPEARANCE };
-    const next = { theme: base.theme, accent: base.accent ?? "", appearance: { ...base.appearance, [surfaceKey]: { ...base.appearance[surfaceKey], opacity: v } } };
-    setAppr(next);
-    applyWindowTheme(surfaceKey, next.theme, next.appearance, next.accent);
-    invoke("update_appearance", { surface: surfaceKey, patch: { opacity: v } }).catch(() => {});
-  };
-
-  /* 加载配置应用本窗外观;接收设置中心广播即时更新 */
-  useEffect(() => {
-    invoke<any>("load_app_config").then((cfg) => {
-      const s = cfg?.settings ?? {};
-      const st = { theme: s.theme === "dark" || s.theme === "system" ? s.theme : "light", accent: typeof s.accentColor === "string" ? s.accentColor : "", appearance: mergeAppearance(DEFAULT_APPEARANCE, s.appearance) };
-      setAppr(st);
-      applyWindowTheme(surfaceKey, st.theme, st.appearance, st.accent);
-    }).catch(() => {});
-    (window as any).__applyAppSettings = (s: any) => {
-      const st = { theme: s?.theme === "dark" || s?.theme === "system" ? s.theme : "light", accent: typeof s?.accentColor === "string" ? s.accentColor : "", appearance: mergeAppearance(DEFAULT_APPEARANCE, s?.appearance) };
-      setAppr(st);
-      applyWindowTheme(surfaceKey, st.theme, st.appearance, st.accent);
-    };
-    return () => { delete (window as any).__applyAppSettings; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  useWindowTheme(surfaceKey, appr?.theme ?? "light", appr?.appearance ?? DEFAULT_APPEARANCE, appr?.accent);
+  const appearance = useFloatingAppearance(surfaceKey, DEFAULT_APPEARANCE, listenersReady);
 
   useEffect(() => {
     invoke<Record<string, number>>("audio_get_sensitivities").then((s) => setSens(s)).catch(() => {});
@@ -2949,17 +2947,22 @@ function AudioFloatingWindow() {
      节流 100ms:拖动滑块会高频触发 onChange,每次都 invoke+eval 广播会让 WebView 忙。 */
   const sensThrottleRef = useRef(0);
   const changeSens = (lang: string, v: number) => {
+    setSens((prev) => ({ ...prev, [lang]: v }));
     const now = Date.now();
     if (now - sensThrottleRef.current < 100) return;
     sensThrottleRef.current = now;
-    setSens((prev) => ({ ...prev, [lang]: v }));
-    invoke("audio_set_sensitivity", { lang, value: v }).catch(() => {});
+    sensitivityWriter.update(lang, v, false).catch(cause => setSensitivityError(`断句设置未保存：${errorMessage(cause)}`));
   };
-  const applySens = (lang: string) => {
-    invoke("audio_apply_sensitivity", { lang }).catch(() => {});
+  const applySens = (lang: string, value: number) => {
+    setSens((prev) => ({ ...prev, [lang]: value }));
+    setSensitivityError("");
+    sensitivityWriter.update(lang, value, true).catch(cause => {
+      setSensitivityError(`断句设置未应用：${cause instanceof Error ? cause.message : String(cause)}`);
+    });
   };
 
   useEffect(() => {
+    let active = true;
     let session = 0;
     const accept = (event: AudioEvent) => {
       if (event.session < session) return false;
@@ -2992,7 +2995,9 @@ function AudioFloatingWindow() {
       setHist([]);
       closeAndStop();
     });
+    Promise.all([u, s, c]).then(() => { if (active) setListenersReady(true); }).catch(error => console.error("Audio floating listeners could not initialize", error));
     return () => {
+      active = false;
       u.then((f) => f()); s.then((f) => f()); c.then((f) => f());
       delete (window as any).__audioShow;
       delete (window as any).__audioPartial;
@@ -3010,33 +3015,25 @@ function AudioFloatingWindow() {
     invoke("audio_subtitle_stop", { source }).catch(() => {});
   };
 
-  /* 拖动:调用 Rust GetCursorPos 增量轮询(系统层,跟手;startDragging 对本窗口无效) */
-
   return (
-    <div className="floating-root">
-      <div className="floating-card">
-        <div className="floating-bar" onMouseDown={(e) => { if (!(e.target as HTMLElement).closest(".floating-actions")) { e.preventDefault(); invoke("audio_floating_drag_begin", { source }).catch(() => {}); } }}>
-          <span className="floating-title"><Icon name="mic" size={13} /> {isMic ? "麦克风" : "电脑音频"}</span>
-          <div className="floating-actions">
+    <FloatingChrome title={isMic ? "麦克风" : "电脑音频"} icon={isMic ? "mic" : "monitor"}
+      surface={isMic ? "audioMic" : "audio"} {...appearance} onClose={closeAndStop}
+      error={sensitivityError || appearance.error}
+      closeLabel={`关闭${isMic ? "麦克风" : "电脑音频"}并停止此音源`}
+      actions={
             <button
               className="floating-btn"
               title="设置"
+              aria-label="悬浮窗设置"
+              aria-expanded={showSettings}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => setShowSettings(!showSettings)}
             >
-              <Icon name="settings" size={13} />
+              <Icon name="settings" size={15} />
             </button>
-            <button className="floating-close" title="关闭" onMouseDown={(e) => e.stopPropagation()}
-              onClick={closeAndStop}><Icon name="close" size={12} /></button>
-          </div>
-        </div>
-
-        {showSettings && (
-          <div className="floating-settings">
-            <label>
-              透明度
-              <input type="range" min="0" max="100" value={Math.round(currentAppr.opacity)} onChange={(e) => setSurfaceOpacity(Number(e.target.value))} />
-            </label>
+      }
+      settings={showSettings && <>
+            <FloatingOpacity value={appearance.opacity} onChange={appearance.setOpacity} />
             {/* 断句灵敏度:按语言独立,与主界面共享 */}
             {[
               ["auto", "自动"], ["zh", "中文"], ["en", "英语"], ["ja", "日语"], ["ko", "韩语"],
@@ -3047,23 +3044,21 @@ function AudioFloatingWindow() {
                   type="range" min="1" max="40" step="1"
                   value={Math.round((sens[code] ?? 1.2) * 10)}
                   onChange={(e) => changeSens(code, Number(e.target.value) / 10)}
-                  onPointerUp={() => applySens(code)}
+                  onPointerUp={event => applySens(code, Number(event.currentTarget.value) / 10)}
+                  onKeyUp={event => {
+                    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(event.key)) applySens(code, Number(event.currentTarget.value) / 10);
+                  }}
+                  onBlur={event => applySens(code, Number(event.currentTarget.value) / 10)}
                   title="停顿多久算一句结束(秒):数值越小越敏感"
                 />
                 <b>{(sens[code] ?? 1.2).toFixed(1)}s</b>
               </label>
             ))}
-          </div>
-        )}
-
-        <div className="floating-body">
+      </>}>
           {status ? (
             <div className="floating-status">{status}</div>
           ) : !hist.some(line => line.text) ? (
-            <div className="floating-hint">
-              <p><Icon name="mic" size={18} /> 音频识别</p>
-              <span>在主窗口点击「音频翻译」开始音频字幕</span>
-            </div>
+            <FloatingHint icon={isMic ? "mic" : "monitor"} title={isMic ? "麦克风识别" : "电脑音频识别"}>在主窗口点击「音频翻译」开始监听此音源</FloatingHint>
           ) : (
             <>
               {/* 原文区:上一句(已说过) + 当前句(正在说);key 变化时上一句播放上滚动画 */}
@@ -3097,15 +3092,13 @@ function AudioFloatingWindow() {
               </div>
             </>
           )}
-        </div>
-        <div className="floating-resize-zone" onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); invoke("floating_resize_begin", { kind: isMic ? "audioMic" : "audio" }).catch(() => {}); }} title="拖动右下角调整窗口大小" />
-      </div>
-    </div>
+    </FloatingChrome>
   );
 }
 
 /* ============ 截图覆盖层 ============ */
 function ScreenshotOverlay() {
+  const [listenersReady, setListenersReady] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rect = useRef({ sx: 0, sy: 0, ex: 0, ey: 0 });   // 鼠标坐标(CSS 像素)
   const drawing = useRef(false);
@@ -3186,6 +3179,8 @@ function ScreenshotOverlay() {
         .catch(() => { appWindow.show().catch(() => {}); });
     };
     const u = appWindow.listen<string>("overlay-start", (e) => start(e.payload));
+    let alive = true;
+    void u.then(() => { if (alive) setListenersReady(true); });
 
     /* 隐藏而非关闭:窗口启动时已预建,保留复用 */
     const hide = () => { appWindow.hide(); };
@@ -3241,6 +3236,7 @@ function ScreenshotOverlay() {
     window.addEventListener("keydown", onKey);
     c.addEventListener("contextmenu", onCtx);
     return () => {
+      alive = false;
       u.then((f) => f());
       c.removeEventListener("mousedown", onDown);
       c.removeEventListener("mousemove", onMove);
@@ -3250,6 +3246,8 @@ function ScreenshotOverlay() {
       c.removeEventListener("contextmenu", onCtx);
     };
   }, []);
+
+  useFrontendReady(listenersReady);
 
   return (
     <div style={{

@@ -1,6 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Icon } from "./Icon";
 import { menuPosition } from "./contextMenu";
 import "./context-menu.css";
@@ -26,7 +25,7 @@ export function AppContextMenu({ x, y, open, floatingOpen, onDismiss, onToggleDr
     document.addEventListener("pointerdown", outside, true);
     window.addEventListener("blur", dismiss); window.addEventListener("resize", dismiss);
     let disposed = false;
-    if (isTauri()) void getCurrentWindow().isAlwaysOnTop().then(value => { if (!disposed) setPinned(value); })
+    if (isTauri()) void invoke<boolean>("get_main_pinned").then(value => { if (!disposed) setPinned(value); })
       .catch(() => { if (!disposed) setError("无法读取置顶状态"); });
     return () => { disposed = true; size.disconnect(); document.removeEventListener("pointerdown", outside, true);
       window.removeEventListener("blur", dismiss); window.removeEventListener("resize", dismiss); };
@@ -35,7 +34,7 @@ export function AppContextMenu({ x, y, open, floatingOpen, onDismiss, onToggleDr
   const togglePin = async () => {
     if (pinned === null || busy) return;
     setBusy(true); setError("");
-    try { const window = getCurrentWindow(); await window.setAlwaysOnTop(!pinned); setPinned(await window.isAlwaysOnTop()); }
+    try { setPinned(await invoke<boolean>("set_main_pinned", { pinned: !pinned })); }
     catch { setError("置顶操作失败，请重试"); }
     finally { setBusy(false); }
   };

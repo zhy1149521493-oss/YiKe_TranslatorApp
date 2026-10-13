@@ -125,13 +125,9 @@ pub fn denoise_installed() -> bool {
 fn sensitivity_map() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, f32>> {
     SENSITIVITY
         .get_or_init(|| {
-            let mut m = std::collections::HashMap::new();
-            m.insert("auto".to_string(), 0.6);
-            m.insert("zh".to_string(), 0.6);
-            m.insert("en".to_string(), 0.6);
-            m.insert("ja".to_string(), 0.6);
-            m.insert("ko".to_string(), 0.6);
-            Mutex::new(m)
+            let config = super::load_app_config().ok();
+            let saved = config.as_ref().and_then(|config| config.pointer("/settings/audio/sensitivities"));
+            Mutex::new(super::audio_sensitivity::restore(saved))
         })
         .lock()
         .unwrap()

@@ -1,12 +1,18 @@
 # Runtime architecture and request lifecycle
 
+## Window coordination, startup and configuration
+
+`BrandDragGesture` separates jitter/click activation from deliberate brand dragging. Normal transparent windows use `window_drag.rs`; maximized main windows delegate caption restore/move to Windows. Pure `floating_dock.rs` computes edge attachment from physical outer rectangles. `main_pin.rs` changes only main Z-order and persists the preference. `FloatingChrome` and `useFloatingAppearance` share auxiliary appearance while the existing task controllers retain source identities and close semantics.
+
+`startup.rs` runs engine setup separately and prewarms hidden WebViews after main first paint; first-use commands wait for mounted listeners. `ConfigWriter` serializes changed-field saves, and native merge/write runs under one configuration mutex. Appearance events carry only changed fields to avoid rolling back unrelated main edits. `settings_exit.rs` waits for actual writer acknowledgments before stopping prewarming and destroying native WebViews. See [window behavior](WINDOW_BEHAVIOR.md), [floating controls](FLOATING_WINDOWS.md) and [startup/settings contracts](STARTUP_AND_SETTINGS.md).
+
 ## Stable view and drawer motion
 
 The three layouts retain the drawer and main shell across task/Settings changes. `useViewMotion` keys only an opacity transition to view identity, with interruption, keyboard/reduced-motion cancellation and unmount cleanup. Native workspace geometry keeps the same 240ms timing as CSS for both directions, including a simultaneous menu removal. Standalone navigation uses 160ms. See [motion lifecycle and validation](MOTION.md).
 
 ## Main-window menu and audio reading
 
-The [context menu](CONTEXT_MENU.md) is owned by ConnectedMain and scoped to the production main window. Its optional popup rectangle is serialized with native navigation-region updates and unioned on the UI thread, preserving desktop hit testing while folded. Pinning reads and writes actual Tauri window state without persisting business configuration. Poetry alone groups AudioRecognized/AudioTranslations by source in one reading column; controllers, queues, native ASR and landscape layouts are unchanged.
+The [context menu](CONTEXT_MENU.md) is owned by ConnectedMain and scoped to the production main window. Its optional popup rectangle is serialized with native navigation-region updates and unioned on the UI thread, preserving desktop hit testing while folded. Pinning uses main-only native Z-order commands and persists `settings.design.alwaysOnTop`, preserving placement and clipping. Poetry alone groups AudioRecognized/AudioTranslations by source in one reading column; controllers, queues, native ASR and landscape layouts are unchanged.
 
 ## Isolated design preview
 
@@ -30,7 +36,7 @@ The main-window [native drawer surface](NATIVE_DRAWER.md) is synchronized by `sr
 
 `src/App.tsx` routes to main, translation floating, audio floating or screenshot overlay components using the native window label. The main window owns configuration and provider selection, and orchestrates translation. React and CSS are embedded into the portable executable by the Tauri CLI release build.
 
-`src/interface/` implements the connected Poetry/Workbench/Classic presentation. `controller.ts` defines live view data and explicit commands; MainWindow retains configuration, inference routing, queues and native handlers. `ConnectedMain` owns workspace visibility only. Original settings forms and classic text controls remain slots; native floating components remain in App.tsx. CSS is scoped to `.connected-ui` so auxiliary windows retain their original layout. `src/assets/fonts/` supplies shared offline fonts to production and Demo. `settings.design` stores the new style/navigation separately from the legacy `settings.uiLayout` fallback. See [configuration and functional mapping](INTERFACE_INTEGRATION.md). `scripts/ui-preview.mjs` supplies development-only fixture IPC and is not included in the production frontend.
+`src/interface/` implements the connected Poetry/Workbench/Classic presentation. `controller.ts` defines live view data and explicit commands; MainWindow retains configuration, inference routing, queues and native handlers. `ConnectedMain` owns workspace visibility only. Original settings forms and classic text controls remain slots; native floating controllers remain in App.tsx while `FloatingChrome` and `useFloatingAppearance` share rectangular presentation, theme and opacity. `window_drag.rs` uses actual physical rectangles and pure `floating_dock.rs` geometry for independent magnetic placement; see [window behavior](WINDOW_BEHAVIOR.md). CSS for main content remains scoped to `.connected-ui`. `src/assets/fonts/` supplies shared offline fonts to production and Demo. `settings.design` stores the new style/navigation separately from the legacy `settings.uiLayout` fallback. See [configuration and functional mapping](INTERFACE_INTEGRATION.md). `scripts/ui-preview.mjs` supplies development-only fixture IPC and is not included in the production frontend.
 
 `src/text-tools.ts` provides bounded language heuristics and conservative normalized subtitle deduplication. Uncertain source detection returns `auto`; prompts then ask the model to detect the original language. These heuristics do not replace a full language-identification model.
 

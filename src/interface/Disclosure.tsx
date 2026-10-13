@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { IconButton } from "./Icon";
 import type { Preferences } from "./model";
 import { BrandMark } from "./BrandMark";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { BrandDragGesture } from "./brandDrag";
 
 /** Nonmodal page navigation disclosure; this is not a dialog or a menu role. */
 export function NavigationCapsule({
@@ -26,9 +28,8 @@ export function NavigationCapsule({
   const ref = useRef<HTMLElement>(null);
   const pressedExpanded = useRef(false);
   const pointerInside = useRef(false);
-  const revealTime = useRef(-Infinity);
-  const suppressClick = useRef(false);
-  const [centerShift, setCenterShift] = useState(0);
+  const drag = useRef(new BrandDragGesture());
+  const dragOrigin = useRef({ x: 0, y: 0 });
   const [foldClip, setFoldClip] = useState("inset(0 100% 100% 0 round 21px)");
   const persistent = behavior === "persistent";
   const expanded = persistent || workspaceOpen || revealed || focused;
@@ -42,15 +43,7 @@ export function NavigationCapsule({
     if (!ref.current) return;
     const element = ref.current;
     const measure = () => {
-      if (variant === "poetry")
-        setCenterShift(
-          Math.max(
-            0,
-            (element.getBoundingClientRect().width - 42) / 2 -
-              parseFloat(getComputedStyle(element).paddingLeft),
-          ),
-        );
-      else {
+      {
         const rect = element.getBoundingClientRect();
         const logo = element
           .querySelector<HTMLElement>(".navigation-logo")
@@ -74,7 +67,6 @@ export function NavigationCapsule({
     if (!matchMedia("(hover: hover) and (pointer: fine)").matches) return;
     pointerInside.current = true;
     cancel();
-    if (!expanded) revealTime.current = performance.now();
     setRevealed(true);
   };
   const Tag = variant === "workbench" ? "aside" : "header";
@@ -92,11 +84,7 @@ export function NavigationCapsule({
       data-expanded={expanded}
       data-behavior={behavior}
       data-workspace-open={workspaceOpen}
-      style={
-        variant !== "poetry"
-          ? { clipPath: expanded ? "inset(0 0 0 0 round 0)" : foldClip }
-          : undefined
-      }
+      style={{ clipPath: expanded ? `inset(0 0 0 0 round ${variant === "poetry" ? 64 : 0}px)` : foldClip }}
       onPointerEnter={() => {
         if (expanded) enter();
       }}
@@ -105,29 +93,10 @@ export function NavigationCapsule({
         cancel();
         timer.current = setTimeout(() => setRevealed(false), 180);
       }}
-      onPointerDownCapture={(event) => {
+      onPointerDownCapture={() => {
         // A mouse/touch press may focus a button without keyboard intent,
         // including a button that was already focused before the press.
         setFocused(false);
-        suppressClick.current = false;
-        // Poetry moves its centered logo left while revealing. A quick press at
-        // the old logo position must not activate the task sliding underneath.
-        if (event && variant === "poetry" && !persistent && !workspaceOpen
-          && performance.now() - revealTime.current < 180) {
-          const rect = ref.current?.getBoundingClientRect();
-          if (rect && Math.abs(event.clientX - rect.x - rect.width / 2) <= 25
-            && Math.abs(event.clientY - rect.y - rect.height / 2) <= 25) {
-            suppressClick.current = true;
-            event.preventDefault();
-            event.stopPropagation();
-          }
-        }
-      }}
-      onClickCapture={event => {
-        if (!suppressClick.current) return;
-        suppressClick.current = false;
-        event.preventDefault();
-        event.stopPropagation();
       }}
       onFocusCapture={(event) => {
         // Focus pins navigation separately; it must not cancel a pending
@@ -170,15 +139,22 @@ export function NavigationCapsule({
           persistent || workspaceOpen ? "translation-workspace" : id
         }
         onPointerEnter={enter}
-        onPointerDown={() => {
+        onPointerDown={event => {
+          if (event.button !== 0) return;
           pressedExpanded.current = expanded;
+          dragOrigin.current = { x: event.clientX, y: event.clientY };
+          drag.current.press(event.screenX, event.screenY);
+          event.currentTarget.setPointerCapture(event.pointerId);
         }}
-        style={
-          variant === "poetry"
-            ? { transform: `translateX(${expanded ? 0 : centerShift}px)` }
-            : undefined
-        }
+        onPointerMove={event => {
+          if (event.buttons !== 1 || !drag.current.move(event.screenX, event.screenY)) return;
+          event.preventDefault();
+          if (isTauri()) void invoke("start_window_drag", { clientX: dragOrigin.current.x, clientY: dragOrigin.current.y }).catch(console.error);
+        }}
+        onPointerUp={() => drag.current.release()}
+        onPointerCancel={() => drag.current.release()}
         onClick={(event) => {
+          if (event.detail > 0 && drag.current.consumeClick()) { event.preventDefault(); return; }
           if (persistent || workspaceOpen) onBrand();
           else {
             cancel();

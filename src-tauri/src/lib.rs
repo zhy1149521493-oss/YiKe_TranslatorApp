@@ -12,6 +12,13 @@ mod audio_samples;
 mod streaming;
 mod capture_bounds;
 mod main_surface;
+mod window_drag;
+mod floating_dock;
+mod config_merge;
+mod main_pin;
+mod startup;
+mod audio_sensitivity;
+mod settings_exit;
 
 /// Job Object 句柄包装:HANDLE(*mut c_void) 本身不是 Send/Sync,
 /// 但内核句柄是进程级资源,跨线程移动/共享安全,显式标记以便放入 managed state。
@@ -179,7 +186,7 @@ impl Drop for OllamaManager {
 
 /// 清理本应用目录的残留 ollama 进程(上次退出异常留下的),按可执行文件路径匹配,
 /// 绝不误杀朋友系统里已安装的 Ollama。taskkill 同步等待完成后再探测端口。
-fn kill_leftover_bundled_ollama() {
+fn kill_leftover_bundled_ollama() -> bool {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
@@ -190,8 +197,9 @@ fn kill_leftover_bundled_ollama() {
     };
 
     let own_path = app_dir().join("ollama").join("ollama.exe").to_string_lossy().to_lowercase();
+    let mut killed = false;
     unsafe {
-        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return };
+        let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return false };
         let mut pids: Vec<u32> = Vec::new();
         let mut entry = PROCESSENTRY32W::default();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
@@ -229,15 +237,16 @@ fn kill_leftover_bundled_ollama() {
             eprintln!("[ollama] leftover check pid={pid} path={path}");
             if !path.is_empty() && path == own_path {
                 eprintln!("[ollama] killing leftover bundled ollama pid={pid} ({path})");
-                let _ = StdCommand::new("taskkill")
+                killed |= StdCommand::new("taskkill")
                     .args(["/pid", &pid.to_string(), "/t", "/f"])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .creation_flags(0x08000000)
-                    .output(); // 同步等待,确保杀完再探测端口
+                    .output().map(|output| output.status.success()).unwrap_or(false);
             }
         }
     }
+    killed
 }
 
 #[tauri::command]
@@ -268,30 +277,50 @@ fn config_path() -> std::path::PathBuf {
     app_dir().join("config.json")
 }
 
-/// 读取应用配置(引擎模式 + 供应商列表);文件不存在或损坏时返回空对象
-#[tauri::command]
-fn load_app_config() -> serde_json::Value {
-    let path = config_path();
-    match std::fs::read_to_string(&path) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
-            eprintln!("[config] parse failed: {e}");
-            serde_json::json!({})
-        }),
-        Err(_) => serde_json::json!({}),
+static CONFIG_LOCK: Mutex<()> = Mutex::new(());
+
+fn read_config() -> Result<serde_json::Value, String> {
+    match std::fs::read_to_string(config_path()) {
+        Ok(text) => {
+            let value: serde_json::Value = serde_json::from_str(&text).map_err(|_| "配置文件格式损坏，已保留原文件，请修复后重启".to_string())?;
+            if !value.is_object() { return Err("配置文件必须是对象，已保留原文件".into()); }
+            Ok(value)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
+        Err(error) => Err(format!("无法读取配置文件: {error}")),
     }
 }
 
-/// 保存应用配置:先写临时文件再改名,避免写入中途崩溃留下半个文件
 #[tauri::command]
-fn save_app_config(config: serde_json::Value) -> Result<(), String> {
+fn load_app_config() -> Result<serde_json::Value, String> {
+    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut config = read_config()?;
+    config_merge::normalize_opacity(&mut config);
+    Ok(config)
+}
+
+fn write_config(config: &serde_json::Value) -> Result<(), String> {
+    use std::io::Write;
     let path = config_path();
     let dir = path.parent().unwrap_or(std::path::Path::new("."));
     std::fs::create_dir_all(dir).map_err(|e| format!("创建配置目录失败: {e}"))?;
     let tmp = path.with_extension("json.tmp");
-    let data = serde_json::to_string_pretty(&config).map_err(|e| format!("序列化配置失败: {e}"))?;
-    std::fs::write(&tmp, data).map_err(|e| format!("写入配置失败: {e}"))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("保存配置失败: {e}"))?;
-    Ok(())
+    let data = serde_json::to_vec_pretty(config).map_err(|e| format!("序列化配置失败: {e}"))?;
+    let mut file = std::fs::File::create(&tmp).map_err(|e| format!("写入配置失败: {e}"))?;
+    file.write_all(&data).and_then(|_| file.sync_all()).map_err(|e| format!("写入配置失败: {e}"))?;
+    drop(file);
+    std::fs::rename(&tmp, &path).map_err(|e| format!("保存配置失败: {e}"))
+}
+
+/// Merge changed fields under one lock; never overwrite another window's settings.
+#[tauri::command]
+fn save_app_config(config: serde_json::Value) -> Result<(), String> {
+    if !config.is_object() { return Err("Configuration patch must be an object".into()); }
+    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut latest = read_config()?;
+    config_merge::merge(&mut latest, config);
+    config_merge::normalize_opacity(&mut latest);
+    write_config(&latest)
 }
 
 /// 广播设置到所有悬浮窗(外观即时生效):eval 注入,跨窗口最可靠(见 DECISIONS #014)
@@ -309,24 +338,29 @@ fn broadcast_settings(settings: serde_json::Value, app: tauri::AppHandle) -> Res
 /// 悬浮窗快捷滑条改外观:读配置 → 合并 patch 到 settings.appearance[surface] → 存盘 → 广播
 #[tauri::command]
 fn update_appearance(surface: String, patch: serde_json::Value, app: tauri::AppHandle) -> Result<(), String> {
-    let mut cfg: serde_json::Value = load_app_config();
-    if !cfg.is_object() {
-        cfg = serde_json::json!({});
-    }
-    let obj = cfg.as_object_mut().ok_or("配置格式错误")?;
-    let settings = obj.entry("settings").or_insert_with(|| serde_json::json!({}));
-    let s_obj = settings.as_object_mut().ok_or("settings 格式错误")?;
-    let appearance = s_obj.entry("appearance").or_insert_with(|| serde_json::json!({}));
-    let a_obj = appearance.as_object_mut().ok_or("appearance 格式错误")?;
-    let target = a_obj.entry(surface).or_insert_with(|| serde_json::json!({}));
-    if let (Some(t), Some(p)) = (target.as_object_mut(), patch.as_object()) {
-        for (k, v) in p {
-            t.insert(k.clone(), v.clone());
+    if !["main", "floating", "audio", "audioMic", "subtitle"].contains(&surface.as_str()) { return Err("Unknown appearance surface".into()); }
+    if !patch.is_object() { return Err("Appearance patch must be an object".into()); }
+    let (settings, changed_appearance) = {
+        let _guard = CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = read_config()?;
+        let mut appearance_patch = serde_json::json!({});
+        appearance_patch[&surface] = patch.clone();
+        if surface != "main" {
+            if let Some(opacity) = patch.get("opacity") { appearance_patch["floating"]["opacity"] = opacity.clone(); }
         }
-    }
-    save_app_config(cfg.clone())?;
-    let s = cfg.get("settings").cloned().unwrap_or_else(|| serde_json::json!({}));
-    broadcast_settings(s, app)
+        config_merge::merge(&mut config, serde_json::json!({"settings":{"appearance":appearance_patch.clone()}}));
+        config_merge::normalize_opacity(&mut config);
+        write_config(&config)?;
+        if surface != "main" && patch.get("opacity").is_some() {
+            for key in ["floating", "audio", "audioMic", "subtitle"] {
+                appearance_patch[key]["opacity"] = config["settings"]["appearance"][key]["opacity"].clone();
+            }
+        }
+        (config.get("settings").cloned().unwrap_or_else(|| serde_json::json!({})), appearance_patch)
+    };
+    // A full disk snapshot could roll back an unrelated main-window edit in flight.
+    let _ = app.emit_to("main", "appearance-updated", &changed_appearance);
+    broadcast_settings(settings, app)
 }
 
 /// 显示并聚焦主窗口(托盘"打开主窗口" / 左键点击托盘用)
@@ -350,14 +384,24 @@ fn show_main_window(app: &tauri::AppHandle) {
             }
             let _ = w.set_focus();
         }
+        let _ = main_pin::reapply_main_pin(&w);
         eprintln!("[main] shown from tray");
     }
 }
 
 /// 退出程序:主窗口"退出"按钮 / 托盘"退出"菜单调用;触发 OllamaManager Drop 清理子进程
 #[tauri::command]
-fn quit_app(app: tauri::AppHandle) {
+async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
     eprintln!("[app] quit requested");
+    settings_exit::quit(app).await
+}
+
+/// Normal exits wait for the mounted main configuration writer to finish.
+fn request_quit(app: &tauri::AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let js = "if(window.__requestAppQuit){window.__requestAppQuit()}else{window.__TAURI_INTERNALS__.invoke('quit_app')}";
+        if main.eval(js).is_ok() { return; }
+    }
     app.exit(0);
 }
 
@@ -1019,6 +1063,8 @@ fn audio_get_denoise() -> bool {
 /// 启动音频实时识别(source: "system"=电脑音频 / "mic"=麦克风)
 #[tauri::command]
 async fn audio_subtitle_start(source: String, lang: String, app: tauri::AppHandle) -> Result<(), String> {
+    let label = audio::window_label(audio::AudioSource::from_str(&source));
+    startup::auxiliary_window(&app, label).await?;
     tauri::async_runtime::spawn_blocking(move || audio::start(audio::AudioSource::from_str(&source), &lang, app))
         .await.map_err(|e| format!("启动音频任务失败: {e}"))?
 }
@@ -1049,8 +1095,18 @@ fn audio_get_sensitivities() -> std::collections::HashMap<String, f32> {
 
 /// 设置某语言的断句灵敏度(秒):存值 + 广播联动(主界面/悬浮窗),不重启识别
 #[tauri::command]
-fn audio_set_sensitivity(lang: String, value: f32, app: tauri::AppHandle) {
+fn audio_set_sensitivity(lang: String, value: f32, app: tauri::AppHandle) -> Result<(), String> {
+    let value = audio_sensitivity::validate(&lang, value)?;
+    // Lazy restoration may read configuration, so initialize before taking CONFIG_LOCK.
+    let _ = audio::all_sensitivities();
+    let _guard = CONFIG_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    let mut config = read_config()?;
+    let mut sensitivities = serde_json::json!({});
+    sensitivities[&lang] = serde_json::json!(value);
+    config_merge::merge(&mut config, serde_json::json!({"settings":{"audio":{"sensitivities":sensitivities}}}));
+    write_config(&config)?;
     audio::set_sensitivity(&lang, value, &app);
+    Ok(())
 }
 
 /// 应用某语言的灵敏度(重启识别器使端点生效);滑块松手时调用
@@ -1252,13 +1308,12 @@ fn close_floating_window(app: tauri::AppHandle) -> Result<(), String> {
 
 /// 打开指定来源的语音窗(source: "system" / "mic";窗口 setup 时已预建,这里只 show)
 #[tauri::command]
-fn open_audio_floating_window(source: String, app: tauri::AppHandle) -> Result<(), String> {
+async fn open_audio_floating_window(source: String, app: tauri::AppHandle) -> Result<(), String> {
     let label = audio::window_label(audio::AudioSource::from_str(&source));
-    if let Some(w) = app.get_webview_window(label) {
-        let _ = w.show();
-        let _ = w.set_focus();
-        eprintln!("[{label}] shown");
-    }
+    let w = startup::auxiliary_window(&app, label).await?;
+    w.show().map_err(|error| error.to_string())?;
+    let _ = w.set_focus();
+    eprintln!("[{label}] shown");
     Ok(())
 }
 
@@ -1316,67 +1371,9 @@ fn audio_forward_to_floating(
 ///  不依赖 WebView 事件,鼠标移出窗口仍可拖动)
 #[tauri::command]
 fn audio_floating_drag_begin(source: String, app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager as _;
     let label = audio::window_label(audio::AudioSource::from_str(&source));
-    let Some(w) = app.get_webview_window(label) else {
-        return Err(format!("{label} 窗口不存在"));
-    };
-    // 拖动进行中则忽略重复触发(防多线程并发竞争窗口位置)
-    static DRAGGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if DRAGGING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
-    }
-    // 用系统级 SetWindowPos 直接移动(无 IPC 延迟,比 tauri set_position 顺滑)
-    let hwnd0 = w.hwnd().map_err(|e| format!("获取窗口句柄失败: {e}"))?;
-    let hwnd_raw = hwnd0.0 as usize; // usize 可跨线程 Send
-    let pos0 = w.outer_position().map_err(|e| format!("读取窗口位置失败: {e}"))?;
-    std::thread::spawn(move || {
-        use windows::Win32::Foundation::POINT;
-        use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetCursorPos, SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-        };
-        let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut core::ffi::c_void);
-        unsafe {
-            // 记录鼠标起点与窗口起点
-            let mut start = POINT::default();
-            let _ = GetCursorPos(&mut start);
-            let mut win_x = pos0.x;
-            let mut win_y = pos0.y;
-            let mut last_x = start.x;
-            let mut last_y = start.y;
-            // 循环:窗口位置 += 鼠标位移增量(系统级移动,无 IPC,跟手)
-            loop {
-                let mut p = POINT::default();
-                let _ = GetCursorPos(&mut p);
-                // 左键已释放 → 结束
-                if GetAsyncKeyState(0x01) & (0x8000u16 as i16) == 0 {
-                    break;
-                }
-                let dx = p.x - last_x;
-                let dy = p.y - last_y;
-                last_x = p.x;
-                last_y = p.y;
-                if dx != 0 || dy != 0 {
-                    win_x += dx;
-                    win_y += dy;
-                    let _ = SetWindowPos(
-                        hwnd,
-                        None,
-                        win_x,
-                        win_y,
-                        0,
-                        0,
-                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                    );
-                }
-                std::thread::sleep(std::time::Duration::from_millis(4));
-            }
-            DRAGGING.store(false, std::sync::atomic::Ordering::SeqCst);
-            eprintln!("[audio-floating] drag end");
-        }
-    });
-    Ok(())
+    let window = app.get_webview_window(label).ok_or("Audio window unavailable")?;
+    window_drag::begin(window)
 }
 
 /// 打开截图覆盖层窗口(全屏 Canvas,用于框选区域)
@@ -1384,108 +1381,25 @@ fn audio_floating_drag_begin(source: String, app: tauri::AppHandle) -> Result<()
 /// (窗口已改不透明:若先 show 再截图,会把自己的黑窗口截进去;前端先隐藏→截屏→绘制→显示)
 /// from: 发起入口("main"=桌面端 / "floating"=悬浮窗),决定截图结果显示在哪
 #[tauri::command]
-fn open_screenshot_overlay(from: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::{Emitter, WebviewUrl, WebviewWindowBuilder};
+async fn open_screenshot_overlay(from: Option<String>, app: tauri::AppHandle) -> Result<(), String> {
     let from = from.unwrap_or_else(|| "main".to_string());
-    eprintln!("[screenshot] overlay opened from={from}");
-    // 预建窗口存在 → 只通知来源(不 show,前端截完图再显示)
-    if let Some(w) = app.get_webview_window("screenshot-overlay") {
-        let _ = w.hide(); // 确保处于隐藏状态,截图不包含自身
-        if let Ok(Some(monitor)) = app.primary_monitor() {
-            w.set_position(*monitor.position()).map_err(|e| format!("设置框选窗口位置: {e}"))?;
-            w.set_size(*monitor.size()).map_err(|e| format!("设置框选窗口尺寸: {e}"))?;
-        }
-        let _ = app.emit_to("screenshot-overlay", "overlay-start", from.clone());
-        return Ok(());
+    let window = startup::auxiliary_window(&app, "screenshot-overlay").await?;
+    window.hide().map_err(|error| error.to_string())?;
+    if let Some(monitor) = app.primary_monitor().map_err(|error| error.to_string())? {
+        window.set_position(*monitor.position()).map_err(|error| format!("设置框选窗口位置: {error}"))?;
+        window.set_size(*monitor.size()).map_err(|error| format!("设置框选窗口尺寸: {error}"))?;
     }
-    // 兜底:预建失败时后台线程创建
-    let (w, h) = if let Ok(Some(m)) = app.primary_monitor() {
-        let size = m.size();       // xcap 返回物理像素
-        let sf = m.scale_factor(); // DPI 缩放
-        // inner_size(f64) 是逻辑尺寸:物理/缩放 → 窗口物理 = 逻辑×dpr = 物理,与截图严格一致
-        (size.width as f64 / sf, size.height as f64 / sf)
-    } else {
-        (1920.0, 1080.0)
-    };
-    let app2 = app.clone();
-    std::thread::spawn(move || {
-        if let Ok(w) = WebviewWindowBuilder::new(&app2, "screenshot-overlay", WebviewUrl::App("index.html".into()))
-            .title("截图")
-            .inner_size(w, h)
-            .position(0.0, 0.0)
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .shadow(false)
-            .build()
-        {
-            if let Ok(Some(monitor)) = app2.primary_monitor() {
-                let _ = w.set_position(*monitor.position());
-                let _ = w.set_size(*monitor.size());
-            }
-            let _ = app2.emit_to("screenshot-overlay", "overlay-start", from.clone());
-            let _ = w.show();
-            let _ = w.set_focus();
-        }
-    });
-    Ok(())
+    // JS owns screenshot capture and showing; the hidden overlay cannot capture itself.
+    app.emit_to("screenshot-overlay", "overlay-start", from).map_err(|error| error.to_string())
 }
-/// 注意:窗口创建必须在后台线程执行,直接 invoke 里同步调 build 会死锁
+
 #[tauri::command]
-fn open_floating_window(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::{Emitter as _, WebviewUrl, WebviewWindowBuilder};
-
-    eprintln!("[floating] open_floating_window called");
-
-    // 已存在则聚焦
-    if let Some(w) = app.get_webview_window("floating") {
-        eprintln!("[floating] window exists, showing");
-        let _ = w.show();
-        let _ = w.set_focus();
-        return Ok(());
-    }
-
-    eprintln!("[floating] spawning background thread for creation");
-    let app2 = app.clone();
-    std::thread::spawn(move || {
-        match WebviewWindowBuilder::new(&app2, "floating", WebviewUrl::App("index.html".into()))
-            .title("翻译悬浮窗")
-            .inner_size(380.0, 220.0)
-            .min_inner_size(280.0, 160.0)
-            .resizable(true)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .shadow(false)
-            .build()
-        {
-            Ok(w) => {
-                // 放到主屏右下角
-                if let Ok(Some(m)) = app2.primary_monitor() {
-                    let size = m.size();
-                    let sf = m.scale_factor();
-                    let x = (size.width as f64 - 380.0 * sf - 40.0).max(0.0) as i32;
-                    let y = (size.height as f64 - 220.0 * sf - 40.0).max(0.0) as i32;
-                    eprintln!("[floating] placing at ({x}, {y}), screen={size:?}, scale={sf}");
-                    let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
-                }
-                let _ = w.show();
-                let _ = w.set_focus();
-                eprintln!("[floating] created OK");
-                let _ = app2.emit("floating-opened", ());
-            }
-            Err(e) => {
-                eprintln!("[floating] create FAILED: {e}");
-                let _ = app2.emit("floating-error", e.to_string());
-            }
-        }
-    });
-
+async fn open_floating_window(app: tauri::AppHandle) -> Result<(), String> {
+    let window = startup::auxiliary_window(&app, "floating").await?;
+    window.show().map_err(|error| error.to_string())?;
+    let _ = window.set_focus();
     Ok(())
 }
-
 // ============ Wave 9: 可配置全局快捷键 ============
 // 组合键存 config.json settings.shortcuts(action → "Ctrl+Shift+D" 等;空字符串 = 禁用)。
 // 设置中心改键后调用 apply_shortcuts 重新注册:先 unregister_all,再逐个注册。
@@ -1598,41 +1512,62 @@ fn toggle_maximize_main_window(app: tauri::AppHandle) -> Result<(), String> {
 
 // ============ 悬浮窗缩放(透明窗 startResizeDragging 无效,改用系统轮询) ============
 #[tauri::command]
-fn floating_resize_begin(kind: String, app: tauri::AppHandle) -> Result<(), String> {
+fn floating_resize_begin(kind: String, app: tauri::AppHandle, window: tauri::WebviewWindow, client_x: Option<f64>, client_y: Option<f64>) -> Result<(), String> {
     use tauri::Manager as _;
     let label = match kind.as_str() {
         "audio" => "audio-floating",
         "audioMic" => "audio-floating-mic",
-        _ => "floating",
+        "floating" => "floating",
+        _ => return Err("Unsupported resize window".into()),
     };
+    if window.label() != label { return Err("Resize caller does not match the window".into()); }
     let Some(w) = app.get_webview_window(label) else {
         return Err(format!("{label} 窗口不存在"));
     };
     static RESIZING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if RESIZING.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
-    }
     let hwnd0 = w.hwnd().map_err(|e| format!("获取窗口句柄失败: {e}"))?;
     let hwnd_raw = hwnd0.0 as usize;
     let size0 = w.outer_size().map_err(|e| format!("读取窗口尺寸失败: {e}"))?;
     let scale = w.scale_factor().unwrap_or(1.0);
     let min_w = (280.0 * scale).round() as i32;
     let min_h = (160.0 * scale).round() as i32;
+    let start = match (client_x, client_y) {
+        (Some(x), Some(y)) => {
+            let mut origin = windows::Win32::Foundation::POINT::default();
+            let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut core::ffi::c_void);
+            unsafe { windows::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut origin).ok().map_err(|e| e.to_string())?; }
+            window_drag::physical_press((origin.x, origin.y), scale, x, y)?
+        }
+        (None, None) => {
+            let mut cursor = windows::Win32::Foundation::POINT::default();
+            unsafe { windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut cursor).map_err(|e| e.to_string())?; }
+            (cursor.x, cursor.y)
+        }
+        _ => return Err("Both resize press coordinates are required".into()),
+    };
+    // Failed initial geometry reads must not permanently lock future resizing.
+    if RESIZING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
     std::thread::spawn(move || {
         use windows::Win32::Foundation::POINT;
         use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER};
+        use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, IsWindow, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER};
         let hwnd = windows::Win32::Foundation::HWND(hwnd_raw as *mut core::ffi::c_void);
         unsafe {
-            let mut start = POINT::default();
-            let _ = GetCursorPos(&mut start);
+            let mut last = (size0.width as i32, size0.height as i32);
             loop {
-                if GetAsyncKeyState(0x01) & (0x8000u16 as i16) == 0 { break; }
                 let mut p = POINT::default();
-                let _ = GetCursorPos(&mut p);
-                let cur_w = (size0.width as i32 + (p.x - start.x)).max(min_w);
-                let cur_h = (size0.height as i32 + (p.y - start.y)).max(min_h);
-                let _ = SetWindowPos(hwnd, None, 0, 0, cur_w as i32, cur_h as i32, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                if !IsWindow(Some(hwnd)).as_bool() || GetCursorPos(&mut p).is_err() { break; }
+                let held = GetAsyncKeyState(0x01) & i16::MIN != 0;
+                // A quick gesture may finish before IPC reaches this thread.
+                // Apply its full final displacement before checking release.
+                let size = window_drag::resize_dimensions((size0.width, size0.height), (p.x, p.y), start, (min_w, min_h));
+                if size != last {
+                    let _ = SetWindowPos(hwnd, None, 0, 0, size.0, size.1, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    last = size;
+                }
+                if !held { break; }
                 std::thread::sleep(std::time::Duration::from_millis(4));
             }
             RESIZING.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1674,120 +1609,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![main_surface::set_main_surface, greet, ping, quit_app, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, component_status, download_ocr_models, download_asr_model, download_denoise_model, uninstall_component, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity, audio_set_denoise, audio_get_denoise])
+        .invoke_handler(tauri::generate_handler![main_surface::set_main_surface, window_drag::start_window_drag, main_pin::get_main_pinned, main_pin::set_main_pinned, startup::frontend_ready, startup::wait_local_engine, startup::wait_floating_ready, greet, ping, quit_app, settings_exit::settings_flush_finished, minimize_main_window, toggle_maximize_main_window, load_app_config, save_app_config, broadcast_settings, update_appearance, apply_shortcuts, floating_resize_begin, api_chat, api_chat_full, api_list_models, import_gguf_model, component_status, download_ocr_models, download_asr_model, download_denoise_model, uninstall_component, capture_fullscreen, ocr_image_b64, win_ocr_b64, screenshot_ocr, subtitle_frame, open_screenshot_overlay, open_floating_window, close_floating_window, open_audio_floating_window, close_audio_floating_window, audio_forward_to_floating, audio_floating_drag_begin, audio_subtitle_start, audio_subtitle_stop, audio_subtitle_running, audio_get_sensitivities, audio_set_sensitivity, audio_apply_sensitivity, audio_set_denoise, audio_get_denoise])
         .setup(|app| {
-            // 【Ollama 启动(Wave 10 便携版)】
-            // 1) 先清理上次退出异常留下的"本应用目录" ollama(按 exe 路径匹配,不误杀朋友系统的 Ollama)
-            // 2) 再探测 127.0.0.1:11434;仍被占用(朋友已有 Ollama 在跑)→ 弹窗提示,不启动自带引擎
-            // 3) 空闲 → 启动本目录 ollama\ollama.exe serve(OLLAMA_MODELS = 本目录 models),Job Object 托管
-            kill_leftover_bundled_ollama();
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            eprintln!("[ollama] probing 127.0.0.1:11434...");
-            let port_busy = std::net::TcpStream::connect("127.0.0.1:11434").is_ok();
-            let mgr = OllamaManager::new();
-            if port_busy {
-                eprintln!("[ollama] port 11434 already in use — skipping bundled ollama");
-                use windows::core::HSTRING;
-                use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONWARNING, MB_OK};
-                let text = HSTRING::from("检测到 11434 端口已被占用(可能已有 Ollama 正在运行)。\n\n请先关闭已有的 Ollama,再重新打开本应用。\n否则本地翻译不可用。");
-                let title = HSTRING::from("译刻");
-                let _ = unsafe { MessageBoxW(None, &text, &title, MB_OK | MB_ICONWARNING) };
-            } else {
-                let base = app_dir();
-                let ollama_exe = base.join("ollama").join("ollama.exe");
-                let models_dir = base.join("models");
-                eprintln!(
-                    "[ollama] starting serve: {} models={}",
-                    ollama_exe.display(),
-                    models_dir.display()
-                );
-                if let Err(e) = mgr.start(
-                    app.handle().clone(),
-                    &ollama_exe.to_string_lossy(),
-                    &models_dir.to_string_lossy(),
-                ) {
-                    eprintln!("[ollama] start failed: {e}");
-                    // 不阻塞应用,翻译功能暂时不可用
-                } else {
-                    eprintln!("[ollama] serve started OK");
-                    MANAGED_OLLAMA.store(true, std::sync::atomic::Ordering::SeqCst);
-                }
-            }
-            app.manage(mgr);
-
-            // 【预建隐藏窗口】floating + screenshot-overlay 在启动时建好(与主窗口同路径,可靠),
-            // 运行时只 show/hide —— 避免运行时建窗触发 Tauri <=2.11 的 asset 协议加载缺陷
-            {
-                use tauri::{WebviewUrl, WebviewWindowBuilder};
-                let handle = app.handle();
-                // 悬浮窗(右下角,透明置顶)
-                let _ = WebviewWindowBuilder::new(handle, "floating", WebviewUrl::App("index.html".into()))
-                    .title("翻译悬浮窗")
-                    .inner_size(380.0, 220.0)
-                    .min_inner_size(280.0, 160.0)
-                    .resizable(true)
-                    .decorations(false)
-                    .transparent(true)
-                    .always_on_top(true)
-                    .skip_taskbar(true)
-                    .shadow(false)
-                    .visible(false)
-                    .build();
-                // 音频字幕独立语音窗(右下角,透明置顶;与视频字幕窗分开)
-                let _ = WebviewWindowBuilder::new(handle, "audio-floating", WebviewUrl::App("index.html".into()))
-                    .title("语音窗")
-                    .inner_size(380.0, 220.0) // 恢复默认大小(用户要求);四行紧凑显示
-                    .min_inner_size(280.0, 160.0)
-                    .resizable(true)
-                    .decorations(false)
-                    .transparent(true)
-                    .always_on_top(true)
-                    .skip_taskbar(true)
-                    .shadow(false)
-                    .visible(false)
-                    .build();
-                // 麦克风语音窗(独立窗口,与电脑音频窗分开)
-                let _ = WebviewWindowBuilder::new(handle, "audio-floating-mic", WebviewUrl::App("index.html".into()))
-                    .title("麦克风语音窗")
-                    .inner_size(380.0, 220.0) // 恢复默认大小(用户要求);四行紧凑显示
-                    .min_inner_size(280.0, 160.0)
-                    .resizable(true)
-                    .decorations(false)
-                    .transparent(true)
-                    .always_on_top(true)
-                    .skip_taskbar(true)
-                    .shadow(false)
-                    .visible(false)
-                    .build();
-                // 截图覆盖层(全屏,不透明置顶;前端截图背景铺满,不透出底层)
-                let (w, h) = if let Ok(Some(m)) = handle.primary_monitor() {
-                    let size = m.size();       // xcap 返回物理像素
-                    let sf = m.scale_factor(); // DPI 缩放
-                    // inner_size(f64) 是逻辑尺寸:物理/缩放 → 窗口物理 = 逻辑×dpr = 物理,与截图严格一致
-                    (size.width as f64 / sf, size.height as f64 / sf)
-                } else {
-                    (1920.0, 1080.0)
-                };
-                let _ = WebviewWindowBuilder::new(handle, "screenshot-overlay", WebviewUrl::App("index.html".into()))
-                    .title("截图")
-                    .inner_size(w, h)
-                    .position(0.0, 0.0)
-                    .decorations(false)
-                    .always_on_top(true)
-                    .skip_taskbar(true)
-                    .resizable(false)
-                    .shadow(false)
-                    .visible(false)
-                    .build();
-                eprintln!("[setup] 预建隐藏窗口完成(floating / screenshot-overlay / audio-floating)");
-                // 诊断:打印所有 webview window 的 label(确认 audio-floating 的 label)
-                let ww: Vec<String> = app
-                    .webview_windows()
-                    .iter()
-                    .map(|(l, _)| l.clone())
-                    .collect();
-                eprintln!("[setup] webview_windows: {ww:?}");
-            }
+            if let Some(main) = app.get_webview_window("main") { let _ = main_pin::restore_main_pin(&main); }
+            startup::schedule(app.handle());
 
             // 【全局快捷键:Rust 侧注册(Wave 9 起可配置)】
             // 只在 Rust 注册一次,事件统一 emit 到主窗口,由前端监听处理(避免 release 版
@@ -1828,7 +1653,7 @@ pub fn run() {
                         .show_menu_on_left_click(false)
                         .on_menu_event(|app, event| match event.id.as_ref() {
                             "show" => show_main_window(app),
-                            "quit" => app.exit(0),
+                            "quit" => request_quit(app),
                             _ => {}
                         })
                         .on_tray_icon_event(|tray, event| {
@@ -1860,25 +1685,24 @@ pub fn run() {
                         api.prevent_close();
                         if main_close == "quit" {
                             eprintln!("[main] CloseRequested → quit app (mainClose=quit)");
-                            // 先显式销毁所有窗口(WebView2 正确关闭,避免 msedgewebview2 子进程残留),
-                            // 再请求退出。延迟 150ms 避开 CloseRequested 处理中的窗口状态;
-                            // 若 exit 仍不生效,全部窗口销毁会触发最后一个窗口 Destroyed → 事件循环
-                            // Exit → 进程正常退出,两条路都能保证退出。
-                            let handle = window.app_handle().clone();
-                            std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(150));
-                                for (_, w) in handle.webview_windows() {
-                                    let _ = w.destroy();
-                                }
-                                handle.exit(0);
-                            });
+                            request_quit(window.app_handle());
                         } else {
                             let _ = window.hide();
                             eprintln!("[main] hidden to tray (resident mode, mainClose=hide)");
                         }
                     }
                 }
-                tauri::WindowEvent::Destroyed => eprintln!("[win] {} Destroyed", window.label()),
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(true) => {
+                    if window.label() == "main" {
+                        if let Some(main) = window.app_handle().get_webview_window("main") {
+                            let _ = main_pin::reapply_main_pin(&main);
+                        }
+                    } else { window_drag::rectangularize(window); }
+                }
+                tauri::WindowEvent::Destroyed => {
+                    window_drag::forget_rectangular_region(window);
+                    eprintln!("[win] {} Destroyed", window.label());
+                },
                 _ => {}
             }
         })

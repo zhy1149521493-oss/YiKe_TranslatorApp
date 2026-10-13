@@ -1,5 +1,11 @@
 # Local checkpoints and rollback
 
+## Window coordination and durable preferences
+
+`fix/window-drag-docking-startup` starts from `checkpoint/fluid-motion-2026-10-12-verified` (`f179fde`). The side-by-side candidate is `E:/TranslatorApp/译刻-窗口协同修正版.exe`. Exit normally before switching builds; run retained `译刻-动画优化版-v2.exe` to restore the preceding software. Configuration version remains 3, with optional selected-model, audio-mode, sensitivity and main-pin fields. Auxiliary opacity now follows `settings.appearance.floating.opacity` across all auxiliary surfaces. Old builds may ignore these optional fields or restore their earlier independent-opacity behavior. Source/binary archives exclude private configuration and model resources. See [window behavior](WINDOW_BEHAVIOR.md) and [startup/settings semantics](STARTUP_AND_SETTINGS.md).
+
+Tag `checkpoint/window-coordination-2026-10-13-candidate` and the [source/binary archive](../../TranslatorApp/archives/window-coordination-2026-10-13-candidate/README.md) retain the final correction and verification scope. Restore source in a separate worktree or clone the bundle; do not reset a checkout containing other work.
+
 ## Motion candidate
 
 `fix/fluid-interface-motion` is based on `checkpoint/context-menu-audio-2026-10-12-candidate` (`ef4d8ae`). The separate `译刻-动画优化版-v2.exe` retains all menu/audio corrections. To return to that preceding candidate, save input, exit through the tray and run the retained `译刻-右键与音频修正版.exe`. No configuration migration or task logic change is included. Focused native motion checks cover the three layouts; final v2 Workbench control visibility and single/dual-source page scrolling also pass. Tag `checkpoint/fluid-motion-2026-10-12-candidate` and the [source/binary archive](../../TranslatorApp/archives/fluid-motion-2026-10-12-candidate/README.md) retain this revision.

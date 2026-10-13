@@ -28,9 +28,12 @@ test('menu reads and changes real pin state, handles errors, keyboard dismissal 
   loaded.require = id => id === 'react' ? {
     useRef: () => ({ current: element }), useLayoutEffect: fn => { effect = fn; },
     useState: initial => { const i = index++; if (!(i in values)) values[i] = initial; return [values[i], next => { values[i] = next; }]; },
-  } : id === '@tauri-apps/api/core' ? { isTauri: () => true }
-    : id === '@tauri-apps/api/window' ? { getCurrentWindow: () => ({ isAlwaysOnTop: async () => pin,
-      setAlwaysOnTop: async value => { calls.push(['pin', value]); if (fail) throw Error('native failure'); pin = value; } }) }
+  } : id === '@tauri-apps/api/core' ? { isTauri: () => true, invoke: async (command, args) => {
+      if (command === 'get_main_pinned') return pin;
+      assert.equal(command, 'set_main_pinned');
+      calls.push(['pin', args.pinned]); if (fail) throw Error('native failure');
+      return (pin = args.pinned);
+    } }
     : require(id.startsWith('.') ? path.resolve(path.dirname(filename), id) : id);
   loaded._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -43,6 +46,7 @@ test('menu reads and changes real pin state, handles errors, keyboard dismissal 
   assert.equal(button(render()).props['aria-checked'], false);
   await button(render()).props.onClick(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(pin, true); assert.equal(button(render()).props['aria-checked'], true);
+  assert.equal(calls.includes('drawer'), false, 'pinning must not toggle or fold the workspace');
   fail = true; await button(render()).props.onClick(); await new Promise(resolve => setImmediate(resolve));
   assert.equal(button(render()).props['aria-checked'], true, 'failure cannot fabricate a changed native state');
   assert.equal(values[3], '置顶操作失败，请重试');

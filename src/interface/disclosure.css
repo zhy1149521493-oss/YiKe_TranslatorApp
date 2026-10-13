@@ -17,8 +17,11 @@
   color: var(--ink);
   padding: 0;
   text-align: left;
-  transition: transform 160ms var(--ease-out);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
+.connected-ui .navigation-brand:active { cursor: grabbing; }
 .connected-ui .navigation-logo {
   display: inline-flex;
   align-items: center;
@@ -89,10 +92,6 @@
   box-shadow: none;
   border-color: transparent;
   backdrop-filter: none;
-  clip-path: inset(
-    calc(50% - 21px) calc(50% - 21px) calc(50% - 21px) calc(50% - 21px) round
-      21px
-  );
 }
 .connected-ui .poetry-toolbar[data-expanded="false"] .navigation-reveal {
   transform: translateX(-18px);
